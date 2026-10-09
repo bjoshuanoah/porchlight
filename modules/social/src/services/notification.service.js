@@ -1,10 +1,16 @@
 import { socialModels } from "../models.js";
 
 /**
- * Notification service (PORCH-006 ac-3): mention/reply triggers land as
- * MEMBER-scoped, content-free rows the client can poll. Payloads are
- * content-free by contract — ids and type only, never a comment body, a
- * caption, or any other content. Push transport lives in client delivery.
+ * Notification service (PORCH-006 ac-3, PORCH-014): mention/reply triggers
+ * land as MEMBER-scoped, content-free rows the client can poll. Payloads
+ * are content-free by contract — ids and type only, never a comment body,
+ * a caption, or any other content (zero-leak guarantee). Push transport
+ * lives in client delivery.
+ *
+ * Origin containment holds at the notification surface itself (PORCH-014
+ * ac-2): a notification is only ever composed for an active member of the
+ * origin network, and a cross-origin reply trigger is refused here exactly
+ * as every interaction surface refuses cross-origin writes.
  */
 export class NotificationService {
   /**
@@ -22,9 +28,15 @@ export class NotificationService {
    * Fan-out for a comment: mention notifications to every mentioned member
    * (never the author), plus a reply notification to the parent's author —
    * skipped when a mention already reached them. Content-free payloads for
-   * every recipient.
+   * every recipient. Composition refuses a cross-origin parent.
    */
   async forComment({ comment, parent, mentions }) {
+    if (parent !== null && parent.networkId !== comment.networkId) {
+      // Containment at the notification surface (ac-2): a reply trigger whose
+      // parent lives on another origin is refused, never composed across
+      // origins — the same containment every interaction write enforces.
+      throw typedError("E_NOTIFICATION_CROSS_ORIGIN", "Notifications cannot reach across networks.");
+    }
     const mentioned = new Set(mentions.filter((memberId) => memberId !== comment.authorDid));
     for (const memberId of mentioned) {
       await this.record({
@@ -48,12 +60,20 @@ export class NotificationService {
     }
   }
 
-  /** Insert one content-free notification row for the recipient. */
+  /**
+   * Insert one content-free notification row for the recipient. Refuses
+   * non-member targeting (ac-2): the recipient must hold an active
+   * membership in the origin network, or nothing is composed.
+   */
   async record({ networkId, memberId, type, postId, commentId = null, actorDid = null }) {
     if (!networkId || !memberId || !type || !postId) {
       const error = new Error("networkId, memberId, type, postId required");
       error.code = "E_NOTIFICATION_REQUIRED";
       throw error;
+    }
+    const membership = await this.membership.activeMembership({ networkId, did: memberId });
+    if (!membership) {
+      throw typedError("E_NOTIFICATION_NOT_MEMBER", "Notification targets must be members of this network.");
     }
     const row = {
       _id: `ntf_${crypto.randomUUID()}`,
@@ -69,12 +89,12 @@ export class NotificationService {
     return row;
   }
 
-  /** The member's own inbox at the origin, newest first. */
+  /**
+   * The member's own inbox at the origin, newest first.
+   */
   async inbox({ accessToken } = {}) {
     if (!accessToken) {
-      const error = new Error("membership access required");
-      error.code = "E_MUST_SIGN_IN";
-      throw error;
+      throw typedError("E_MUST_SIGN_IN", "Sign in to your membership to see your notifications.");
     }
     const perimeter = await this.membership.verifyAccessToken(accessToken);
     if (!perimeter) {
@@ -95,6 +115,34 @@ export class NotificationService {
       actorDid: row.actorDid,
       createdAt: row.createdAt,
     })), did };
+  }
+
+  /**
+   * Mention autocomplete (PORCH-014 ac-2): resolves against ORIGIN
+   * membership only. The token's single network scope is the only roster
+   * ever searched; members of any other network are invisible here, and no
+   * content rides the candidates — membership identity fields only.
+   * @param {object} deps
+   * @param {string} [deps.accessToken]
+   * @param {string} [deps.q] substring filter on the member DID
+   */
+  async mentionCandidates({ accessToken, q } = {}) {
+    if (!accessToken) {
+      throw typedError("E_MUST_SIGN_IN", "Sign in to your membership to mention someone.");
+    }
+    const perimeter = await this.membership.verifyAccessToken(accessToken);
+    if (!perimeter) {
+      throw typedError("E_NOT_PERMITTED", "This action is not available to you in this network.");
+    }
+    const networkId = perimeter.membership.networkId;
+    const rows = await this.membership.listMembers({ networkId });
+    const query = typeof q === "string" ? q.trim().toLowerCase() : "";
+    const candidates = rows
+      .filter((row) => row.state === "active" && row.did !== perimeter.session.did)
+      .filter((row) => query === "" || row.did.toLowerCase().includes(query))
+      .sort((a, b) => (a.did < b.did ? -1 : a.did > b.did ? 1 : 0))
+      .map((row) => ({ did: row.did, role: row.role, admittedAt: row.admittedAt }));
+    return { candidates };
   }
 }
 

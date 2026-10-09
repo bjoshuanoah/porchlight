@@ -4,7 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Express } from "express";
-import { sign, generateKeyPairSync } from "node:crypto";
+import { sign, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import type { KeyObject } from "node:crypto";
 import { DEFAULT_CONFIG, createMemoryStore, loadConfig, normalizeConfig, saveConfig } from "@porchlight/shared";
 import type { PorchlightConfig } from "@porchlight/shared";
 import type { StoreLike } from "@porchlight/shared";
@@ -33,6 +34,7 @@ async function call(port: number, path: string, init?: RequestInit): Promise<{ s
 interface TestHub {
   app: Express;
   bootstrap: BootstrapService;
+  db: StoreLike;
   config: PorchlightConfig;
   close: () => void;
   port: Promise<number>;
@@ -53,7 +55,7 @@ function testHub(
     const port = typeof address === "object" && address ? address.port : 0;
     resolve(port);
   });
-  return { app, bootstrap, config, close: () => { listener.closeIdleConnections(); listener.close(); }, port: promise };
+  return { app, bootstrap, db, config, close: () => { listener.closeIdleConnections(); listener.close(); }, port: promise };
 }
 
 test("health route returns ok with dependency probes (contract)", async (t) => {
@@ -245,6 +247,177 @@ test("content engine: membership-gated signed post creation ends to end (contrac
   const removedBody = (await removed.json()) as { deleted: boolean; cascadeRows: number };
   assert.equal(removedBody.deleted, true);
   assert.equal(removedBody.cascadeRows >= 2, true); // post + comment at minimum
+});
+
+interface NotificationAccountBody {
+  did: string;
+}
+interface NotificationCreatedBody {
+  post: { _id: string };
+}
+type NotificationAuth = { "content-type": string; authorization: string };
+type NotificationDevicePair = { deviceId: string; privateKey: KeyObject; publicKeyJwk: Json };
+type NotificationAdmission = { accessToken: string; refreshToken: string; membership: Json };
+
+function bearerAuth(token: string): NotificationAuth {
+  return { "content-type": "application/json", authorization: `Bearer ${token}` };
+}
+
+/** Device-signed payload per the write-verification contract. */
+function signPayload(pair: NotificationDevicePair, payload: object): string {
+  return sign(null, Buffer.from(canonicalJson(payload), "utf8"), pair.privateKey).toString("base64url");
+}
+
+/** A fresh member device: real Ed25519 keypair + signer pair. */
+function devicePair(deviceId: string): NotificationDevicePair {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  return { deviceId, privateKey, publicKeyJwk: publicKey.export({ format: "jwk" }) as Json };
+}
+
+async function identitySession(port: number, did: string, pair: NotificationDevicePair): Promise<string> {
+  const challenge = await call(port, "/api/identity/session/challenge", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did }),
+  });
+  const session = await call(port, "/api/identity/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      did,
+      deviceId: pair.deviceId,
+      nonce: challenge.body.nonce,
+      signature: sign(null, Buffer.from(challenge.body.nonce as string, "utf8"), pair.privateKey).toString("base64url"),
+    }),
+  });
+  if (session.status !== 201) {
+    throw new Error(`identity session failed: ${session.status} ${JSON.stringify(session.body)}`);
+  }
+  return (session.body as Json).accessToken as string;
+}
+
+async function admit(port: number, identityToken: string, pair: NotificationDevicePair, code: string): Promise<NotificationAdmission> {
+  const admitResult = await call(port, "/api/social/join/admit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      code,
+      identityAccessToken: identityToken,
+      deviceId: pair.deviceId,
+      devicePublicKeyJwk: pair.publicKeyJwk,
+      signature: sign(null, Buffer.from(`porchlight-join:${code}`, "utf8"), pair.privateKey).toString("base64url"),
+    }),
+  });
+  if (admitResult.status !== 201) {
+    throw new Error(`admission failed: ${admitResult.status} ${JSON.stringify(admitResult.body)}`);
+  }
+  return {
+    accessToken: (admitResult.body as Json).accessToken as string,
+    refreshToken: (admitResult.body as Json).refreshToken as string,
+    membership: admitResult.body.membership as Json,
+  };
+}
+
+test("notifications: content-free transport, origin-only mention autocomplete (contract)", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+
+  // Owner boot: account → session → network (founder rule) → invite → admit.
+  const ownerPair = devicePair("dev_owner");
+  const ownerAccount = await call(port, "/api/identity/bootstrap/account", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Susan", device: { deviceId: ownerPair.deviceId, publicKeyJwk: ownerPair.publicKeyJwk } }),
+  });
+  assert.equal(ownerAccount.status, 201);
+  const ownerDid = (ownerAccount.body.account as NotificationAccountBody).did as string;
+  const ownerIdentityToken = await identitySession(port, ownerDid, ownerPair);
+
+  await call(port, "/api/social/bootstrap/network", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Family", ownerDid }) });
+  const ownerInvite = await call(port, "/api/social/bootstrap/invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+  const ownerCode = ((ownerInvite.body as Json).joinUrl as string).split("/join/")[1] as string;
+  const owner = await admit(port, ownerIdentityToken, ownerPair, ownerCode);
+  const ownerToken = owner.accessToken;
+
+  // Second member (June): seeded identity + device registration (the
+  // bootstrap endpoint is first-account-only), then admitted through the
+  // same origin's join link.
+  const junePair = devicePair("dev_june");
+  const juneDid = `did:porch:${randomBytes(20).toString("hex")}`;
+  await hub.db.collection("identities").insertOne({
+    _id: `ident_${randomUUID()}`,
+    did: juneDid,
+    actorType: "human",
+    displayName: "June",
+    email: null,
+    handle: null,
+    profile: {},
+    homingStatus: "home",
+    migratedToIssuer: null,
+    createdAt: new Date().toISOString(),
+  });
+  await hub.db.collection("device_registrations").insertOne({
+    _id: `reg_${randomUUID()}`,
+    did: juneDid,
+    deviceId: junePair.deviceId,
+    label: null,
+    publicKeyJwk: junePair.publicKeyJwk,
+    createdBy: "agent",
+    status: "active",
+    revokedAt: null,
+    createdAt: new Date().toISOString(),
+  });
+  const juneIdentityToken = await identitySession(port, juneDid, junePair);
+  const juneInvite = await call(port, "/api/social/console/invites", { method: "POST", headers: bearerAuth(ownerToken), body: JSON.stringify({}) });
+  const juneCode = (((juneInvite.body as Json).invite ?? (juneInvite.body as Json)) as Json).token as string;
+  const june = await admit(port, juneIdentityToken, junePair, juneCode);
+
+  // Owner posts; June comments mentioning the owner — the mention trigger.
+  const postPayload = { type: "text", body: "family-photo-caption-original" };
+  const created = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
+    method: "POST",
+    headers: bearerAuth(ownerToken),
+    body: JSON.stringify({ payload: postPayload, signature: signPayload(ownerPair, postPayload) }),
+  });
+  assert.equal(created.status, 200);
+  const postId = ((await created.json()) as NotificationCreatedBody).post._id as string;
+
+  const commentPayload = { postId, body: "SECRET-mention-body-phrase", mentions: [ownerDid] };
+  const commented = await fetch(`http://127.0.0.1:${port}/api/social/posts/${postId}/comments`, {
+    method: "POST",
+    headers: bearerAuth(june.accessToken),
+    body: JSON.stringify({ payload: commentPayload, signature: signPayload(junePair, commentPayload) }),
+  });
+  assert.equal(commented.status, 200);
+
+  // The owner's transport: event + origin only, zero member content, and
+  // exactly the content-free projection keys.
+  const inbox = await call(port, "/api/social/notifications", { headers: bearerAuth(ownerToken) });
+  assert.equal(inbox.status, 200);
+  const rows = (inbox.body.notifications as Json[]) ?? [];
+  assert.equal(rows.length, 1);
+  assert.equal((rows[0] as Json).type, "mention");
+  assert.equal((rows[0] as Json).actorDid, juneDid);
+  assert.deepEqual(Object.keys(rows[0] as Json).sort(), ["_id", "type", "postId", "commentId", "actorDid", "createdAt"].sort());
+  const serialized = JSON.stringify(inbox.body);
+  assert.equal(serialized.includes("SECRET-mention-body-phrase"), false); // zero-leak guarantee
+  assert.equal(serialized.includes("family-photo-caption-original"), false);
+
+  // Mention autocomplete resolves against origin membership only: the owner
+  // sees June (same origin) under a DID query and nobody else.
+  const matched = await call(port, `/api/social/mentions/candidates?q=${encodeURIComponent(juneDid.slice(-6))}`, { headers: bearerAuth(ownerToken) });
+  assert.equal(matched.status, 200);
+  assert.deepEqual(((matched.body.candidates as Json[]) ?? []).map((row) => row.did), [juneDid]);
+
+  // A query matching no member of the origin — including members of other
+  // networks, if any existed — resolves to nothing; roster is origin-scoped.
+  const emptyQuery = await call(port, "/api/social/mentions/candidates?q=zzz-no-candidate", { headers: bearerAuth(ownerToken) });
+  assert.deepEqual((emptyQuery.body.candidates as Json[]) ?? [], []);
+
+  // Autocomplete without a membership perimeter is refused outright.
+  const tokenless = await call(port, "/api/social/mentions/candidates");
+  assert.equal(tokenless.status, 401);
 });
 
 type FeedAccountBody = { account: { did: string } };
