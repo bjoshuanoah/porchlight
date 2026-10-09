@@ -70,6 +70,14 @@ export class ContentController {
     );
   };
 
+  /** DELETE /posts/:postId/reactions — signed removal of one of the member's own reactions (PORCH-036 ac-3). */
+  unreact = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return this.#delegate(res, () =>
+      this.interactions.unreact({ accessToken: this.bearer(req), payload, signature }),
+    );
+  };
+
   /** POST /posts/:postId/votes — signed changeable private vote (ac-4). */
   vote = async (req, res) => {
     const { payload, signature } = req.body ?? {};

@@ -43,6 +43,7 @@ export function createSocialRouter(controllers) {
   router.get("/posts/:postId/comments", content.listComments);
   router.post("/posts/:postId/reactions", content.react);
   router.get("/posts/:postId/reactions", content.listReactions);
+  router.delete("/posts/:postId/reactions", content.unreact);
   router.post("/posts/:postId/votes", content.vote);
   router.delete("/posts/:postId", content.deletePost);
   router.delete("/me/content", content.sweepMemberContent);

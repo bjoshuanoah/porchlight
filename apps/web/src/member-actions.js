@@ -8,10 +8,10 @@ function device(connection) {
   return connection;
 }
 
-async function signed(connection, path, payload) {
+async function signed(connection, path, payload, method = "POST") {
   const member = device(connection);
   const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
-  return request(member, path, { method: "POST", body: JSON.stringify({ payload, signature }) });
+  return request(member, path, { method, body: JSON.stringify({ payload, signature }) });
 }
 
 export async function publishPost(connection, payload) {
@@ -28,6 +28,15 @@ export async function publishReaction(connection, post, emoji) {
   return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`, {
     postId: post._id || post.id, emoji,
   });
+}
+
+// Clear one of the member's own reactions (PORCH-036 ac-3): signed removal
+// at the reaction's origin; the served DELETE carries the same signed
+// payload shape as every other member write.
+export async function unpublishReaction(connection, post, emoji) {
+  return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`, {
+    postId: post._id || post.id, emoji,
+  }, "DELETE");
 }
 
 export async function publishVote(connection, post, value) {
