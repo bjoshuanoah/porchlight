@@ -4,12 +4,11 @@
 // prompts go through the tunnel, not localhost-only). Automatic restart is
 // the supervisor's contract; launchd/systemd keep the supervisor alive.
 import { existsSync } from "node:fs";
-import { join, dirname } from "node:path";
 import { createRequire } from "node:module";
-import { saveConfig } from "@porchlight/shared";
 import { Supervisor, configFromPathsOrThrow, serverEntryPath, writeSupervisorState, supervisorRunningState, reclaimStaleChildren } from "./supervisor.mjs";
 import { ensureDirs, home, clearStateFile } from "./state.mjs";
 import { ensureCloudflared, ensureRedis, ensureMongod } from "./binaries.mjs";
+import { loadTunnelIdentity, mintTunnelIdentity, spawnTunnel } from "./tunnel-identity.mjs";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -76,7 +75,26 @@ export async function run(args = {}) {
 
   if (args.tunnel && config.hub.tunnel.enabled) {
     const cloudflared = await ensureCloudflared(paths.root, () => {});
-    spawnTunnel(supervisor, paths, config, cloudflared);
+    // Tunnel identity persistence (PORCH-017): re-bind the stored tunnel every
+    // start; provision only when nothing is stored yet (first bootstrap).
+    let identity = loadTunnelIdentity(paths);
+    if (!identity) {
+      try {
+        identity = await mintTunnelIdentity(paths, cloudflared, { hostname: args.tunnelHostname ?? null }, (m) => {
+          process.stdout.write(`tunnel: ${m}\n`);
+        });
+        process.stdout.write(
+          `tunnel provisioned and persisted (named ${identity.tunnelId ?? "id not decodable"}); it re-binds identically on every future start.\n`,
+        );
+      } catch (error) {
+        process.stdout.write(
+          `warning: persistent tunnel unavailable (${error.message}). Booting an ephemeral quick tunnel — ` +
+            "its URL churns per boot and every member-facing link embedding it breaks. " +
+            "Bind once: run `cloudflared tunnel login` (one-time), then `porchlight tunnel mint --hostname <your-host>`.\n",
+        );
+      }
+    }
+    spawnTunnel(supervisor, paths, config, cloudflared, identity);
   }
 
   process.stdout.write(
@@ -148,46 +166,4 @@ function redisReadyProbe(port) {
       }
     }
   };
-}
-
-const TUNNEL_URL_PATTERN = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-
-function spawnTunnel(supervisor, paths, config, cloudflared) {
-  supervisor.spawnChild(
-    "tunnel",
-    cloudflared,
-    ["tunnel", "--url", `http://127.0.0.1:${config.hub.httpPort}`, "--no-autoupdate"],
-    { ready: tunnelReadyWatcher(paths, config) },
-  );
-}
-
-function tunnelReadyWatcher(paths, config) {
-  return (_name, proc, signalReady) => {
-    for (const channel of ["stderr", "stdout"]) {
-      proc[channel].on("data", (chunk) => {
-        const match = TUNNEL_URL_PATTERN.exec(chunk.toString());
-        if (!match) return;
-        const url = match[0];
-        const updated = structuredClone(config);
-        updated.hub.tunnel.url = url;
-        writeTunnelState(paths, url);
-        // The tunnel binding is runtime config the hub health surface reads.
-        saveConfig(paths.root, updated);
-        process.stdout.write(
-          `\nHub is tunnel-reachable: ${url}\n` +
-            `Remote bootstrap: open ${url}/bootstrap on any device (phone on cellular works).\n` +
-            "From a terminal here: `porchlight bootstrap` drives setup on the owner's behalf.\n",
-        );
-        signalReady();
-      });
-    }
-    void proc;
-  };
-}
-
-function writeTunnelState(paths, url) {
-  const { mkdirSync, writeFileSync } = require("node:fs");
-  const file = join(paths.state, "tunnel.json");
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify({ url, startedAt: new Date().toISOString() }, null, 2) + "\n");
 }

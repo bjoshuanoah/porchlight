@@ -39,7 +39,9 @@ export async function run(args = {}) {
   log(paths, `cloudflared ready: ${cloudflared}`);
 
   process.stdout.write(
-    `setup complete.\nNext: run \`porchlight start\` — the server starts with this config and prints the hub URL for remote bootstrap.\n`,
+    `setup complete.\nNext: run \`porchlight start\` — the server starts with this config and prints the hub URL for remote bootstrap.\n` +
+      `Tunnel: \`start\` re-binds the persisted tunnel identity on every boot (PORCH-017). Before binding a persistent one: ` +
+      "`cloudflared tunnel login` once, then `porchlight tunnel mint --hostname <your-host>`; until then a fresh ephemeral URL is minted per boot.\n",
   );
   return config;
 }

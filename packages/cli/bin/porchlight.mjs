@@ -23,6 +23,7 @@ Commands:
   status       supervisor/daemon/bootstrap diagnostics (local-only, zero phone-home)
   bootstrap    drive the remaining bootstrap steps over the hub URL (resumable)
   service      install/uninstall the launchd-class supervisor service (auto-restart on boot/crash)
+  tunnel       tunnel identity: status (default) | mint [--hostname <host>] | reset
 
 Options:
   --version, -v  print the version and exit 0
@@ -42,7 +43,7 @@ const flags = (argv) => {
     if (arg === "--home") out.home = argv[++i];
     else if (arg === "--foreground") out.foreground = true;
     else if (arg === "--no-tunnel") out.tunnel = false;
-    else if (arg === "--name" || arg === "--email" || arg === "--network" || arg === "--hub") {
+    else if (arg === "--name" || arg === "--email" || arg === "--network" || arg === "--hub" || arg === "--hostname") {
       out[arg.slice(2)] = argv[++i];
     } else if (arg === "--quota-store") out.quotaStore = argv[++i];
     else if (arg === "--quota-days") out.quotaDays = argv[++i];
@@ -72,6 +73,7 @@ const commands = {
   status: async () => (await import("../src/status.mjs")).run(flags(args.slice(1))),
   bootstrap: async () => (await import("../src/bootstrap.mjs")).run(flags(args.slice(1))),
   service: async () => (await import("../src/service.mjs")).run(flags(args.slice(1))),
+  tunnel: async () => (await import("../src/tunnel.mjs")).run(flags(args.slice(1))),
 };
 
 const handler = commands[command];
