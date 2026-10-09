@@ -41,10 +41,14 @@ export class SocialBootstrapController {
       return res.status(409).json({ error: "Create the hub network before issuing invites" });
     }
     const { role, maxUses, hubUrl } = req.body ?? {};
-    const invite = await this.invites.issue({ networkId: network._id, role, maxUses, hubUrl: hubUrl ?? null });
-    const joinUrl = this.ledger.hubUrl ? this.ledger.hubUrl() : null;
+    const invite = await this.invites.issue({
+      networkId: network._id,
+      role,
+      maxUses,
+      hubUrl: hubUrl ?? (this.ledger.hubUrl ? this.ledger.hubUrl() : null),
+    });
     await this.ledger.record("invite", { detail: `invite ${invite._id} issued`, inviteId: invite._id });
-    res.status(201).json({ invite, joinUrl });
+    res.status(201).json({ invite, joinUrl: invite.joinUrl });
   };
 
   /** POST /bootstrap/invite/revoke — instant revocation. */

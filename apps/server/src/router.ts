@@ -1,7 +1,7 @@
 import express, { Router } from "express";
 import { createSystemRouter } from "./routes/system.routes.js";
 import { assembleIdentityModule } from "@porchlight/identity";
-import { createSocialRouter } from "@porchlight/social";
+import { assembleSocialModule } from "@porchlight/social";
 import { bootstrapPage } from "./bootstrap.page.js";
 import { loadConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
@@ -45,6 +45,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
   const hub = new HealthService(options.readiness ?? DOWN_PROBES, options.config.mode, hubUrl);
   router.use("/", createSystemRouter(hub, options.bootstrap));
   let wellKnown: Router | null = null;
+  let identityAuth: { verifyAccessToken: (token: string) => Promise<{ did: string; sessionId: unknown } | null> } | null = null;
   if (options.store && options.config.mode.identityServingEnabled) {
     // The identity module assembles its own route → controller → service →
     // model path at its published entry; the server performs no domain logic.
@@ -53,9 +54,20 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     const identity = assembleIdentityModule(options.store, { hubUrl, ledger });
     router.use("/identity", identity.api);
     wellKnown = identity.wellKnown;
+    identityAuth = { verifyAccessToken: (token: string) => identity.authService.verifyAccessToken(token) };
   }
   if (options.store && options.config.mode.socialServingEnabled) {
-    router.use("/social", createSocialRouter({ store: options.store, ledger }));
+    // The social module assembles the full membership perimeter; identity is
+    // referenced only by DID through the injected verifier callback — the
+    // modules share zero code and the boundary check enforces it.
+    router.use(
+      "/social",
+      assembleSocialModule(options.store, {
+        hubUrl,
+        ledger,
+        verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
+      }).api,
+    );
   }
   return { api: router, wellKnown };
 }

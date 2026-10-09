@@ -1,28 +1,45 @@
 import { Router } from "express";
-import { FeedController } from "./controllers/feed.controller.js";
-import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
-import { NetworkService } from "./services/network.service.js";
-import { InviteService } from "./services/invite.service.js";
 
 /**
- * Social routes. Thin REST (and, later, MCP) surface that owns no domain
- * logic — delegates to the transport-specific controller, which calls the
- * service layer. The server injects the domain store (mongodb database
- * handle); the shared in-memory store is the dependency-free fallback for
- * embedded/test use.
+ * Social routes. Thin REST surface that owns no domain logic — the server
+ * (or assembleSocialModule in tests) injects the fully assembled
+ * controllers. Route → controller → service → model lives self-contained
+ * under the /api/social prefix.
+ *
+ * @param {{
+ *   bootstrap: import("./controllers/social-bootstrap.controller.js").SocialBootstrapController,
+ *   feed: import("./controllers/feed.controller.js").FeedController,
+ *   membership: import("./controllers/membership.controller.js").MembershipController,
+ *   console: import("./controllers/console.controller.js").ConsoleController,
+ * }} controllers
  */
-export function createSocialRouter({ store, ledger } = {}) {
-  const db = store ?? { collection: () => ({}) };
-  const networks = db.collection("networks");
-  const invites = db.collection("invites");
-  const bootstrap = new SocialBootstrapController(new NetworkService(networks), new InviteService(invites), ledger);
-  const feed = new FeedController();
+export function createSocialRouter(controllers) {
   const router = Router();
-  router.post("/posts", feed.createPost);
+  const { bootstrap, feed, membership, console: ownerConsole } = controllers;
+
+  // Bootstrap-era network + invite surface (PORCH-003 contract; unchanged).
   router.get("/network", bootstrap.get);
   router.post("/bootstrap/network", bootstrap.createNetwork);
   router.post("/bootstrap/invite", bootstrap.issueInvite);
   router.post("/bootstrap/invite/revoke", bootstrap.revokeInvite);
+  router.post("/posts", feed.createPost);
+
+  // Join-link perimeter: public verification + admission (PORCH-005 ac-1/2).
+  router.get("/join/verify", membership.verify);
+  router.post("/join/admit", membership.admit);
+  router.post("/session/refresh", membership.refresh);
+
+  // Owner console server behaviors (PORCH-005 ac-1/3/4).
+  router.get("/console/invites", ownerConsole.listInvites);
+  router.post("/console/invites", ownerConsole.issueInvite);
+  router.post("/console/invites/revoke", ownerConsole.revokeInvite);
+  router.get("/console/members", ownerConsole.listMembers);
+  router.post("/console/members/revoke", ownerConsole.revokeMember);
+  router.get("/console/limits", ownerConsole.getLimits);
+  router.put("/console/limits", ownerConsole.setLimits);
+  router.get("/console/audit", ownerConsole.listAudit);
+  router.post("/console/retention/sweep", ownerConsole.sweepRetention);
+
   return router;
 }
 

@@ -34,6 +34,8 @@ export class NetworkService {
       _id: `net_${crypto.randomUUID()}`,
       name: String(name),
       ownerAccountId: ownerAccountId ?? null,
+      // Quantity-only owner limits start unset: reported, never defaulted.
+      quota: { storageCeilingMb: null, retentionDays: null },
       createdAt: new Date().toISOString(),
     };
     await this.networks.insertOne(network);
