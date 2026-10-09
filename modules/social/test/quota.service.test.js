@@ -125,3 +125,62 @@ test("upload admission and sweeps record auditable member-action events", async 
   const actions = (await db.collection("audit_events").find({ networkId: network._id })).map((row) => row.action);
   assert.deepEqual(actions, ["upload", "upload", "retention_delete"]);
 });
+
+test("ac-3: a tightened retention window applies at the next sweep pass", async () => {
+  const { db, networks, quota } = fixture();
+  const network = await seededNetwork(networks, quota, { storageCeilingMb: 1024, retentionDays: 30 });
+  const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+  await quota.recordArtifact({
+    networkId: network._id,
+    kind: "original",
+    bytes: 500,
+    retentionDays: 30,
+    now: () => tenDaysAgo,
+  });
+
+  // Owner tightens the window AFTER the artifact was recorded: the next
+  // retention pass enforces the CURRENT setting, not the per-row stamp
+  // written under the old one.
+  await quota.setLimits({ networkId: network._id, storageCeilingMb: 1024, retentionDays: 7 });
+  const result = await quota.sweep({ networkId: network._id });
+  assert.equal(result.swept, 1);
+  assert.equal(result.bytesFreed, 500);
+  const remaining = await db.collection("artifacts").find({ networkId: network._id });
+  assert.equal(remaining.length, 0);
+});
+
+test("ac-3: a widened retention window preserves rows the stamp would expire", async () => {
+  const { db, networks, quota } = fixture();
+  const network = await seededNetwork(networks, quota, { storageCeilingMb: 1024, retentionDays: 7 });
+  const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+  const row = await quota.recordArtifact({
+    networkId: network._id,
+    kind: "original",
+    bytes: 300,
+    retentionDays: 7,
+    now: () => tenDaysAgo,
+  });
+
+  // Owner widens the window before any pass removed the row: the next pass
+  // re-evaluates expiry from the row age against the new window, so the row
+  // survives.
+  await quota.setLimits({ networkId: network._id, storageCeilingMb: 1024, retentionDays: 30 });
+  const result = await quota.sweep({ networkId: network._id });
+  assert.equal(result.swept, 0);
+  const remaining = await db.collection("artifacts").find({ networkId: network._id });
+  assert.deepEqual(remaining.map((r) => r._id), [row._id]);
+});
+
+test("ac-3: clearing the window stops future passes but honors stamped expiry", async () => {
+  const { networks, quota } = fixture();
+  const network = await seededNetwork(networks, quota, { retentionDays: 1 });
+  const aMonthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const stamped = await quota.recordArtifact({ networkId: network._id, kind: "original", bytes: 50, retentionDays: 1, now: () => aMonthAgo });
+  await quota.setLimits({ networkId: network._id, storageCeilingMb: null, retentionDays: null });
+
+  // null clears a limit (unset): un-stamped rows are safe forever, but the
+  // row recorded while a window existed still carries its stamp.
+  const result = await quota.sweep({ networkId: network._id });
+  assert.equal(result.swept, 1);
+  void stamped;
+});

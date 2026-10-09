@@ -477,10 +477,10 @@ export class MediaService {
    * and blobs in the same pass.
    */
   async sweep({ networkId, now = () => new Date() } = {}) {
-    const cutoff = now().toISOString();
-    const rows = (await this.artifacts.find({ networkId: String(networkId) })).filter(
-      (row) => row.expiresAt !== null && row.expiresAt !== undefined && row.expiresAt <= cutoff,
-    );
+    // Expiry is evaluated through the quota service: the OWNER-SET retention
+    // window applies at every pass, not the per-row stamp recorded at ingest
+    // (tightening sweeps rows under the old window; widening preserves them).
+    const rows = await this.quota.expiredArtifactRows({ networkId, now });
     const expiredRenditionIds = new Set();
     for (const row of rows) {
       const asset = row.sourceId ? await this.assets.findOne({ _id: row.sourceId }) : null;
