@@ -12,6 +12,8 @@
   "main": "src/index.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
     "dev": "node --import ../../scripts/register.mjs --watch src/index.ts",
     "test": "node --import ../../scripts/register.mjs --test 'test/**/*.test.ts'"
   },

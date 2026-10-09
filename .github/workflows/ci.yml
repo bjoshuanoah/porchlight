@@ -1,0 +1,80 @@
+name: CI
+
+# CI shape (PORCH-002 ac-1): lint, typecheck, build, and unit tests execute on
+# GitHub-hosted runners only (Brian, Oct 8, 2026 — no private or self-hosted
+# runners attach to this public repo; fork pull requests must never execute on
+# non-GitHub infrastructure) through the monorepo task runner (turbo) with
+# changed-workspace scoping (--affected) on a Node 24 matrix. Integration
+# suites run at package level (apps/server contract tests are package-level
+# and run through the same turbo test task). Nothing on the critical path
+# waits on a full unscoped build: every task is filtered to changed workspaces
+# plus dependents; the boundary check is a static scan (no build) and always
+# runs.
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: lint + typecheck + build + test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: npm ci
+        run: npm ci
+      - name: Resolve changed-workspace base
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE_SHA"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            BASE="$BEFORE_SHA"
+            if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              BASE=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+            fi
+          else
+            BASE=""
+          fi
+          if [ -n "$BASE" ]; then
+            echo "TURBO_SCM_BASE=$BASE" >> "$GITHUB_ENV"
+          fi
+          # With a resolvable base the turbo run below uses --affected
+          # (changed workspaces + dependents only). Without one (first push of
+          # a brand-new default branch) the run is unscoped by construction:
+          # there is no prior state to diff against.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+      - name: Turbo — lint, typecheck, build, test
+        run: |
+          set -euo pipefail
+          if [ -n "${TURBO_SCM_BASE:-}" ]; then
+            echo "Scoping turbo to workspaces changed since $TURBO_SCM_BASE (--affected)."
+            TURBO_SCM_BASE="$TURBO_SCM_BASE" npx turbo run lint typecheck build test --affected
+          else
+            echo "No diffable base — running the full matrix."
+            npx turbo run lint typecheck build test
+          fi
+      - name: Boundary check
+        run: npm run boundary

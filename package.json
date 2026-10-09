@@ -9,6 +9,10 @@
     "node": ">= 24"
   },
   "packageManager": "npm@10.9.8",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjoshuanoah/porchlight.git"
+  },
   "workspaces": [
     "apps/*",
     "modules/*",
@@ -16,12 +20,18 @@
   ],
   "scripts": {
     "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
     "test": "turbo run test && node scripts/boundary-check.mjs",
     "boundary": "node scripts/boundary-check.mjs",
     "dev": "turbo run dev"
   },
   "devDependencies": {
-    "turbo": "^2.11.7"
+    "turbo": "^2.11.7",
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0",
+    "typescript-eslint": "^8.0.0",
+    "globals": "^16.0.0"
   },
   "publishConfig": {
     "access": "public"

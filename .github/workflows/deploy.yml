@@ -1,0 +1,226 @@
+name: Deploy
+
+# Deploy pipeline (PORCH-002 ac-2): version → build → npm publish with
+# provenance → GitHub Release with signed artifacts. npm is the ONLY install
+# surface (Brian, Oct 13, 2026 — brew/curl ruled out of V1); npm publish runs
+# first, GitHub Releases are the signed supply-chain anchor of record per
+# Distribution and Licensing (Porchlight Server TS 2). All steps run on
+# GitHub-hosted runners only (Brian, Oct 8, 2026).
+#
+# Triggers:
+#   - push of a `v*` tag → full deploy (publish).
+#   - workflow_dispatch with mode=dry-run → the identical flow minus the
+#     npm publish (pack, Sigstore keyless signing, prerelease, cross-platform
+#     tarball install, self-verification). Used to exercise the release path
+#     before real npm credentials (NPM_TOKEN) are configured.
+#
+# The version step sets every workspace (and the root) to the released
+# version in the deploy working tree only; manifests on main are not
+# rewritten by deploys. Released artifacts carry the version from the tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.1.0, 0.1.0-dryrun.1)"
+        required: true
+        default: "0.1.0"
+        type: string
+      mode:
+        description: "publish = real npm publish + stable release; dry-run = pack/sign/release without npm publish"
+        required: false
+        default: "dry-run"
+        type: choice
+        options:
+          - dry-run
+          - publish
+
+permissions:
+  contents: write   # create the GitHub release
+  id-token: write   # npm provenance + Sigstore keyless signing (OIDC)
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: version → build → publish → signed release
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.env.outputs.mode }}
+      tag: ${{ steps.env.outputs.tag }}
+      version: ${{ steps.env.outputs.version }}
+    env:
+      # Published packages, in dependency-tolerant order. @porchlight/server
+      # and @porchlight/web are private (never published).
+      PUBLISHED: "@porchlight/shared @porchlight/identity @porchlight/social porchlight"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - uses: sigstore/cosign-installer@v3
+      - name: Resolve mode, version, tag
+        id: env
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            TAG="${GITHUB_REF_NAME:?}"
+            case "$TAG" in v*) ;; *) echo "::error::deploy tags must start with 'v' (got: $TAG)"; exit 1;; esac
+            VERSION="${TAG#v}"
+            MODE="publish"
+          else
+            VERSION="${{ inputs.version }}"
+            MODE="${{ inputs.mode }}"
+            TAG="v$VERSION"
+            case "$VERSION" in v*) echo "::error::version must not carry the 'v' prefix (got: $VERSION)"; exit 1;; esac
+          fi
+          echo "TAG=$TAG"        >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "MODE=$MODE"       >> "$GITHUB_ENV"
+          echo "mode=$MODE"       >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying $TAG (mode: $MODE)"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+      - name: npm ci
+        run: npm ci
+      - name: Version (all workspaces → $VERSION)
+        run: npm version "$VERSION" --workspaces --include-workspace-root --no-git-tag-version --allow-same-version
+      - name: Build
+        run: npm run build
+      - name: Pack release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          for ws in $PUBLISHED; do
+            npm pack -w "$ws" --pack-destination release-assets
+          done
+          (cd release-assets && shasum -a 256 -- *.tgz > SHA256SUMS)
+          echo "Packed:" && ls -la release-assets
+      - name: Sign SHA256SUMS (Sigstore keyless)
+        run: |
+          set -euo pipefail
+          cd release-assets
+          cosign sign-blob --yes --output-file /dev/null --bundle SHA256SUMS.bundle SHA256SUMS
+      - name: Publish to npm (provenance) — publish mode only
+        if: env.MODE == 'publish'
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN (repository actions secret) is not configured — refusing to publish. Add an npm automation/granular token as the NPM_TOKEN secret, then re-run this release."
+            exit 1
+          fi
+          for ws in $PUBLISHED; do
+            npm publish --provenance --access public -w "$ws"
+          done
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          {
+            echo "# porchlight $TAG"
+            if [ "$MODE" = "dry-run" ]; then
+              echo ""
+              echo "> ⚠️ DRY-RUN: npm publish was skipped (workflow_dispatch mode=dry-run). Artifacts below are the exact release set minus registry publication."
+            fi
+            echo ""
+            echo "npm is the deploy and install surface: \`npm install -g porchlight\`."
+            echo ""
+            echo "## License"
+            echo ""
+            echo "MIT — https://github.com/bjoshuanoah/porchlight/blob/main/LICENSE (every published package ships MIT)."
+            echo ""
+            echo "## Verify"
+            echo ""
+            echo '```bash'
+            echo "git clone --branch $TAG https://github.com/bjoshuanoah/porchlight.git && cd porchlight"
+            echo "node scripts/release/verify-release.mjs --tag $TAG"
+            echo '```'
+            echo ""
+            echo "Prerequisites and manual steps: docs/release-verification.md in this repo at $TAG."
+            echo ""
+            echo "## Assets"
+            echo ""
+            for f in release-assets/*.tgz; do echo "- $(basename "$f") — MIT, mirrors the npm-published tarball"; done
+            echo "- SHA256SUMS — sha256 of every tarball"
+            echo "- SHA256SUMS.bundle — Sigstore keyless signature of SHA256SUMS (identity pinned to this deploy workflow)"
+          } > release-notes.md
+      - name: Create GitHub release
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "dry-run" ]; then
+            gh release create "$TAG" release-assets/* --prerelease --title "[dry-run] porchlight $TAG" --notes-file release-notes.md
+          else
+            gh release create "$TAG" release-assets/* --title "porchlight $TAG" --notes-file release-notes.md
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Self-verify — positive + loud negative
+        run: |
+          set -euo pipefail
+          node scripts/release/verify-release.mjs --dir release-assets
+          echo ""
+          echo "=== negative fixture 1: unsigned (signature removed) ==="
+          rm -rf neg-unsigned && mkdir -p neg-unsigned && cp release-assets/* neg-unsigned/ && rm neg-unsigned/SHA256SUMS.bundle
+          if node scripts/release/verify-release.mjs --dir neg-unsigned >neg-unsigned.log 2>&1; then
+            echo "::error::unsigned release assets PASSED verification — verification must fail loudly"
+            cat neg-unsigned.log
+            exit 1
+          fi
+          echo "OK — failed loudly as expected:"
+          cat neg-unsigned.log
+          echo ""
+          echo "=== negative fixture 2: tampered tarball (checksum mismatch) ==="
+          rm -rf neg-tamper && mkdir -p neg-tamper && cp release-assets/* neg-tamper/
+          printf 'tampered' >> neg-tamper/$(ls neg-tamper | grep -v SHA256 | sed -n 1p)
+          if node scripts/release/verify-release.mjs --dir neg-tamper >neg-tamper.log 2>&1; then
+            echo "::error::tampered release assets PASSED verification — verification must fail loudly"
+            cat neg-tamper.log
+            exit 1
+          fi
+          echo "OK — failed loudly as expected:"
+          cat neg-tamper.log
+  verify-install:
+    name: npm i -g porchlight + binary run (${{ matrix.os }})
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      MODE: ${{ needs.release.outputs.mode }}
+      TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install globally + smoke run (binary runs from PATH, no further setup)
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "dry-run" ]; then
+            gh release download "$TAG" --pattern "porchlight-*.tgz" --dir "$RUNNER_TEMP/install"
+            npm install -g "$RUNNER_TEMP"/install/porchlight-*.tgz
+          else
+            npm install -g porchlight
+          fi
+          porchlight --version
+          porchlight
+          echo "OK: porchlight binary ran from PATH on ${{ matrix.os }}."
+        env:
+          GH_TOKEN: ${{ github.token }}

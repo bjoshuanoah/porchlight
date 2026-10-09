@@ -1,17 +1,19 @@
 {
-  "name": "@porchlight/shared",
+  "name": "porchlight",
   "version": "0.1.0",
-  "description": "Shared, domain-agnostic types and helpers (never domain models). Shared by modules across the module boundary.",
+  "description": "Porchlight CLI — the npm global install surface and entrypoint. Domain behavior (start, bootstrap) lands with PORCH-003 bring-up.",
   "license": "MIT",
   "author": "Brian Noah",
+  "type": "module",
   "engines": {
     "node": ">= 24"
   },
-  "type": "module",
-  "main": "src/index.js",
-  "exports": {
-    ".": "./src/index.js"
+  "bin": {
+    "porchlight": "bin/porchlight.mjs"
   },
+  "files": [
+    "bin"
+  ],
   "scripts": {
     "test": "node --test 'test/**/*.test.js'",
     "lint": "eslint ."
@@ -22,6 +24,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bjoshuanoah/porchlight.git",
-    "directory": "packages/shared"
+    "directory": "packages/cli"
   }
 }

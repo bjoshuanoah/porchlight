@@ -26,8 +26,11 @@ porchlight/
 │   ├── identity/   # Identity domain: routes → controllers → services → models — @porchlight/identity (public)
 │   └── social/     # Social domain: routes → controllers → services → models — @porchlight/social (public)
 ├── packages/
-│   └── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)
-└── scripts/        # Build/lint/boundary-check tooling (not a published package)
+│   ├── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)
+│   └── cli/        # porchlight CLI — global bin, the npm install surface (`npm install -g porchlight`) (public)
+├── docs/           # Release verification instructions (signed supply-chain anchor)
+├── .github/workflows/  # CI (lint/typecheck/build/test on Node 24) and Deploy (npm publish with provenance + signed GitHub Releases)
+└── scripts/        # Build/lint/boundary-check/release tooling (not a published package)
 ```
 
 ## Module ownership map
@@ -38,6 +41,7 @@ Every domain module owns its complete route → controller → service → model
 - `@porchlight/identity` owns all identity models and identity-only service logic.
 - `@porchlight/social` owns all social models and social-only service logic.
 - `@porchlight/shared` owns no domain models — only cross-domain-agnostic helpers.
+- `packages/cli` (`porchlight`) is the global install surface and entrypoint; it performs no domain logic (domain behavior lands with the bring-up task) and imports no domain models.
 - `apps/web` is a static shell; no server-side imports.
 
 Cross-module rule: a module's implementation source tree is never imported by another module. A module may only import another module's **published public entry** (`@porchlight/<module>`) — never its internals (`.../models`, `.../src/...`), and never its models. `identity` and `social` share zero models and never import each other's internals. `@porchlight/shared` is the sole permitted cross-module import; `@porchlight/server` and `@porchlight/web` are private and never imported by name.
@@ -57,7 +61,9 @@ route (REST/MCP surface)
 - Every module ships co-located unit tests at `<module>/test/**` run with `node --test`.
 - Integration-level (package-level) tests live under the package and cover cross-package behavior.
 - `apps/server` ships MUI-less API contract tests proving the vertical slice (health, identity, social routes), plus a co-located unit test for the system health service.
-- `npm run test` at the repo root runs `turbo run test` then the boundary check.
+- `npm run test` at the repo root runs `turbo run test` then the boundary check — it is the one command that runs the whole test matrix locally.
+- `npm run lint` (turbo lint) runs ESLint per workspace against the root flat config; `npm run typecheck` (turbo typecheck) typechecks TS workspaces. CI runs `turbo run lint typecheck build test --affected` on Node 24, scoped to changed workspaces plus their dependents.
+- Published releases are verified with `node scripts/release/verify-release.mjs` — instructions in `docs/release-verification.md`.
 
 ## Enforcement (CI)
 
@@ -67,16 +73,18 @@ route (REST/MCP surface)
 2. a module importing another module's models (identity/social share zero models); or
 3. a model shared between the identity and social domains.
 
+This check runs in CI on every push and pull request (`.github/workflows/ci.yml`).
+
 ## Contribution flow
 
 1. Create an agent-owned branch off the repository default (`main`).
-2. Make the change, add or update co-located tests, run `npm run test` locally and ensure it is green.
+2. Make the change, add or update co-located tests, run `npm run test` and `npm run lint` locally and ensure both are green.
 3. Open a pull request from the agent-owned branch onto `main`.
-4. CI runs `npm run test`; merge once green.
+4. CI runs `turbo run lint typecheck build test --affected` (Node 24) plus the boundary check; merge once green.
 
 ## License surface
 
-MIT is the license of record. `LICENSE` sits at the repo root; every published package declares `"license": "MIT"` and `"publishConfig": { "access": "public" }`. Node engine floor is `>= 24` across the monorepo.
+MIT is the license of record. `LICENSE` sits at the repo root; every published package declares `"license": "MIT"` and `"publishConfig": { "access": "public" }`. Node engine floor is `>= 24` across the monorepo. Every `npm publish` runs with provenance (`.npmrc` `publish-provenance=true`, attested by the deploy workflow's GitHub Actions OIDC token).
 
 ## Non-binding note
 
