@@ -89,7 +89,7 @@ export class InteractionService {
       did: session.did,
       detail: { postId: payload.postId, commentId: comment._id },
     });
-    return { comment: InteractionService.commentView(comment) };
+    return { comment: (await this.#withAttribution([InteractionService.commentView(comment)], networkId))[0] };
   }
 
   /**
@@ -182,7 +182,7 @@ export class InteractionService {
     const session = await this.#requireSession({ accessToken, postId });
     const rows = await this.comments.find({ postId, networkId: session.networkId });
     rows.sort((a, b) => (a.createdAt > b.createdAt ? 1 : -1));
-    return { comments: rows.map((row) => InteractionService.commentView(row)) };
+    return { comments: await this.#withAttribution(rows.map((row) => InteractionService.commentView(row)), session.networkId) };
   }
 
   /** Reaction read for a member: as-authored emoji values, by member. */
@@ -213,6 +213,18 @@ export class InteractionService {
       mentions: comment.mentions,
       createdAt: comment.createdAt,
     };
+  }
+
+  /**
+   * Attribution (PORCH-034): member comment views carry the author's
+   * family-facing name, resolved at READ time against the origin's active
+   * membership — never a frozen copy on the comment document. A DID that
+   * holds no active membership at the origin renders the plain nameless
+   * fallback (names render for network members only).
+   */
+  async #withAttribution(views, networkId) {
+    const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorDid) });
+    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorDid)) ?? null }));
   }
 
   static reactionView(reaction) {

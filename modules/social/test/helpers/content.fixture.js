@@ -27,7 +27,7 @@ export function device(deviceId) {
  * post/interaction/notification/group path wired per the contract, with
  * admit helpers that return real membership tokens.
  */
-export function fixture({ networkIds = ["net_family", "net_other"], audit = async () => {} } = {}) {
+export function fixture({ networkIds = ["net_family", "net_other"], audit = async () => {}, memberNames = null } = {}) {
   const store = createMemoryStore();
   const collections = {
     networks: store.collection("networks"),
@@ -53,6 +53,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     deviceKeys: collections.deviceKeys,
     invites,
     verifyMemberIdToken: (token) => (token ? { did: token } : null),
+    memberNames,
     networks: collections.networks,
     audit,
   });

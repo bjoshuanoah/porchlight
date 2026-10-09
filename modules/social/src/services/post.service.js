@@ -139,7 +139,7 @@ export class PostService {
     const post = await this.#buildPost({ networkId, did: session.did, payload, signature });
     await this.posts.insertOne(post);
     await this.audit("post_create", { networkId, did: session.did, detail: { postId: post._id, type: post.type } });
-    return { post: this.view(post), did: session.did };
+    return { post: (await this.#withAttribution([this.view(post)], networkId))[0], did: session.did };
   }
 
   /** Read one post as a member view (no counters, no vote data). */
@@ -150,7 +150,7 @@ export class PostService {
       // Containment: a post of another origin simply does not exist here.
       throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
     }
-    return { post: this.view(post), did: session.did };
+    return { post: (await this.#withAttribution([this.view(post)], session.networkId))[0], did: session.did };
   }
 
   /** List the origin network's posts, newest first (base timeline read). */
@@ -160,7 +160,7 @@ export class PostService {
     // Base timeline ordering (PORCH-007): newest first by latest activity;
     // reverse-chron pagination only — this read never re-sorts by rank.
     newestFirstByActivity(rows);
-    return { posts: rows.map((post) => this.view(post)), did: session.did };
+    return { posts: await this.#withAttribution(rows.map((post) => this.view(post)), session.networkId), did: session.did };
   }
 
   /**
@@ -343,6 +343,18 @@ export class PostService {
    */
   view(post) {
     return postView(post);
+  }
+
+  /**
+   * Attribution (PORCH-034): member post views carry the author's
+   * family-facing name, resolved at READ time against the origin's active
+   * membership — never a frozen copy on the post document. A DID that holds
+   * no active membership at the origin renders the plain nameless fallback
+   * (names render for network members only).
+   */
+  async #withAttribution(views, networkId) {
+    const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorId) });
+    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId)) ?? null }));
   }
 
   #requireSession(accessToken) {
