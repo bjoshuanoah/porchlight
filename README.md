@@ -99,6 +99,23 @@ After `start`:
 
 If bootstrap is interrupted, it is resumable: run `porchlight bootstrap` again and it continues from the last completed step instead of starting over. Diagnostics at any time: `porchlight status`.
 
+### A stable address for your hub
+
+The first `porchlight start` works with no Cloudflare account at all: it mints a **temporary** address (`something.trycloudflare.com`) that works immediately but changes every restart. Any invite or join link shared under it stops resolving at the next boot.
+
+To pin a permanent address you need a domain whose DNS lives on Cloudflare, then run one set of steps:
+
+```bash
+porchlight stop                                 # mint refuses to run while the hub is up
+cloudflared tunnel login                        # one-time, browser auth
+porchlight tunnel mint --hostname hub.example.com
+porchlight start                                # same hostname on this boot and every boot after
+```
+
+- `mint` reuses the account's `porchlight` tunnel when one exists and creates it on first use; the credentials persist under your porchlight home, and every later `porchlight start` re-binds the same tunnel — the URL never churns again.
+- One hostname serves the machine that runs the tunnel child. To move the hub to a new machine: `porchlight stop` on the old one, then set up the new machine and run the same `login` + `mint` steps there — `mint` reuses the same named tunnel and the hostname follows whichever machine runs it.
+- `porchlight tunnel status` shows the stored identity and last bound URL; `porchlight tunnel reset` wipes it and the next `start` provisions anew (fresh mint, or fall back to the temporary address). Invite links minted under an earlier address must be re-shared after a hostname change.
+
 ### Command reference
 
 | Command | What it does |

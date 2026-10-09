@@ -126,7 +126,7 @@ export function decodeTokenTunnelId(token) {
 /** cloudflared subprocess runner; the origin cert rides TUNNEL_ORIGINCERT. */
 function cloudflaredRun(binary, args, originCert = undefined) {
   return new Promise((resolve, reject) => {
-    const env = { ...process.env, ...(originCert ? { TUNNEL_ORIGINCERT: originCert } : {}) };
+    const env = { ...process.env, ...(originCert ? { TUNNEL_ORIGIN_CERT: originCert } : {}) };
     execFile(binary, args, { timeout: 120_000, env }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(`cloudflared ${args[0]} ${args[1] ?? ""} failed: ${(stderr || error.message).trim()}`));
@@ -144,7 +144,29 @@ function cloudflaredRun(binary, args, originCert = undefined) {
  * REUSED when it already exists on the account (tunnel list first) — mint
  * never creates a second tunnel on top of an existing one.
  */
+/**
+ * Point the hostname's DNS at the tunnel (one CNAME per hostname). Every mint
+ * path routes: a stored dashboard token or a reused account tunnel without
+ * local credentials must bind the hostname exactly like a fresh create does.
+ * Route failures (route already exists, points elsewhere, or no cert) never
+ * block the bind — the hostname's DNS stays the owner's Cloudflare setup.
+ */
+async function routeHostname(cloudflaredBinary, originCert, hostname, log) {
+  if (!hostname) return;
+  if (!originCert) {
+    log(`no origin cert available — create a CNAME for ${hostname} to <tunnel-id>.cfargotunnel.com in the Cloudflare dashboard`);
+    return;
+  }
+  try {
+    await cloudflaredRun(cloudflaredBinary, ["tunnel", "route", "dns", NAMED_TUNNEL_NAME, hostname], originCert);
+    log(`DNS route for ${hostname} created`);
+  } catch (error) {
+    log(`DNS route for ${hostname} not (re)created: ${error.message}`);
+  }
+}
+
 export async function mintTunnelIdentity(paths, cloudflaredBinary, { hostname = null, log = () => {} } = {}) {
+  const originCert = discoverOriginCertFile(paths);
   const token = readStoredToken(paths);
   if (token) {
     const identity = saveTunnelIdentity(paths, {
@@ -153,10 +175,10 @@ export async function mintTunnelIdentity(paths, cloudflaredBinary, { hostname = 
       hostname: normalizeHostname(hostname),
     });
     log(`tunnel identity stored from the dashboard token (named ${identity.tunnelId ?? "id not decodable"})`);
+    await routeHostname(cloudflaredBinary, originCert, identity.hostname, log);
     return identity;
   }
 
-  const originCert = discoverOriginCertFile(paths);
   if (!originCert) {
     throw new Error(
       `no tunnel credentials to persist — run \`cloudflared tunnel login\` once and retry, or place the dashboard tunnel token at ${tunnelTokenPath(paths)}`,
@@ -167,7 +189,7 @@ export async function mintTunnelIdentity(paths, cloudflaredBinary, { hostname = 
   log("checking for an existing named tunnel…");
   const { stdout: listOut } = await cloudflaredRun(
     cloudflaredBinary,
-    ["tunnel", "list", "-o", "json", "--origincert", originCert],
+    ["tunnel", "list", "-o", "json"],
     originCert,
   );
   const existing = findNamedTunnel(listOut);
@@ -178,7 +200,7 @@ export async function mintTunnelIdentity(paths, cloudflaredBinary, { hostname = 
   } else {
     const { stdout: created } = await cloudflaredRun(
       cloudflaredBinary,
-      ["tunnel", "create", "--origincert", originCert, NAMED_TUNNEL_NAME],
+      ["tunnel", "create", NAMED_TUNNEL_NAME],
       originCert,
     );
     tunnelId = pickTunnelId(created);
@@ -195,22 +217,11 @@ export async function mintTunnelIdentity(paths, cloudflaredBinary, { hostname = 
     writeFileSync(tunnelTokenPath(paths), `${tokenOut.trim()}\n`, { mode: 0o600 });
     const identity = saveTunnelIdentity(paths, { mode: "token", tunnelId, hostname });
     log("run token stored for the existing tunnel (credentials file unavailable)");
+    await routeHostname(cloudflaredBinary, originCert, identity.hostname, log);
     return identity;
   }
 
-  if (hostname) {
-    try {
-      await cloudflaredRun(
-        cloudflaredBinary,
-        ["tunnel", "route", "dns", "--origincert", originCert, NAMED_TUNNEL_NAME, hostname],
-        originCert,
-      );
-    } catch (error) {
-      // A route that already exists (or points elsewhere) must not block the
-      // bind — the hostname is served from the owner's Cloudflare DNS config.
-      log(`DNS route for ${hostname} not (re)created: ${error.message}`);
-    }
-  }
+  await routeHostname(cloudflaredBinary, originCert, hostname, log);
   return saveTunnelIdentity(paths, { mode: "credentials", tunnelId, hostname });
 }
 
@@ -222,18 +233,22 @@ export function boundTunnelArgs(paths, config, identity) {
   // covered by a wider bind. The LAN-facing option broadens the listener
   // only; the tunnel endpoint is unchanged.
   const local = `http://127.0.0.1:${config.hub.httpPort}`;
+  // --no-autoupdate is a tunnel-command option: it must precede the run
+  // subcommand (`cloudflared tunnel --no-autoupdate run …`); after `run` the
+  // current cloudflared rejects it ("flag provided but not defined") and the
+  // child exits after printing its help text.
   if (identity.mode === "token") {
-    return ["tunnel", "run", "--url", local, "--no-autoupdate", "--token", readStoredToken(paths)];
+    return ["tunnel", "--no-autoupdate", "run", "--url", local, "--token", readStoredToken(paths)];
   }
   return [
     "tunnel",
+    "--no-autoupdate",
     "run",
     "--url",
     local,
     "--credentials-file",
     tunnelCredentialsPath(paths),
     identity.tunnelId,
-    "--no-autoupdate",
   ];
 }
 
