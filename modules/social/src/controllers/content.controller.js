@@ -101,6 +101,17 @@ export class ContentController {
     return this.#delegate(res, () => this.notifications.inbox({ accessToken: this.bearer(req) }));
   };
 
+  /**
+   * GET /mentions/candidates?q= — mention autocomplete (PORCH-014 ac-2),
+   * resolved against origin membership only; token's network is the only
+   * roster ever searched.
+   */
+  mentionCandidates = async (req, res) => {
+    return this.#delegate(res, () =>
+      this.notifications.mentionCandidates({ accessToken: this.bearer(req), q: req.query?.q }),
+    );
+  };
+
   bearer(req) {
     const header = req.headers?.authorization ?? "";
     return header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -142,6 +153,8 @@ export class ContentController {
       E_INVALID_VOTE: 400,
       E_GROUP_UNKNOWN: 404,
       E_GROUP_NOT_MEMBER: 403,
+      E_NOTIFICATION_NOT_MEMBER: 403,
+      E_NOTIFICATION_CROSS_ORIGIN: 403,
     };
     const status = statusByCode[error.code] ?? 500;
     const message =

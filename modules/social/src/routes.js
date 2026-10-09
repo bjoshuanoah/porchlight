@@ -44,6 +44,7 @@ export function createSocialRouter(controllers) {
   router.delete("/posts/:postId", content.deletePost);
   router.delete("/me/content", content.sweepMemberContent);
   router.get("/notifications", content.inbox);
+  router.get("/mentions/candidates", content.mentionCandidates);
 
   // Feed assembly (PORCH-007): base timeline, group timelines, and the
   // ranked section — all token-scoped to exactly one origin network. The
