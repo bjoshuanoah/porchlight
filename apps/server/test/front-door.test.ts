@@ -92,11 +92,18 @@ test("front door: member identity birth, admission, device link, session restore
   assert.equal(owner.status, 201);
   const ownerDid = (owner.body.account as Json).did as string;
 
-  await call(port, "/api/social/bootstrap/network", {
+  // PORCH-031 owner-bind handoff: the founder-bound network creation carries
+  // the single-use device-link grant the CLI prints at completion.
+  const networkBoot = await call(port, "/api/social/bootstrap/network", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: "The Noah Family", ownerDid }),
   });
+  assert.equal(networkBoot.status, 201);
+  const ownerBind = (networkBoot.body as Json).ownerBind as Json;
+  assert.equal((ownerBind.did as string), ownerDid, "the grant targets the bootstrap identity");
+  assert.ok(String(ownerBind.token).length >= 20, "the grant token is a real one-time value");
+  assert.ok(ownerBind.expiresAt, "the grant carries the device-link class TTL");
   const firstInvite = await call(port, "/api/social/bootstrap/invite", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -125,6 +132,40 @@ test("front door: member identity birth, admission, device link, session restore
     "content-type": "application/json",
     authorization: `Bearer ${(ownerAdmit.body as Json).accessToken as string}`,
   };
+
+  // Consuming the owner-bind URL in a browser (PORCH-031 ac-2): the browser
+  // mints its own key, the grant binds that device to the bootstrap identity,
+  // and the silent re-credential lands the owner inside the network —
+  // owner access, no invite, no login form anywhere.
+  const browserDevice = keyPair();
+  const browserJwk = browserDevice.publicKey.export({ format: "jwk" }) as Json;
+  const ownerConsume = await call(port, "/api/identity/device-link/consume", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: ownerBind.token, device: { deviceId: "dev_browser", label: "Owner phone", publicKeyJwk: browserJwk } }),
+  });
+  assert.ok([200, 201].includes(ownerConsume.status), `owner-bind consume failed: ${ownerConsume.status}`);
+  assert.equal(((ownerConsume.body.registration as Json).did as string), ownerDid, "the link never mints a new identity");
+  assert.equal((ownerConsume.body.registration as Json).createdBy, "device-link");
+  const browserToken = await memberIdentitySession(port, { did: ownerDid, device: browserDevice, deviceId: "dev_browser", jwk: browserJwk });
+  const ownerLanding = await call(port, "/api/social/session/restore", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ identityAccessToken: browserToken, deviceId: "dev_browser" }),
+  });
+  assert.equal(ownerLanding.status, 201);
+  const landingSession = ((ownerLanding.body as Json).sessions as Json[])[0];
+  assert.equal(landingSession?.role, "owner", "the bound device lands inside the network with owner access");
+
+  // Replay of the consumed owner-bind link is refused with plain copy (ac-3).
+  const ownerReplay = await call(port, "/api/identity/device-link/consume", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: ownerBind.token, device: { deviceId: "dev_replay", publicKeyJwk: browserJwk } }),
+  });
+  assert.equal(ownerReplay.status, 409);
+  assert.equal((ownerReplay.body as Json).code, "E_DEVICE_LINK_CONSUMED");
+  assert.equal((ownerReplay.body as Json).error, "one-time value already consumed");
 
   // Fresh member: brand-new device, no identity anywhere. Identity birth at
   // the front door — verified invite first, DID + device binding minted.

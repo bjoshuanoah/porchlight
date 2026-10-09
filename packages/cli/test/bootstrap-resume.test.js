@@ -49,9 +49,9 @@ function stubHub(t, ledger, state = {}) {
       }
       if (req.method === "POST" && req.url === "/api/identity/bootstrap/account") {
         postCalls.push("account");
-        if (ledger.account.status === "complete") return done(200, { created: false, account: state.accountRow ?? { did: "did:porch:stub", _id: "ident_stub" } });
+        if (ledger.account.status === "complete") return done(200, { created: false, account: state.accountRow ?? { did: state.accountDid ?? "did:porch:stub", _id: "ident_stub" } });
         ledger.account = { status: "complete", at: new Date().toISOString(), detail: null };
-        state.accountRow = { did: "did:porch:stub", _id: "ident_stub" };
+        state.accountRow = { did: state.accountDid ?? "did:porch:stub", _id: "ident_stub" };
         return done(201, { created: true, account: state.accountRow });
       }
       if (req.method === "GET" && req.url === "/api/identity/account") {
@@ -59,9 +59,14 @@ function stubHub(t, ledger, state = {}) {
       }
       if (req.method === "POST" && req.url === "/api/social/bootstrap/network") {
         postCalls.push("network");
-        if (ledger.network.status === "complete") return done(200, { created: false, network: { name: JSON.parse(raw).name } });
+        if (ledger.network.status === "complete") {
+          return done(200, { created: false, network: { name: JSON.parse(raw).name } });
+        }
         ledger.network = { status: "complete", at: new Date().toISOString(), detail: null };
-        return done(201, { created: true, network: { name: JSON.parse(raw).name }, membership: { role: "owner" } });
+        const bind = state.ownerBindToken
+          ? { ownerBind: { did: state.accountRow?.did ?? state.accountDid ?? "did:porch:stub", token: state.ownerBindToken, expiresAt: "2026-10-10T12:00:00.000Z" } }
+          : {};
+        return done(201, { created: true, network: { name: JSON.parse(raw).name }, membership: { role: "owner" }, ...bind });
       }
       return done(404, { error: "not found" });
     });
@@ -153,5 +158,40 @@ test("a previously failed step warns with its recorded detail, then retries", as
   const lines = await drive(t, hub.base, { firstName: "Owner", lastName: "Name", network: "Family" });
   assert.ok(lines.includes("[warn] account previously failed: the owner never finished first-account creation — retrying (completed steps are kept)"));
   assert.deepEqual(hub.postCalls, ["account", "network"]);
+  hub.close();
+});
+test("a fresh bootstrap prints the labeled one-time owner-bind URL (PORCH-031 ac-1)", async (t) => {
+  const hub = await stubHub(t, freshLedger(), { ownerBindToken: "bind-tok-alpha" });
+  const lines = await drive(t, hub.base, { firstName: "Owner", lastName: "Name", network: "Family" });
+  assert.ok(lines.includes("To open the network on the owner's device, open this one-time link in a browser:"));
+  assert.ok(lines.includes(`  ${hub.base}/device-link/bind-tok-alpha`), "the printed URL embeds the grant token under the hub base");
+  assert.ok(lines.some((line) => line.includes("It signs the device in — no password, no login form anywhere. It works once and expires in 24 hours.")));
+  hub.close();
+});
+
+test("a reset hub's fresh bootstrap prints a fresh bind URL, never a stale one (PORCH-031 ac-4)", async (t) => {
+  // First bring-up: the original identity's bind URL.
+  const first = await stubHub(t, freshLedger(), { ownerBindToken: "tok_first", accountDid: "did:porch:first-owner" });
+  const firstLines = await drive(t, first.base, { firstName: "Owner", lastName: "Name", network: "Family" });
+  assert.ok(firstLines.includes(`  ${first.base}/device-link/tok_first`));
+  first.close();
+
+  // The hub is wiped and re-bootstrapped: fresh ledger, fresh identity, fresh
+  // grant — the printed URL comes from THIS run's founder-bound response.
+  const second = await stubHub(t, freshLedger(), { ownerBindToken: "tok_second", accountDid: "did:porch:second-owner" });
+  const secondLines = await drive(t, second.base, { firstName: "Newer", lastName: "Owner", network: "Family" });
+  assert.ok(secondLines.includes(`  ${second.base}/device-link/tok_second`), "the new bootstrap prints its own grant");
+  assert.ok(secondLines.every((line) => !line.includes("tok_first")), "no stale link from the prior state survives");
+  second.close();
+});
+
+test("resumed network creation still hands over a bind URL (PORCH-031 ac-4)", async (t) => {
+  // Account complete from a prior run; the resumed network step mints and
+  // the run prints exactly that grant.
+  const ledger = freshLedger();
+  ledger.account.status = "complete";
+  const hub = await stubHub(t, ledger, { ownerBindToken: "tok_resumed", accountDid: "did:porch:resumed-owner" });
+  const lines = await drive(t, hub.base, { network: "Family" });
+  assert.ok(lines.includes(`  ${hub.base}/device-link/tok_resumed`));
   hub.close();
 });

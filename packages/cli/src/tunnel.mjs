@@ -73,9 +73,7 @@ async function mint(paths, args) {
   }
   const hostname = normalizeHostname(args.hostname); // errors loudly on a bad value
   const cloudflared = await ensureCloudflared(paths.root, (m) => process.stdout.write(`tunnel: ${m}\n`));
-  const identity = await mintTunnelIdentity(paths, cloudflared, { hostname }, (m) =>
-    process.stdout.write(`tunnel: ${m}\n`),
-  );
+  const identity = await mintTunnelIdentity(paths, cloudflared, { hostname, log: (m) => process.stdout.write(`tunnel: ${m}\n`) });
   process.stdout.write(
     `tunnel identity stored (mode ${identity.mode}, named ${identity.tunnelId ?? "—"}, host ${identity.hostname ?? "not recorded"}).\n` +
       "Next start re-binds exactly this tunnel; run `porchlight start`.\n",

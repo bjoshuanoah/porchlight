@@ -42,22 +42,25 @@ async function writeFakeCloudflared(dir) {
   const script = `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.FAKE_CLOUDFLARED_LOG, JSON.stringify(args) + "\\n");
+fs.appendFileSync(process.env.FAKE_CLOUDFLARED_LOG, JSON.stringify({ args, originCertEnv: process.env.TUNNEL_ORIGIN_CERT ?? null }) + "\\n");
+// Subcommand position is flag-relative: tunnel-command flags (like
+// --no-autoupdate) precede it, so dispatch on the first non-flag token.
+const sub = args[0] === "tunnel" ? args.slice(1).find((a) => !a.startsWith("--")) : null;
 const mode = process.env.FAKE_CLOUDFLARED_MODE;
 const id = process.env.FAKE_TUNNEL_ID;
-if (args[0] === "tunnel" && args[1] === "list") {
+if (sub === "list") {
   const existing = mode === "cert-existing" ? [{ id, name: "porchlight" }] : [];
   process.stdout.write(JSON.stringify(existing) + "\\n");
-} else if (args[0] === "tunnel" && args[1] === "create") {
+} else if (sub === "create") {
   const file = process.env.FAKE_CLOUDFLARED_DIR + "/" + id + ".json";
   fs.mkdirSync(process.env.FAKE_CLOUDFLARED_DIR, { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ AccountTag: "acct", TunnelSecret: "c2VjcmV0", TunnelID: id }));
   process.stdout.write("Tunnel credentials written to " + file + "\\nCreated tunnel porchlight with id " + id + "\\n");
-} else if (args[0] === "tunnel" && args[1] === "route") {
+} else if (sub === "route") {
   process.stdout.write("route dns ok\\n");
-} else if (args[0] === "tunnel" && args[1] === "token") {
+} else if (sub === "token") {
   process.stdout.write(Buffer.from(JSON.stringify({ t: id })).toString("base64") + "\\n");
-} else if (args[0] === "tunnel" && args[1] === "run") {
+} else if (sub === "run") {
   process.stdout.write("INF Starting tunnel tunnelID=" + id + "\\n");
   process.stdout.write("INF Registered tunnel connection connIndex=0 ip=198.41.192.67\\n");
   setInterval(() => {}, 9e9);
@@ -131,11 +134,11 @@ test("stored identity re-binds the same tunnel hostname on every restart (ac-1)"
   // No tunnel re-minted: the binds only invoke `tunnel run`.
   const invocations = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.ok(
-    invocations.every((args) => args[0] === "tunnel" && args[1] === "run"),
+    invocations.every((call) => call.args[0] === "tunnel" && call.args[2] === "run"),
     `expected only run invocations, got ${JSON.stringify(invocations)}`,
   );
-  const args = invocations[0];
-  assert.deepEqual(args, ["tunnel", "run", "--url", "http://127.0.0.1:8710", "--credentials-file", tunnelCredentialsPath(paths), TUNNEL_ID, "--no-autoupdate"]);
+  const args = invocations[0].args;
+  assert.deepEqual(args, ["tunnel", "--no-autoupdate", "run", "--url", "http://127.0.0.1:8710", "--credentials-file", tunnelCredentialsPath(paths), TUNNEL_ID]);
 });
 
 test("stored credentials are reused; fresh mint only via the explicit reset path (ac-2)", async (t) => {
@@ -154,6 +157,15 @@ test("stored credentials are reused; fresh mint only via the explicit reset path
   assert.equal(identity.mode, "credentials");
   assert.equal(identity.tunnelId, TUNNEL_ID);
   assert.equal(identity.hostname, HOSTNAME);
+  // The origin cert rides the TUNNEL_ORIGIN_CERT environment variable and
+  // never the argv — --origincert after the subcommand is "flag not defined"
+  // on current cloudflared (the bug this pins).
+  const mintInvocations = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.ok(mintInvocations.length > 0, "mint invoked cloudflared");
+  assert.ok(
+    mintInvocations.every((call) => !call.args.includes("--origincert") && call.originCertEnv !== null),
+    `expected TUNNEL_ORIGIN_CERT on env and no --origincert flag, got ${JSON.stringify(mintInvocations)}`,
+  );
   assert.ok(existsSync(tunnelCredentialsPath(paths)), "credentials.json stored at rest");
   assert.equal(loadTunnelIdentity(paths)?.tunnelId, TUNNEL_ID);
 
@@ -169,10 +181,10 @@ test("stored credentials are reused; fresh mint only via the explicit reset path
   assert.notEqual(reMinted.mintedAt, undefined);
   assert.equal(loadTunnelIdentity(paths).tunnelId, TUNNEL_ID);
 
-  // The no-mint invariant at spawn time: with identity present only `tunnel
-  // run` is invoked (asserted here via the args-grammar shortcut).
+  // The args-grammar shortcut: with identity present only `tunnel run` is
+  // invoked, and --no-autoupdate rides the tunnel-command position.
   const args = boundTunnelArgs(paths, spawnConfig(dir), loadTunnelIdentity(paths));
-  assert.equal(args[0] + " " + args[1], "tunnel run");
+  assert.equal(args.slice(0, 3).join(" "), "tunnel --no-autoupdate run");
 });
 
 test("named-token mode: dashboard token stored at rest re-binds with its own id (ac-2)", async (t) => {
@@ -188,7 +200,7 @@ test("named-token mode: dashboard token stored at rest re-binds with its own id 
   // args grammar: token mode points at the stored token, never at a fresh mint
   process.env.FAKE_TUNNEL_ID = TUNNEL_ID;
   const args = boundTunnelArgs(paths, spawnConfig(dir), identity);
-  assert.deepEqual(args, ["tunnel", "run", "--url", "http://127.0.0.1:8710", "--no-autoupdate", "--token", Buffer.from(tokenPayload).toString("base64")]);
+  assert.deepEqual(args, ["tunnel", "--no-autoupdate", "run", "--url", "http://127.0.0.1:8710", "--token", Buffer.from(tokenPayload).toString("base64")]);
 
   // Token mode re-binds through the supervisor watcher too.
   const log = join(dir, "invocations.log");
@@ -217,7 +229,8 @@ test("LAN bind decoupling (PORCH-025): the tunnel target stays loopback for any 
     { mode: "credentials", tunnelId: TUNNEL_ID, hostname: HOSTNAME },
   ]) {
     const args = boundTunnelArgs(paths, config, identity);
-    assert.equal(args[3], "http://127.0.0.1:8710");
+    assert.equal(args[2], "run");
+    assert.equal(args[4], "http://127.0.0.1:8710", "the tunnel endpoint stays loopback for any bind");
   }
 });
 
@@ -254,8 +267,19 @@ test("mint reuses an existing account tunnel and never creates a second one (ac-
   const second = await mintTunnelIdentity(paths, fakeBinary, { hostname: HOSTNAME });
   assert.equal(first.tunnelId, second.tunnelId);
   const invocations = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-  const creates = invocations.filter((args) => args[1] === "create");
+  const creates = invocations.filter((call) => call.args[1] === "create");
   assert.equal(creates.length, 0, `expected zero tunnel create calls, got ${JSON.stringify(creates)}`);
+  // Every mint path routes the hostname — the reuse path (token mode here: no
+  // local credentials for the pre-existing tunnel) must not skip it.
+  assert.ok(first.mode === "token", "reuse-without-credentials binds in token mode");
+  const routes = invocations.filter((call) => call.args[1] === "route");
+  assert.equal(routes.length, 2, `expected one route per mint, got ${JSON.stringify(routes)}`);
+  assert.deepEqual(
+    routes[0].args,
+    ["tunnel", "route", "dns", "porchlight", HOSTNAME],
+    `unexpected route invocation ${JSON.stringify(routes[0])}`,
+  );
+  assert.ok(routes.every((call) => call.originCertEnv !== null), "route rides TUNNEL_ORIGIN_CERT");
 });
 
 test("invalid hostnames are rejected loudly; corrupt identity falls back to unprovisioned", async (t) => {
