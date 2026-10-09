@@ -324,6 +324,29 @@ export class AccountService {
     return this.didService.setHandle(args);
   }
 
+  /**
+   * Family-facing member names by DID (PORCH-029): the member directory shows
+   * members by name, so the owner view resolves the membership rows' DIDs
+   * against the identity rows. Read-only display fields only — the social
+   * module consumes this through the server-wired boundary callback and never
+   * reads identity internals (CI boundary).
+   */
+  async namesFor(dids = []) {
+    const wanted = [...new Set((dids ?? []).filter((did) => typeof did === "string" && did.length > 0))];
+    if (wanted.length === 0) return [];
+    const rows = await this.identities.find({});
+    return rows
+      .filter((row) => wanted.includes(row.did))
+      .map((row) => {
+        const composed = [row.firstName, row.lastName]
+          .filter((part) => typeof part === "string" && part.length > 0)
+          .join(" ");
+        const displayName = row.displayName ?? (composed || null);
+        return displayName ? { did: row.did, displayName } : null;
+      })
+      .filter((row) => row !== null);
+  }
+
   /** Update the identity's profile fields (profile data lives on the account row). */
   async recordProfile({ did, displayName = undefined, profile = undefined }) {
     const row = await this.identities.findOne({ did });

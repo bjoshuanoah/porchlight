@@ -323,8 +323,10 @@ test("ac-2: owners view member roles, and revocation is instant — sessions die
   assert.ok(rows.some((row) => row.did === member.did && row.role === "member"));
   const memberView = rows.find((row) => row.did === member.did) as Json;
   const memberKeys = Object.keys(memberView).sort();
-  // The full owner-visible record is identity + role + state only.
-  assert.deepEqual(memberKeys, ["_id", "admittedAt", "did", "networkId", "revokedAt", "role", "state"]);
+  // The full owner-visible record is identity + name (PORCH-029 directory) +
+  // role + state only.
+  assert.deepEqual(memberKeys, ["_id", "admittedAt", "did", "name", "networkId", "revokedAt", "role", "state"]);
+  assert.equal(memberView.name, "Tom", "the directory shows the member's identity-plane display name");
 
   // The member's perimeter is live before revocation.
   const before = await call(port, "/api/social/timeline", { headers: member.auth });
@@ -477,4 +479,63 @@ test("ac-4: the console shows the running release/version and launch diagnostics
   assert.match(entry.message as string, /feed smoke check failed/);
   assert.equal(launch.lastError, entry.message);
   assert.equal(((launch.steps as Json).invite as Json).status, "failed");
+});
+
+test("ac-3 (PORCH-029): the member directory reflects live membership state on the next read", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+  const owner = await bootOwner(port);
+
+  // Start: the founder alone, directory rows carry the owner's name.
+  const before = await call(port, `${OWNER_CONSOLE}/members`, { headers: owner.auth });
+  assert.equal(before.status, 200);
+  assert.equal((before.body.members as Json[]).length, 1);
+  assert.equal((before.body.members as Json[])[0].role, "owner");
+  assert.ok((before.body.members as Json[])[0].name, "the bound founder renders with a name, not a raw identity row");
+
+  // A member completes the issued join link → the directory shows them on
+  // the next read (name, role, active join state) without any manual step.
+  const member = await bootMember(hub, port, owner.auth, "June River", "dev_phone");
+  const afterJoin = await call(port, `${OWNER_CONSOLE}/members`, { headers: owner.auth });
+  const joinedRow = ((afterJoin.body.members as Json[]).find((row) => row.did === member.did) as Json);
+  assert.equal(joinedRow.role, "member");
+  assert.equal(joinedRow.state, "active");
+  assert.equal(joinedRow.name, "June River");
+  assert.ok(typeof joinedRow.admittedAt === "string");
+
+  // The minted invites are consumed (boot used two) — every earlier link
+  // reads used in the lifecycle, and a second issued link reads unused with
+  // its shareable join URL (ac-2: the link the owner can copy and send).
+  const invites = await call(port, `${OWNER_CONSOLE}/invites`, { headers: owner.auth });
+  const states = (invites.body.invites as Json[]).map((row) => row.status as string).sort();
+  assert.deepEqual(states, ["used", "used"]);
+  const spare = await call(port, `${OWNER_CONSOLE}/invites`, { method: "POST", headers: owner.auth, body: JSON.stringify({ role: "member", maxUses: 1 }) });
+  const spareInvite = spare.body.invite as Json;
+  assert.match((spareInvite.joinUrl as string), /^https:\/\/hub\.test\/join\//);
+  const spareList = await call(port, `${OWNER_CONSOLE}/invites`, { headers: owner.auth });
+  const spareRow = ((spareList.body.invites as Json[]).find((row) => (row as Json)._id === spareInvite._id) as Json);
+  assert.equal(spareRow.status, "unused");
+
+  // Revoking that link flips it owner-visible on the next read (ac-3).
+  const revoked = await call(port, `${OWNER_CONSOLE}/invites/revoke`, {
+    method: "POST",
+    headers: owner.auth,
+    body: JSON.stringify({ inviteId: (spareInvite as Json)._id }),
+  });
+  assert.equal(revoked.status, 200);
+  const afterRevoke = await call(port, `${OWNER_CONSOLE}/invites`, { headers: owner.auth });
+  const revokedRow = ((afterRevoke.body.invites as Json[]).find((row) => (row as Json)._id === spareInvite._id) as Json);
+  assert.equal(revokedRow.status, "revoked");
+
+  // Revoking the member's membership lands in the directory the same way.
+  const memberRevoke = await call(port, `${OWNER_CONSOLE}/members/revoke`, {
+    method: "POST",
+    headers: owner.auth,
+    body: JSON.stringify({ memberId: member.memberId }),
+  });
+  assert.equal(memberRevoke.status, 200);
+  const directoryFinal = await call(port, `${OWNER_CONSOLE}/members`, { headers: owner.auth });
+  const finalRow = ((directoryFinal.body.members as Json[]).find((row) => row.did === member.did) as Json);
+  assert.equal(finalRow.state, "revoked");
 });

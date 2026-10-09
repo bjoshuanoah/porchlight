@@ -293,3 +293,21 @@ test("member identity birth is not owner-gated and fails loud on bad input", asy
     (error) => error.code === "E_PRIVATE_KEY_REJECTED",
   );
 });
+
+test("namesFor resolves the family-facing display names for member DIDs (PORCH-029)", async () => {
+  const { accountService } = fixture();
+  const owner = await accountService.createFirstAccount({ firstName: "Brian", lastName: "Noah", device: okpDevice() });
+  const member = await accountService.createMemberAccount({ firstName: "June", lastName: "River", device: okpDevice() });
+
+  const names = await accountService.namesFor([owner.account.did, member.account.did, UNKNOWN_DID]);
+  const byDid = new Map(names.map((row) => [row.did, row.displayName]));
+  assert.equal(byDid.get(owner.account.did), "Brian Noah");
+  assert.equal(byDid.get(member.account.did), "June River");
+  // A DID with no identity row resolves to nothing (the directory renders
+  // its plain fallback); unknown DIDs never come back with a row.
+  assert.equal(byDid.has(UNKNOWN_DID), false);
+
+  // Empty/invalid input asks nothing of the store.
+  assert.deepEqual(await accountService.namesFor([]), []);
+  assert.deepEqual(await accountService.namesFor([42, "", null]), []);
+});

@@ -12,6 +12,8 @@ declare module "@porchlight/identity" {
         didDocument: unknown;
         registration: Record<string, unknown>;
       }>;
+      /** Member display names by DID for the owner's member directory (PORCH-029). */
+      namesFor(dids: string[]): Promise<Array<{ did: string; displayName: string | null }>>;
     };
     authService: {
       /** Opaque-token session verification (identity plane, DID resolution). */
@@ -77,6 +79,8 @@ declare module "@porchlight/social" {
       };
       verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>;
       registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown> } | null>;
+      /** PORCH-029: identity-plane name resolver for the member directory. */
+      memberNames?: (dids: string[]) => Promise<Array<{ did: string; displayName: string | null }>>;
       /** PORCH-019: auth-failure capture sink. */
       log?: ((line: string) => void) | null;
       media?: {
@@ -161,6 +165,8 @@ declare module "@porchlight/social" {
     restoreSession(options: { identityAccessToken: string; deviceId?: string | null }): Promise<{ did: string; sessions: Array<{ networkId: string; role: string; accessToken: string; refreshToken: string }> }>;
     revokeMember(options?: { networkId?: string; did?: string; memberId?: string }): Promise<{ revoked: boolean; membership: Record<string, unknown> }>;
     listMembers(options?: { networkId?: string }): Promise<Array<Record<string, unknown>>>;
+    /** PORCH-029: membership rows joined with identity display names for the member directory. */
+    listMemberViews(options?: { networkId?: string }): Promise<Array<Record<string, unknown>>>;
   }
   export class QuotaService {
     constructor(deps: { artifacts: unknown; networks: unknown; audit?: (action: string, detail?: object) => void });

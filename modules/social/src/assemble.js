@@ -45,6 +45,9 @@ import { createSocialRouter } from "./routes.js";
  *   },
  *   verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>,
  *   registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null>,
+ *   memberNames?: (dids: string[]) => Promise<Array<{ did: string, displayName: string | null }>>,
+ *     Identity-plane name resolver for the owner's member directory
+ *     (PORCH-029) — wired by apps/server from the identity account rows.
  *   log?: ((line: string) => void) | null,
  *     Auth-failure capture sink (PORCH-019); defaults to console.log (the
  *     hub supervisor pipes it into logs/hub.log).
@@ -93,6 +96,9 @@ export function assembleSocialModule(store, options = {}) {
     invites: inviteService,
     verifyMemberIdToken: options.verifyMemberIdToken ?? (async () => null),
     registeredDeviceKey: options.registeredDeviceKey ?? null,
+    // PORCH-029: identity-plane name resolver for the member directory —
+    // DIDs in, display names out; wired by apps/server from the account rows.
+    memberNames: options.memberNames ?? null,
     // PORCH-019: member surfaces' 401 capture rides the shared sink
     // (default console.log — the supervisor pipes it into logs/hub.log).
     authFailureSink: (event) => logAuthFailure(event, options.log ?? undefined),

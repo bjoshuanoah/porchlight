@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, List, ListItem, ListItemText,
+  Alert, Avatar, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
+  DialogContent, DialogTitle, Divider, List, ListItem, ListItemAvatar, ListItemText,
   Paper, Stack, TextField, Typography,
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
+import { copyLink, directoryRows, inviteDialogCopy, inviteRows } from './member-directory.js';
 import { tokens } from './theme.js';
 
 const section = { mb: 3 };
@@ -565,6 +566,12 @@ export function Profile({ data, actions, navigate }) {
   const connection = localRegistration(data, identity);
   const hasPin = hasLocalPin(connection);
   const memberships = identity?.memberships || data?.memberships || [];
+  // PORCH-029 discoverability: the member directory is an owner surface, and
+  // the only identity list the SPA can consult is the console members
+  // response (owner-only at the hub) — the viewer seeing themselves as the
+  // owner there is the owner. Non-owners keep riding the origin-membership
+  // surfaces already specced (mention resolution, group members).
+  const canOpenMembers = (data?.members || []).some(entry => entry?.did === data?.identity?.id && entry?.role === 'owner');
   async function makeCode() {
     const result = await operation.run('createPairingCode');
     if (!result) return;
@@ -595,7 +602,7 @@ export function Profile({ data, actions, navigate }) {
     <Heading title="Profile" subtitle={`Your place on ${networkName(data)} and the devices you use.`} />
     <Card sx={section}><CardContent><Typography variant="h5">{named(identity)}</Typography>
       <Typography color="text.secondary">{data?.server?.url || networkName(data)}</Typography>
-      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => navigate?.('/who-is-here')}>Who is here?</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
+      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => navigate?.('/who-is-here')}>Who is here?</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{canOpenMembers && <Button onClick={() => navigate?.('/members')}>Members</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signing out ends this device's open turn. The device stays connected and opens straight into your timeline on your next visit.</Typography>
       <Collapse in={membershipOpen}><Divider sx={{ my: 2 }} /><Typography variant="h6">Your memberships</Typography>
         {memberships.length ? <List dense>{memberships.map((entry, index) => <ListItem key={idOf(entry) || index}><ListItemText primary={named(entry)} secondary={entry.role || entry.server} /></ListItem>)}</List> : <Typography color="text.secondary">No additional memberships are available here.</Typography>}
@@ -821,5 +828,76 @@ export function OwnerConsole({ data, actions, navigate }) {
         {!issued && <Button variant="contained" disabled={operation.busy} onClick={makeJoinLink}>Make the link</Button>}
       </DialogActions>
     </Dialog>
+  </Box>;
+}
+
+// PORCH-029: the member directory and invite management, a first-class
+// surface inside the network — reachable from Profile (the bottom-tab /
+// top-nav destination), so the owner never needs a console URL. The
+// directory renders every current member with name, role, and join status;
+// invite issuance rides the join-link lifecycle the console already owns
+// (unused / used / revoked, single use, instant revocation).
+export function Members({ data, actions, navigate }) {
+  const operation = useOperation(actions);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [issued, setIssued] = useState('');
+  const members = available(data, 'members') ? data?.members || [] : null;
+  const invites = available(data, 'invites') ? data?.invites || [] : null;
+  const directory = members === null ? null : directoryRows(members, data?.identity?.id);
+  const links = invites === null ? null : inviteRows(invites, data?.server?.url);
+  async function makeJoinLink() {
+    const result = await operation.run('issueInvite');
+    if (!result) return;
+    const link = invitationUrl(result.invite, data);
+    if (!link) { operation.setError('The hub returned no shareable invitation.'); return; }
+    setIssued(link);
+  }
+  async function copy(text) {
+    const ok = await copyLink(text);
+    if (ok) operation.setNotice('Link copied.');
+    else operation.setError('The link could not be copied automatically. Select it here and copy it yourself.');
+    return ok;
+  }
+  return <Box>
+    <Heading title="Members" subtitle={`Everyone who belongs to ${networkName(data)}.`} />
+    <Card sx={section}><CardContent>
+      <Typography variant="h6" gutterBottom>The family</Typography>
+      {directory === null ? <Typography color="text.secondary">The member directory is not available from this hub.</Typography>
+        : directory.length === 0 ? <Typography color="text.secondary">No members to show yet. Invite a family member below.</Typography>
+          : <List dense>{directory.map(person => <ListItem key={person.id} divider sx={{ minHeight: 56 }}>
+            <ListItemAvatar><Avatar sx={{ width: 36, height: 36 }}>{person.name.charAt(0).toUpperCase()}</Avatar></ListItemAvatar>
+            <ListItemText primary={person.isSelf ? `${person.name} (you)` : person.name}
+              secondary={[person.role, person.status, person.joined && `Joined ${displayDate(person.joined)}`].filter(Boolean).join(' · ')} />
+          </ListItem>)}</List>}
+    </CardContent></Card>
+    <Card sx={section}><CardContent>
+      <Typography variant="h6" gutterBottom>Invitations</Typography>
+      <Typography color="text.secondary" sx={{ mb: 2 }}>A join link works once and only for the family member you send it to. Withdraw any link that has not been opened yet.</Typography>
+      <Stack sx={rows}>
+        {links === null ? <Typography color="text.secondary">Invitation status is not available from this hub.</Typography>
+          : <Button variant="contained" disabled={operation.busy || typeof actions?.issueInvite !== 'function'} onClick={() => { setIssued(''); setInviteOpen(true); }}>Invite a family member</Button>}
+      </Stack>
+      <Feedback operation={operation} />
+      {links !== null && links.length ? <List dense sx={{ mt: 2 }}>{links.map(item => <ListItem key={item.id} divider sx={{ gap: 1, flexWrap: 'wrap' }}>
+        <ListItemText primary={item.url || 'Invitation'} sx={{ wordBreak: 'break-all' }} secondary={`Status: ${item.status}`} />
+        {item.url && <Button size="small" disabled={operation.busy} onClick={() => copy(item.url)}>Copy</Button>}
+        {item.status === 'unused' && typeof actions?.revokeInvite === 'function' && <Button color="error" size="small" disabled={operation.busy} onClick={() => operation.run('revokeInvite', [item.id], 'Invitation withdrawn.')}>Revoke</Button>}
+      </ListItem>)}</List>
+        : links !== null && <Typography color="text.secondary" sx={{ mt: 2 }}>No invitations have been issued yet.</Typography>}
+    </CardContent></Card>
+    <Dialog open={inviteOpen} onClose={() => { setInviteOpen(false); setIssued(''); }} fullWidth maxWidth="xs">
+      <DialogTitle>Make a join link</DialogTitle>
+      <DialogContent>{!issued ? <Typography>{inviteDialogCopy(networkName(data))}</Typography>
+        : <>
+          <Typography gutterBottom>Send this link to the family member joining {networkName(data)}:</Typography>
+          <Typography sx={{ wordBreak: 'break-all' }}>{issued}</Typography>
+        </>}</DialogContent>
+      <DialogActions>
+        <Button onClick={() => copy(issued)} disabled={!issued}>Copy</Button>
+        <Button onClick={() => { setInviteOpen(false); setIssued(''); }}>{issued ? 'Done' : 'Cancel'}</Button>
+        {!issued && <Button variant="contained" disabled={operation.busy} onClick={makeJoinLink}>Make the link</Button>}
+      </DialogActions>
+    </Dialog>
+    <Box sx={{ mt: 3 }}><Button onClick={() => navigate?.('/profile')}>Back to profile</Button></Box>
   </Box>;
 }

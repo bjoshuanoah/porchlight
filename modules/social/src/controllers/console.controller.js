@@ -136,8 +136,8 @@ export class ConsoleController {
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
     }
-    const members = await this.membership.listMembers({ networkId: network._id });
-    res.json({ members: members.map((m) => this.membership.view(m)) });
+    const members = await this.membership.listMemberViews({ networkId: network._id });
+    res.json({ members });
   };
 
   /** POST /console/members/revoke — instant revocation; sessions die with it. */
