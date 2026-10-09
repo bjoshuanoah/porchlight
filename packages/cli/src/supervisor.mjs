@@ -3,13 +3,30 @@
 // Children restart automatically with capped exponential backoff; every
 // spawn, restart, and failure is journaled to the daemon state files and the
 // home logs (local-only diagnostics, zero phone-home).
+//
+// Crash-loop fallback (PORCH-016 ac-5): a child that fails to REACH readiness
+// on consecutive starts exhausts its restart budget and the supervisor stops
+// the whole group into a NAMED fallback state (state/fallback.json) instead
+// of silently restarting forever. The supervisor process stays alive — under
+// launchd KeepAlive a dead supervisor would just be respawned into the same
+// crash-loop, so the stable nameable state is a live-but-idle supervisor
+// with the process group stopped and the fallback diagnostics on disk.
+// Recovery is the documented previous-version reinstall: npm install -g
+// porchlight@<previous>, then porchlight stop + porchlight start.
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createWriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "@porchlight/shared";
 import { clearStateFile, isOurPid, logsPath, readJson, readState, stateFile, writeJson } from "./state.mjs";
+
+/** Consecutive failed starts (never reaching readiness) before give-up. */
+export const DEFAULT_MAX_FAILED_STARTS = 5;
+/** Children spawned with a readiness probe get this deadline per start. */
+export const DEFAULT_READINESS_TIMEOUT_MS = 90_000;
+
+const fallbackStateFile = (paths) => join(paths.state, "fallback.json");
 
 const log = (paths, name, message) => {
   const line = `[${new Date().toISOString()}] ${name}: ${message}`;
@@ -56,18 +73,62 @@ export function serverEntryPath() {
 export class Supervisor {
   #children = new Map();
   #stopping = false;
+  #fallback = null;
+  #options;
 
-  constructor(paths, config) {
+  constructor(paths, config, options = {}) {
     this.paths = paths;
     this.config = config;
+    // maxFailedStarts + readinessTimeoutMs are tunable for tests; the
+    // production defaults are the exported constants above.
+    this.#options = {
+      maxFailedStarts: options.maxFailedStarts ?? DEFAULT_MAX_FAILED_STARTS,
+      backoffScale: options.backoffScale ?? 1,
+    };
   }
 
-  spawnChild(name, command, args, { ready, onReady } = {}) {
-    const state = { attempt: 0, ready: false, proc: null, timer: null };
+  /** The resolved crash-loop fallback state, or null while not in fallback. */
+  fallbackState() {
+    return this.#fallback;
+  }
+
+  spawnChild(name, command, args, { ready, onReady, readinessTimeoutMs = null } = {}) {
+    const state = { attempt: 0, ready: false, proc: null, timer: null, deadlineTimer: null, failedStarts: 0 };
     this.#children.set(name, state);
 
+    // One failure path for exits without readiness and for spawn errors
+    // (a deleted install closure resolves to ENOENT after an owner-run npm
+    // update — exactly the composed failure this journaling must name).
+    // Bookkeeping is per child GENERATION: a late exit of a replaced child
+    // (its SIGTERM from the readiness deadline, processed after the next
+    // spawn) must never count or kill the new generation.
+    const noteFailure = (generation, message, exitCode) => {
+      if (generation.counted) return; // deadline + exit fire in tandem
+      generation.counted = true;
+      clearTimeout(state.deadlineTimer);
+      state.failedStarts += 1;
+      journalChildState(this.paths, name, {
+        pid: null,
+        lastExitCode: exitCode ?? null,
+        restarts: (readJson(stateFile(this.paths, name))?.restarts ?? 0) + 1,
+        lastError: message,
+      });
+      if (state.failedStarts >= this.#options.maxFailedStarts) {
+        this.#declareFallback(name, message, state);
+        return;
+      }
+      const backoffSeconds = Math.round(Math.min(2 ** state.attempt, 30) * this.#options.backoffScale);
+      log(
+        this.paths,
+        name,
+        `exited without readiness (attempt ${state.failedStarts}) — restarting in ${backoffSeconds}s (automatic restart)`,
+      );
+      state.timer = setTimeout(startChild, backoffSeconds * 1000);
+    };
+
     const startChild = () => {
-      if (this.#stopping) return;
+      if (this.#stopping || this.#fallback) return;
+      state.attempt += 1;
       const logStream = appendFileStream(logsPath(this.paths, name));
       const proc = spawn(command, args, {
         stdio: ["ignore", "pipe", "pipe"],
@@ -75,7 +136,8 @@ export class Supervisor {
       });
       state.proc = proc;
       state.ready = false;
-      log(this.paths, name, `pid ${proc.pid} spawn ${command} (attempt ${state.attempt + 1})`);
+      const generation = { counted: false, readied: false };
+      log(this.paths, name, `pid ${proc.pid} spawn ${command} (attempt ${state.attempt})`);
       journalChildState(this.paths, name, {
         pid: proc.pid,
         startedAt: new Date().toISOString(),
@@ -83,36 +145,101 @@ export class Supervisor {
       });
       proc.stdout?.pipe(logStream);
       proc.stderr?.pipe(logStream);
-      if (ready) {
-        ready(name, proc, () => {
-          if (!state.ready) {
-            state.ready = true;
-            state.attempt = 0;
-            onReady?.(name);
-          }
-        });
-      }
+      // Spawn failures (ENOENT on a vanished entry, EACCES) surface here,
+      // not as an exit — journal them loud and count the failed start.
+      proc.on("error", (error) => {
+        logStream.close();
+        if (state.proc !== proc) return; // stale generation
+        noteFailure(generation, `spawn failed: ${error.code ?? error.message} (${command})`, null);
+      });
       proc.on("exit", (code, signal) => {
         logStream.close();
-        if (this.#stopping) return;
-        state.attempt += 1;
-        const backoffSeconds = Math.min(2 ** state.attempt, 30);
-        log(
-          this.paths,
-          name,
-          `exited (code=${code ?? "null"} signal=${signal ?? "null"}) — restarting in ${backoffSeconds}s (automatic restart)`,
-        );
+        // A stale generation's late exit must neither count toward the
+        // crash-loop budget nor cancel the CURRENT child's deadline timer.
+        if (state.proc !== proc) return;
+        clearTimeout(state.deadlineTimer);
+        if (this.#stopping) return; // group stop
+        if (!generation.readied) {
+          noteFailure(generation, `exited code=${code ?? "null"} signal=${signal ?? "null"}`, code);
+          return;
+        }
         journalChildState(this.paths, name, {
           pid: null,
           lastExitCode: code,
           restarts: (readJson(stateFile(this.paths, name))?.restarts ?? 0) + 1,
           lastError: `exited code=${code} signal=${signal}`,
         });
+        const backoffSeconds = Math.round(Math.min(2 ** state.attempt, 30) * this.#options.backoffScale);
+        log(
+          this.paths,
+          name,
+          `exited (code=${code ?? "null"} signal=${signal ?? "null"}) — restarting in ${backoffSeconds}s (automatic restart)`,
+        );
         const timer = setTimeout(startChild, backoffSeconds * 1000);
         state.timer = timer;
       });
+      if (ready) {
+        ready(name, proc, () => {
+          clearTimeout(state.deadlineTimer);
+          if (!state.ready) {
+            state.ready = true;
+            generation.readied = true;
+            state.attempt = 0;
+            state.failedStarts = 0; // a ready start resets the crash-loop streak
+            this.journalReady(name);
+            onReady?.(name);
+          }
+        });
+        const deadline = readinessTimeoutMs ?? (name === "hub" ? DEFAULT_READINESS_TIMEOUT_MS : null);
+        if (deadline) {
+          state.deadlineTimer = setTimeout(() => {
+            if (state.proc !== proc || this.#stopping || this.#fallback) return;
+            if (!state.ready && !generation.counted) {
+              log(this.paths, name, `reached the ${Math.round(deadline / 1000)}s readiness deadline without reporting ready`);
+              noteFailure(
+                generation,
+                `readiness deadline exceeded (${Math.round(deadline / 1000)}s without a passing ready probe)`,
+              );
+              try {
+                proc.kill("SIGTERM");
+              } catch {
+                /* already gone */
+              }
+            }
+          }, deadline);
+        }
+      }
     };
     startChild();
+  }
+
+  /**
+   * The restart budget is exhausted: stop the whole process group into the
+   * named fallback state. The supervisor process itself STAYS ALIVE —
+   * under launchd KeepAlive an exited supervisor would be respawned into
+   * the same crash-loop, thrashing forever; an idle-but-live supervisor is
+   * the stable, nameable state an owner can diagnose away.
+   */
+  #declareFallback(childName, lastError, state) {
+    if (this.#fallback) return;
+    const fallback = {
+      state: "crash-loop-fallback",
+      child: childName,
+      failedAttempts: state.failedStarts,
+      lastError,
+      log: logsPath(this.paths, childName),
+      stoppedAt: new Date().toISOString(),
+      supervisorPid: process.pid,
+    };
+    this.#fallback = fallback;
+    log(
+      this.paths,
+      childName,
+      `crash-loop exhausted (${state.failedStarts} failed starts without readiness) — stopping the process group into the named fallback state: ${fallback.stoppedAt}`,
+    );
+    void this.stop().then(() => {
+      writeJson(fallbackStateFile(this.paths), fallback);
+    });
   }
 
   journalFailure(name, message) {
@@ -173,6 +300,44 @@ function appendFileStream(path) {
 
 export function supervisorRunningState(paths) {
   return readState(paths, "supervisor");
+}
+
+/** The named crash-loop fallback state written at give-up (or null). */
+export function hubFallbackState(paths) {
+  return readJson(fallbackStateFile(paths));
+}
+
+/** Clear the fallback state (an owner-run stop/start is a fresh cycle). */
+export function clearHubFallbackState(paths) {
+  rmSync(fallbackStateFile(paths), { force: true });
+}
+
+/**
+ * Readiness probe for the hub child: polls the loopback health surface and
+ * signals ready on the first passing health check (status ok + daemons ok).
+ * Gives up silently at the supervisor's readiness deadline (the deadline
+ * then kills the child and counts the failed start).
+ */
+export function hubReadyProbe(config) {
+  const base = `http://127.0.0.1:${config.hub.httpPort}`;
+  return async (name, proc, signalReady) => {
+    for (;;) {
+      try {
+        const health = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(1500) });
+        if (health.status === 200) {
+          const body = await health.json();
+          if (body?.status === "ok") {
+            signalReady(name);
+            return;
+          }
+        }
+      } catch {
+        /* not healthy yet — keep polling until the deadline */
+      }
+      if (proc.exitCode != null) return; // failed to start; supervisor restarts
+      await new Promise((wait) => setTimeout(wait, 500));
+    }
+  };
 }
 
 export function writeSupervisorState(paths, extra = {}) {

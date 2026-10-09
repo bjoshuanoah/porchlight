@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { createRequire } from "node:module";
+import { home } from "./state.mjs";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -25,8 +26,12 @@ function cliEntry() {
 export async function run(args = {}) {
   const action = args.action ?? args._?.[0];
   if (action === "install" || action === "uninstall") {
-    const paths = join(homedir(), ".porchlight");
-    return action === "install" ? install(paths) : uninstall(paths);
+    // The supervised home is THIS command's home (--home / PORCHLIGHT_HOME /
+    // the platform default), never hardcoded — supervision installs for the
+    // hub the owner actually operates (composition finding, PORCH-016).
+    const paths = home({ PORCHLIGHT_HOME: args.home ?? process.env.PORCHLIGHT_HOME });
+    const homeRoot = paths.root;
+    return action === "install" ? install(homeRoot) : uninstall(homeRoot);
   }
   process.stdout.write("usage: porchlight service install|uninstall\n");
   process.exit(1);

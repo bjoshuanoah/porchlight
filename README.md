@@ -121,7 +121,15 @@ porchlight stop
 porchlight start
 ```
 
-A failed install is covered by npm's own rollback semantics; your data directory is not touched by an update.
+During the window between the install and the restart, the hub keeps serving the previous release — the restart applies the update. If the running release differs from the installed one, `porchlight start` and `porchlight status` say so loudly (`release update detected: ... — restart applies it`); a mixed state is never silent.
+
+A failed install is covered by npm's own rollback semantics; your data directory is not touched by an update. If an updated release cannot start (the hub child fails to reach readiness or exits on every boot), the supervisor exhausts its automatic restart attempts after five consecutive failed starts and stops the whole process group into a **named fallback state**: `porchlight status` shows `hub fallback: crash-loop-fallback` with the diagnosis (the failing start's error and the hub log path) and the recovery line, and no half-running hub is left serving. Recovery is the documented previous-version reinstall:
+
+```bash
+npm install -g porchlight@<previous>   # the release that worked
+porchlight stop
+porchlight start
+```
 
 ## Privacy, in one paragraph
 
