@@ -49,6 +49,10 @@ import { createSocialRouter } from "./routes.js";
  *   memberNames?: (dids: string[]) => Promise<Array<{ did: string, displayName: string | null }>>,
  *     Identity-plane name resolver for the owner's member directory
  *     (PORCH-029) — wired by apps/server from the identity account rows.
+ *   mintOwnerDeviceLink?: (did: string) => Promise<{ grantId: string, token: string, expiresAt: string }>,
+ *     Identity-plane device-link mint for the owner-bind handoff (PORCH-031) —
+ *     wired by apps/server from the identity device service; social imports no
+ *     identity source, CI-enforced. Absent when identity serving is off.
  *   log?: ((line: string) => void) | null,
  *     Auth-failure capture sink (PORCH-019); defaults to console.log (the
  *     hub supervisor pipes it into logs/hub.log).
@@ -186,7 +190,7 @@ export function assembleSocialModule(store, options = {}) {
   });
 
   const controllers = {
-    bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger),
+    bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger, options.mintOwnerDeviceLink ?? null),
     content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService }),
     feed: new FeedController({ feed: feedService }),
     membership: new MembershipController(membershipService, networkService, options.log ?? null),

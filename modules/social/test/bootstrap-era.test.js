@@ -26,7 +26,7 @@ function mockRes() {
 }
 
 /** Controller on a fresh in-memory store with the given ledger. */
-function controller(ledger) {
+function controller(ledger, mintOwnerDeviceLink = null) {
   const db = createMemoryStore();
   const invites = new InviteService(db.collection("invites"));
   const membership = new MembershipService({
@@ -42,6 +42,7 @@ function controller(ledger) {
     invites,
     membership,
     ledger,
+    mintOwnerDeviceLink,
   );
 }
 
@@ -178,4 +179,92 @@ test("assembled module: ledger.steps rides options.ledger; absent → fail-close
   await gated.controllers.bootstrap.createNetwork({ body: { name: "Second" } }, noAccountsRow);
   assert.equal(noAccountsRow.statusCode, 200); // idempotent re-run inside the open era
   assert.equal(noAccountsRow.body.created, false);
+});
+/* ---- owner-bind handoff (PORCH-031) -------------------------------------- */
+
+test("a bound founder leaves bootstrap with a single-use owner-bind grant", async () => {
+  const mints = [];
+  const c = controller(
+    { record: async () => {}, steps: stepsOf({ network: "pending", invite: "pending" }) },
+    async (did) => {
+      mints.push(did);
+      return { grantId: "dl_1", token: "bind-tok-1", expiresAt: "2026-10-15T00:00:00.000Z" };
+    },
+  );
+  const res = mockRes();
+  await c.createNetwork({ body: { name: "Family", ownerDid: "did:porchlight:owner" } }, res);
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(mints, ["did:porchlight:owner"], "the grant targets exactly the bound founder identity");
+  assert.deepEqual(res.body.ownerBind, { did: "did:porchlight:owner", grantId: "dl_1", token: "bind-tok-1", expiresAt: "2026-10-15T00:00:00.000Z" });
+  assert.equal(res.body.membership.did, "did:porchlight:owner");
+});
+
+test("no owner-bind grant without a bound founder (ownerDid is the only key)", async () => {
+  const mints = [];
+  const c = controller(
+    { record: async () => {}, steps: stepsOf({ network: "pending", invite: "pending" }) },
+    async (did) => {
+      mints.push(did);
+      return { grantId: "dl_x", token: "bind-tok-x", expiresAt: "2026-10-15T00:00:00.000Z" };
+    },
+  );
+  const noOwner = mockRes();
+  await c.createNetwork({ body: { name: "Family" } }, noOwner);
+  assert.equal(noOwner.statusCode, 201);
+  assert.equal(noOwner.body.ownerBind, undefined);
+  assert.deepEqual(mints, []);
+
+  // A DID that is not the network row's ownerDid binds nothing and mints nothing.
+  const c2 = controller(
+    { record: async () => {}, steps: stepsOf({ network: "pending", invite: "pending" }) },
+    async (did) => {
+      mints.push(did);
+      return { grantId: "dl_y", token: "bind-tok-y", expiresAt: "2026-10-15T00:00:00.000Z" };
+    },
+  );
+  await c2.createNetwork({ body: { name: "Family", ownerDid: "did:porchlight:owner" } }, mockRes());
+  const other = mockRes();
+  await c2.createNetwork({ body: { name: "Family Two", ownerDid: "did:porchlight:stranger" } }, other);
+  assert.equal(other.statusCode, 200, "the network write is idempotent; the existing network returns");
+  assert.equal(other.body.membership, undefined, "no founder bound, no membership in the response");
+  assert.deepEqual(mints, ["did:porchlight:owner"]);
+});
+
+test("identity serving off (no callback) keeps the ownerBind shape out of the response", async () => {
+  const c = controller({ record: async () => {}, steps: stepsOf({ network: "pending", invite: "pending" }) });
+  const res = mockRes();
+  await c.createNetwork({ body: { name: "Family", ownerDid: "did:porchlight:owner" } }, res);
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.ownerBind, undefined);
+  assert.equal(res.body.membership.role, "owner");
+});
+
+test("an owner-bind mint failure fails the step BEFORE the ledger records it, so the era stays open", async () => {
+  let recorded = 0;
+  let fail = true;
+  const c = controller(
+    {
+      record: async () => {
+        recorded += 1;
+      },
+      steps: stepsOf({ network: "pending", invite: "pending" }),
+    },
+    async () => {
+      if (fail) throw new Error("identity store unreachable");
+      return { grantId: "dl_ok", token: "bind-tok-ok", expiresAt: "2026-10-15T00:00:00.000Z" };
+    },
+  );
+  await assert.rejects(
+    () => c.createNetwork({ body: { name: "Family", ownerDid: "did:porchlight:owner" } }, mockRes()),
+    /identity store unreachable/,
+  );
+  assert.equal(recorded, 0, "the network step must stay unrecorded so a re-run resumes it");
+  // The retry mints and then records (the re-run re-presents the owner DID,
+  // exactly how the CLI resolves it on resume).
+  fail = false;
+  const retry = mockRes();
+  await c.createNetwork({ body: { name: "Family", ownerDid: "did:porchlight:owner" } }, retry);
+  assert.equal(retry.statusCode, 200, "the network write itself is idempotent on resume");
+  assert.equal(retry.body.ownerBind.token, "bind-tok-ok");
+  assert.equal(recorded, 1);
 });

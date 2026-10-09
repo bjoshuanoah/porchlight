@@ -55,6 +55,21 @@ export async function run(args = {}) {
       ? "bootstrap complete — the owner is bound to the network. Invites and settings are owner-console actions from inside."
       : "bootstrap still incomplete — re-run `porchlight bootstrap`.",
   );
+  // Owner-bind handoff (PORCH-031): bootstrap itself is the authorization —
+  // the URL comes from the hub's founder-bound network response of THIS run,
+  // never a prior state. The link rides the identity device-link class:
+  // single use, 24-hour TTL, consumed by the hub's /device-link page.
+  if (complete) {
+    const ownerBind = ctx.ownerBind ?? null;
+    if (ownerBind?.token) {
+      out("");
+      out("To open the network on the owner's device, open this one-time link in a browser:");
+      out(`  ${base.replace(/\/+$/, "")}/device-link/${ownerBind.token}`);
+      out("It signs the device in — no password, no login form anywhere. It works once and expires in 24 hours.");
+    } else {
+      out("(this run issued no device-bind link — the owner binding did not complete; check the hub log)");
+    }
+  }
 }
 
 async function runStep(step, base, args, out, config, ctx = {}) {
@@ -81,6 +96,10 @@ async function runStep(step, base, args, out, config, ctx = {}) {
       // Founder-root binding (PORCH-018): the owner who created the network
       // is already a member of it — the hub account is the proof, never an invite.
       if (response.body.membership) out(`  owner bound to this network (role: ${response.body.membership.role})`);
+      // Owner-bind handoff (PORCH-031): the hub mints the single-use
+      // device-link grant alongside the founder binding; the run carries it
+      // to the completion print below.
+      if (response.body.ownerBind) ctx.ownerBind = response.body.ownerBind;
       return;
     }
     default:

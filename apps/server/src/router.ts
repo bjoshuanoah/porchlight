@@ -156,6 +156,12 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       // identity-plane display names through this injected callback — the
       // same DI boundary shape as the two resolvers above.
       memberNames: identityModule ? (dids: string[]) => identityModule.accountService.namesFor(dids) : undefined,
+      // PORCH-031: the owner-bind handoff mints the single-use device-link
+      // grant at founder binding through the identity device service —
+      // same injected-callback boundary, no identity import anywhere.
+      mintOwnerDeviceLink: identityModule
+        ? (did: string) => identityModule.deviceService.mintDeviceLink({ did })
+        : undefined,
       media: { mediaRoot: join(options.bootstrap.configDir, "media") },
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,

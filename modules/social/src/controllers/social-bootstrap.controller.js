@@ -17,12 +17,16 @@ export class SocialBootstrapController {
    * @param {import("../services/membership.service.js").MembershipService} membership
    * @param {{ record: (step: string, detail?: object) => Promise<void>, hubUrl?: () => string | null,
    *            steps?: (() => Promise<{ account?: { status: string }, network?: { status: string }, invite?: { status: string }, quota?: { status: string } }>) | null }} [ledger]
+   * @param {(did: string) => Promise<{ grantId: string, token: string, expiresAt: string }>} [mintOwnerDeviceLink]
+   *   Identity-plane device-link mint for the owner-bind handoff (PORCH-031);
+   *   null when identity serving is disabled.
    */
-  constructor(networks, invites, membership, ledger) {
+  constructor(networks, invites, membership, ledger, mintOwnerDeviceLink = null) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
     this.ledger = ledger ?? { record: async () => {} };
+    this.mintOwnerDeviceLink = mintOwnerDeviceLink;
   }
 
   /**
@@ -65,7 +69,6 @@ export class SocialBootstrapController {
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
-    if (result.created) await this.ledger.record("network", { detail: `network "${result.network.name}" created` });
     // Founder-root binding (PORCH-018): the owner who creates the network
     // leaves bootstrap already a member of it — no invite consumed, no
     // manual bind step. Idempotent on resume; a request without an
@@ -74,7 +77,27 @@ export class SocialBootstrapController {
     const membership = ownerDid
       ? await this.membership.bindFounder({ network: result.network, did: ownerDid })
       : null;
-    res.status(result.created ? 201 : 200).json(membership ? { ...result, membership } : result);
+    // Owner-bind handoff (PORCH-031): bootstrap possession is the grant's
+    // authorization — the same era gate this write rides. A bound founder
+    // leaves with a single-use, 24-hour device-link grant (device-link
+    // class TTL) for their own identity; the CLI prints it as the URL that
+    // binds the owner's browser device. Mint failure fails the step BEFORE
+    // the ledger records the network complete, so the era stays open for a
+    // re-run (the network write itself is idempotent).
+    const ownerBind =
+      membership && this.mintOwnerDeviceLink
+        ? { did: membership.did, ...(await this.mintOwnerDeviceLink(membership.did)) }
+        : null;
+    // Recorded on EVERY successful era-open completion — including the
+    // idempotent re-run of a hub whose network row exists but whose ledger
+    // row was never written (a mint failure the first time through). Without
+    // this, that hub's network step would never close its era.
+    await this.ledger.record("network", {
+      detail: result.created ? `network "${result.network.name}" created` : `network "${result.network.name}" already present`,
+    });
+    res
+      .status(result.created ? 201 : 200)
+      .json(membership ? { ...result, membership, ...(ownerBind ? { ownerBind } : {}) } : result);
   };
 
   /** POST /bootstrap/invite — issue a join-link invite (new token each call). */

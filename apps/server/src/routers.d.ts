@@ -81,6 +81,8 @@ declare module "@porchlight/social" {
       registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown> } | null>;
       /** PORCH-029: identity-plane name resolver for the member directory. */
       memberNames?: (dids: string[]) => Promise<Array<{ did: string; displayName: string | null }>>;
+      /** PORCH-031: identity-plane device-link mint for the owner-bind handoff. */
+      mintOwnerDeviceLink?: (did: string) => Promise<{ grantId: string; token: string; expiresAt: string }>;
       /** PORCH-019: auth-failure capture sink. */
       log?: ((line: string) => void) | null;
       media?: {
