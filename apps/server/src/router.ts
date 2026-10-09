@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSystemRouter } from "./routes/system.routes.js";
+import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
+import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
 import { bootstrapPage } from "./bootstrap.page.js";
@@ -40,6 +42,13 @@ const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
  */
 export function createServerRouter(options: ServerOptions): { api: Router; wellKnown: Router | null } {
   const router: Router = Router();
+  // Auth-scoped JSON is never cacheable: a browser-conditional revalidation
+  // (304) carries no body, and a member's cached read would otherwise
+  // silently degrade to empty on every revisit.
+  router.use((_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+  });
   // The tunnel URL is captured by the supervisor after the server booted, so
   // health/bootstrap surfaces re-read the runtime config instead of holding
   // a stale copy (config file stays the single source of truth).
@@ -86,7 +95,10 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     },
   };
   let wellKnown: Router | null = null;
+  let frontDoor: Router | null = null;
+  let identityModule: ReturnType<typeof assembleIdentityModule> | null = null;
   let identityAuth: { verifyAccessToken: (token: string) => Promise<{ did: string; sessionId: unknown } | null> } | null = null;
+  let socialModule: ReturnType<typeof assembleSocialModule> | null = null;
   if (options.store && options.config.mode.identityServingEnabled) {
     // The identity module assembles its own route → controller → service →
     // model path at its published entry; the server performs no domain logic.
@@ -95,6 +107,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     // Identity keeps a record-only ledger: its bootstrap surface records
     // progress but carries no era gate (the gate is the social perimeter's).
     const identity = assembleIdentityModule(options.store, { hubUrl, ledger: { record: ledger.record } });
+    identityModule = identity;
     router.use("/identity", identity.api);
     wellKnown = identity.wellKnown;
     identityAuth = { verifyAccessToken: (token: string) => identity.authService.verifyAccessToken(token) };
@@ -105,16 +118,29 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     // modules share zero code and the boundary check enforces it. The media
     // pipeline's content-addressed blob store roots under the hub config
     // directory (PORCH-008); its disk guard probes the same filesystem.
-    router.use(
-      "/social",
-      assembleSocialModule(options.store, {
-        hubUrl,
-        ledger,
-        system,
-        verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
-        media: { mediaRoot: join(options.bootstrap.configDir, "media") },
-      }).api,
-    );
+    socialModule = assembleSocialModule(options.store, {
+      hubUrl,
+      ledger,
+      system,
+      verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
+      media: { mediaRoot: join(options.bootstrap.configDir, "media") },
+    });
+    router.use("/social", socialModule.api);
+  }
+  if (identityModule && socialModule) {
+    // PORCH-010: the SPA front door spans both domains (member identity
+    // birth + owner-routed device links); composition routes stay transport-
+    // level and mount only when both serving domains are enabled.
+    frontDoor = createFrontDoorRouter({
+      invites: socialModule.inviteService,
+      networks: socialModule.networkService,
+      membership: socialModule.membershipService,
+      audit: (record) => socialModule!.auditService.record(record as never),
+      accountService: identityModule.accountService as FrontDoorAccountService,
+      deviceService: identityModule.deviceService as FrontDoorDeviceService,
+      hubUrl,
+    });
+    router.use("/", frontDoor);
   }
   return { api: router, wellKnown };
 }

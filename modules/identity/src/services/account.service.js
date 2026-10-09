@@ -180,6 +180,38 @@ export class AccountService {
   }
 
   /**
+   * Member identity birth at the front door (PORCH-010): an invited member's
+   * first identity is minted by their own device at join time, exactly as the
+   * owner's is at bootstrap. The invite is the trust root — its verification
+   * and consumption live in the social perimeter (admit), never here; this
+   * birth only mints the DID + DID document and binds the device-held public
+   * key. No single-owner gate: members are not owners.
+   */
+  async createMemberAccount({ displayName, device = null } = {}) {
+    if (!displayName) {
+      throw typed("E_DISPLAY_NAME_REQUIRED", "displayName is required");
+    }
+    if (!device || !device.deviceId || !device.publicKeyJwk) {
+      throw typed(
+        "E_DEVICE_KEY_REQUIRED",
+        "the member identity requires a device binding (deviceId and publicKeyJwk)",
+      );
+    }
+    validateDeviceKey(device.publicKeyJwk);
+    const identity = await this.didService.createIdentity({ actorType: "human", displayName });
+    await this.identities.updateOne({ _id: identity._id }, { $set: { kind: "member" } });
+    const account = await this.identities.findOne({ _id: identity._id });
+    const didDocument = await this.putDocument(identity.did);
+    const registration = await this.bindDevice(identity.did, {
+      deviceId: device.deviceId,
+      label: device.label ?? null,
+      publicKeyJwk: device.publicKeyJwk,
+      createdBy: "join",
+    });
+    return { created: true, account, didDocument, registration };
+  }
+
+  /**
    * Adopt, onto this second hub, an identity the owner already holds at the
    * home hub (ac-3). Verification rides the transport: the DID must resolve
    * at its home hub (E_REMOTE_IDENTITY_NOT_FOUND when not). The account row

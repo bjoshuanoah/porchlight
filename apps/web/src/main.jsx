@@ -10,10 +10,10 @@ import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import { theme } from "./theme.js";
 import { request, loadFeeds } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
-import { createDeviceRegistration, openDeviceSession } from "./device.js";
+import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
 import { publishPost, publishReply, publishReaction, publishVote, uploadOriginals, exportOriginals } from "./member-actions.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
-import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, hasLocalPin } from "./identity.jsx";
+import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Setup, hasLocalPin } from "./identity.jsx";
 
 const origin = window.location.origin;
 const stored = window.localStorage;
@@ -35,8 +35,9 @@ function App() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [identity, setIdentity] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? initialConnections[0].identity || null : null);
   const [groups, setGroups] = useState([]);
-  const [owner, setOwner] = useState({ members: [], invites: [], devices: [], settings: {}, audit: [], disk: null, availability: {} });
+  const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, availability: {} });
   const [network, setNetwork] = useState(null);
+  const [networkLoaded, setNetworkLoaded] = useState(false);
   const [newDevices, setNewDevices] = useState([]);
   const active = identity ? connections.find((item) => item.identity?.id === identity.id) : null;
   const identityConnections = identity ? connections.filter((item) => item.identity?.id === identity.id && item.token) : [];
@@ -63,20 +64,27 @@ function App() {
   }, []);
   useEffect(() => { const pop = () => setRoute(routeOf()); window.addEventListener("popstate", pop); return () => window.removeEventListener("popstate", pop); }, []);
   useEffect(() => {
-    request({ url: origin }, "social/network").then((result) => setNetwork(result.network || null)).catch(() => {});
+    request({ url: origin }, "social/network").then((result) => setNetwork(result.network || null)).catch(() => {}).finally(() => setNetworkLoaded(true));
   }, []);
-  const renew = useCallback(async () => {
+  const renew = useCallback(async ({ force = false } = {}) => {
     if (!active?.identity?.id) return;
+    // Self-gated silent renewal: at most one open per connection window, so
+    // state churn can never loop.
+    const gateKey = `${active.identity.id}:${active.deviceId}`;
+    if (!force && Date.now() - (lastRenewed.current.get(gateKey) || 0) < 8 * 60 * 1000) return;
+    lastRenewed.current.set(gateKey, Date.now());
     const next = { ...active };
     try {
       const identitySession = await openDeviceSession(next, { did: next.identity.id, deviceId: next.deviceId }, request);
       next.identityToken = identitySession.accessToken;
       next.identityRefreshToken = identitySession.refreshToken;
-      if (next.membershipRefreshToken) {
+      const membershipRefreshToken = next.refreshToken ?? next.membershipRefreshToken;
+      if (membershipRefreshToken) {
         const membership = await request({ url: next.url }, "social/session/refresh", {
-          method: "POST", body: JSON.stringify({ refreshToken: next.membershipRefreshToken }),
+          method: "POST", body: JSON.stringify({ refreshToken: membershipRefreshToken }),
         });
         next.token = membership.accessToken;
+        next.refreshToken = membership.refreshToken ?? next.refreshToken;
       }
       const revised = connections.map((item) => item === active ? next : item);
       saveConnections(stored, origin, revised);
@@ -87,31 +95,35 @@ function App() {
   }, [active, connections]);
   useEffect(() => {
     if (!active?.identity?.id) return undefined;
-    const key = `${active.url}:${active.identity.id}`;
-    if (Date.now() - (lastRenewed.current.get(key) || 0) > 8 * 60 * 1000) {
-      lastRenewed.current.set(key, Date.now());
-      void renew();
-    }
-    const timer = setInterval(() => void renew(), 8 * 60 * 1000);
+    const timer = setInterval(() => void renew({ force: true }), 8 * 60 * 1000);
     const visible = () => { if (document.visibilityState === "visible") void renew(); };
     document.addEventListener("visibilitychange", visible);
     return () => { clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
   }, [active, renew]);
 
+  // Reads never ride a stale connections closure: renewal saves new tokens to
+  // browser storage BEFORE state settles, so reads take the storage copy —
+  // always exactly what the vault last issued.
   const reload = useCallback(async () => {
-    if (!active) return;
+    if (!identity?.id) return;
+    const live = readConnections(stored, origin);
+    const liveActive = live.find((item) => item.identity?.id === identity.id) || null;
+    if (!liveActive) return;
+    const identityConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
     const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], ranked: [], failures: [] };
     setOffline(result.failures.length > 0);
     if (!result.failures.length) {
       setPosts(result.posts);
-      saveTimeline(stored, `${origin}:${active.identity?.id}`, result.posts);
+      saveTimeline(stored, `${origin}:${identity.id}`, result.posts);
     } else setNotice("Your family server is unreachable. Showing saved moments where available.");
     setRanked(result.ranked);
-    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult] = await Promise.allSettled([
-      request(active, "social/console/groups"), request(active, "social/console/members"),
-      request(active, "social/console/invites"), request(active, "social/console/limits"),
-      request(active, "social/console/disk"), request(active, "social/console/audit"),
-      request({ ...active, token: active.identityToken }, "identity/devices"),
+    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult] = await Promise.allSettled([
+      request(liveActive, "social/console/groups"), request(liveActive, "social/console/members"),
+      request(liveActive, "social/console/invites"), request(liveActive, "social/console/limits"),
+      request(liveActive, "social/console/disk"), request(liveActive, "social/console/audit"),
+      request({ ...liveActive, token: liveActive.identityToken }, "identity/devices"),
+      request(liveActive, "social/console/devices"),
+      request(liveActive, "social/console/device-links"),
     ]);
     const value = (result, fallback) => result.status === "fulfilled" ? result.value : fallback;
     setGroups(value(groupResult, {}).groups || []);
@@ -119,16 +131,28 @@ function App() {
       members: value(memberResult, {}).members || [], invites: value(inviteResult, {}).invites || [],
       settings: value(limitResult, {}), disk: value(diskResult, null),
       audit: value(auditResult, {}).events || [], devices: value(deviceResult, {}).registrations || [],
+      allDevices: value(allDevicesResult, {}).devices || null,
+      deviceLinks: value(linksResult, {}).deviceLinks || null,
       availability: {
         groups: groupResult.status === "fulfilled", members: memberResult.status === "fulfilled",
         invites: inviteResult.status === "fulfilled", settings: limitResult.status === "fulfilled",
         disk: diskResult.status === "fulfilled", audit: auditResult.status === "fulfilled",
         devices: deviceResult.status === "fulfilled",
+        allDevices: allDevicesResult.status === "fulfilled", deviceLinks: linksResult.status === "fulfilled",
       },
     });
-    if (deviceResult.status === "fulfilled") observeDevices(deviceResult.value.registrations || [], active);
-  }, [active, connections, observeDevices]);
-  useEffect(() => { void reload(); }, [reload]);
+    if (deviceResult.status === "fulfilled") observeDevices(deviceResult.value.registrations || [], liveActive);
+  }, [identity, observeDevices]);
+  useEffect(() => {
+    // First load waits for the silent renewal: an expired access token must
+    // re-credential BEFORE reads, or the page would render failure states.
+    void (async () => {
+      if (active?.identity?.id && !signedOut.current) {
+        try { await renew(); } catch { /* renew sets offline state itself */ }
+      }
+      await reload();
+    })();
+  }, [reload, active, renew]);
   useEffect(() => {
     const online = () => void reload();
     window.addEventListener("online", online);
@@ -156,11 +180,26 @@ function App() {
       }));
     const session = await openDeviceSession(hub, registration, request);
     const next = {
-      url: origin, name: active?.name || "Your family",
+      url: origin, name: network?.name || "Your family",
       identity: { id: registration.did, name: registration.label || "Family member" },
       identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
-      deviceId: registration.deviceId, token: null,
+      deviceId: registration.deviceId, token: null, refreshToken: null, networkId: null,
     };
+    // Membership sessions ride LIVE rows only (never admission): a re-bound
+    // device restores its network tokens silently so the timeline lands
+    // with content intact.
+    try {
+      const restored = await request(hub, "social/session/restore", {
+        method: "POST",
+        body: JSON.stringify({ identityAccessToken: session.accessToken, deviceId: registration.deviceId }),
+      });
+      const first = restored?.sessions?.[0];
+      if (first) {
+        next.token = first.accessToken;
+        next.refreshToken = first.refreshToken;
+        next.networkId = first.networkId;
+      }
+    } catch { /* no membership row yet: the plain notice below names it */ }
     const revised = connections.filter((item) => item.identity?.id !== registration.did).concat(next);
     saveConnections(stored, origin, revised);
     setConnections(revised);
@@ -171,6 +210,32 @@ function App() {
     navigate("/timeline");
     if (!next.token) setNotice("This device is connected. Ask your family's owner to finish membership on this hub before moments appear.");
     return registration;
+  };
+  const finishJoin = async ({ url, code, did, deviceId, identityName }) => {
+    const hub = { url };
+    const session = await openDeviceSession(hub, { did, deviceId }, request);
+    const jwk = await getDeviceJwk(url, did, deviceId);
+    if (!jwk) throw new Error("This device cannot finish connecting. Ask for a fresh device link.");
+    const privateKey = await getDeviceKey(url, did, deviceId);
+    const signature = await signDeviceMessage(privateKey, `porchlight-join:${code}`);
+    const admitted = await request(hub, "social/join/admit", {
+      method: "POST",
+      body: JSON.stringify({ code, identityAccessToken: session.accessToken, deviceId, devicePublicKeyJwk: jwk, signature }),
+    });
+    const next = {
+      url, name: network?.name || "Your family",
+      identity: { id: did, name: identityName || "Family member" },
+      identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
+      deviceId, token: admitted.accessToken, refreshToken: admitted.refreshToken, networkId: admitted.networkId,
+    };
+    const revised = connections.filter((item) => item.identity?.id !== did).concat(next);
+    saveConnections(stored, origin, revised);
+    setConnections(revised);
+    setIdentity(next.identity);
+    setPosts(cachedTimeline(stored, `${origin}:${did}`));
+    setRanked([]);
+    setHidden(hiddenPosts(stored, `${origin}:${did}`));
+    return admitted;
   };
   const unsupported = () => { throw new Error("Your family server does not offer this action yet. No change was made."); };
   const connectionForPost = (post) =>
@@ -194,19 +259,33 @@ function App() {
       if (!response.ok) throw new Error(`This moment could not be loaded (${response.status}).`);
       return response.blob();
     },
-    join: async ({ url, code }) => {
-      const hub = new URL(url);
-      const response = await request({ url: hub.origin }, `social/join/verify?code=${encodeURIComponent(code)}`);
+    // The front door: verification first (plain states), then either the
+    // invited member's identity birth or a connect for an identity already
+    // registered on this device. Membership rides social/join/admit with the
+    // device signature — verification alone never grants anything.
+    joinNew: async ({ url, code, displayName }) => {
+      const hub = { url };
+      const registration = await createDeviceRegistration(url, (device) =>
+        request(hub, "bootstrap/join-member", { method: "POST", body: JSON.stringify({ code, displayName, device }) }));
+      const session = await openDeviceSession(hub, registration, request);
+      return finishJoin({ url, code, did: registration.did, deviceId: registration.deviceId, identityName: displayName });
+    },
+    joinDevice: async ({ url, code, did, deviceId, name }) => {
+      return finishJoin({ url, code, did, deviceId, identityName: name });
+    },
+    verifyJoin: async ({ url, code }) => {
+      const response = await request({ url }, `social/join/verify?code=${encodeURIComponent(code)}`);
+      if (!("valid" in response)) {
+        const error = new Error("This hub does not offer the Porchlight front door.");
+        error.code = "E_NOT_PORCHLIGHT";
+        throw error;
+      }
       if (!response.valid) {
-        const error = new Error("This invite cannot be used.");
+        const error = new Error(response.message || "This invitation cannot be used.");
         error.code = response.code;
         throw error;
       }
-      // The public join endpoint verifies an invite but requires an existing
-      // identity session to admit it. Verification cannot create membership.
-      const error = new Error(`The invite for ${response.network?.name || "this family"} is valid, but this hub cannot finish membership on a new device yet.`);
-      error.code = "E_ADMISSION_UNAVAILABLE";
-      throw error;
+      return response;
     },
     switchIdentity: async (id) => {
       const next = connections.find((item) => item.identity?.id === id);
@@ -242,6 +321,76 @@ function App() {
       await reload();
       return result;
     },
+    // Owner-routed device continuity (PORCH-010): mint the one-time,
+    // identity-scoped device link for a member, list grant states, revoke.
+    sendDeviceLink: async (did) => {
+      const result = await request(active, "social/console/device-links", {
+        method: "POST", body: JSON.stringify({ did }),
+      });
+      await reload();
+      return result;
+    },
+    listDeviceLinks: () => request(active, "social/console/device-links"),
+    revokeDeviceGrant: async (grantId) => {
+      const result = await request(active, "social/console/device-links/revoke", {
+        method: "POST", body: JSON.stringify({ grantId }),
+      });
+      await reload();
+      return result;
+    },
+    revokeAnyDevice: async (registrationId) => {
+      const result = await request(active, "social/console/devices/revoke", {
+        method: "POST", body: JSON.stringify({ registrationId }),
+      });
+      await reload();
+      return result;
+    },
+    // Owner bootstrap drives the hub's public setup ledger; every step is
+    // re-readable, so a closed browser resumes exactly where setup paused.
+    setupState: () => request({ url: origin }, "bootstrap/state"),
+    accountState: () => request({ url: origin }, "identity/account").catch(() => null),
+    createOwnerAccount: async ({ displayName, avatar }) => {
+      const hub = { url: origin };
+      const registration = await createDeviceRegistration(origin, (device) =>
+        request(hub, "identity/bootstrap/account", { method: "POST", body: JSON.stringify({ displayName, device }) }));
+      const session = await openDeviceSession(hub, registration, request);
+      const next = {
+        url: origin, name: "Your family",
+        identity: { id: registration.did, name: displayName },
+        identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
+        deviceId: registration.deviceId, token: null, refreshToken: null, networkId: null,
+      };
+      if (avatar) {
+        try {
+          await request({ url: origin, token: session.accessToken }, "identity/account/profile", {
+            method: "POST", body: JSON.stringify({ did: registration.did, profile: { avatar } }),
+          });
+        } catch { /* the photo is optional; the account itself is complete */ }
+      }
+      const revised = connections.filter((item) => item.identity?.id !== registration.did).concat(next);
+      saveConnections(stored, origin, revised);
+      setConnections(revised);
+      setIdentity(next.identity);
+      return { registration, session };
+    },
+    adoptOwnerIdentity: ({ sourceHubUrl, memberId }) =>
+      request({ url: origin }, "identity/bootstrap/adopt", { method: "POST", body: JSON.stringify({ sourceHubUrl, did: memberId }) }),
+    startNetwork: async ({ name, ownerDid }) => {
+      const result = await request({ url: origin }, "social/bootstrap/network", {
+        method: "POST", body: JSON.stringify({ name, ownerDid }),
+      });
+      setNetwork(result.network || null);
+      return result;
+    },
+    issueBootstrapInvite: () => request({ url: origin }, "social/bootstrap/invite", {
+      method: "POST", body: JSON.stringify({ role: "member", maxUses: 1 }),
+    }),
+    setBootstrapQuotas: async (quota) => {
+      const result = await request({ url: origin }, "bootstrap/quotas", {
+        method: "POST", body: JSON.stringify(quota),
+      });
+      return result;
+    },
     exportData: async () => {
       const blob = await exportOriginals(active);
       const url = URL.createObjectURL(blob);
@@ -256,7 +405,6 @@ function App() {
     linkDevice: (grant) => bindDevice("identity/device-link/consume", grant),
     // No server-side origin confirmation event exists yet. Never dismiss by pretending.
     confirmDevice: unsupported,
-    sendDeviceLink: unsupported,
     vote: async (post, value) => { const result = await publishVote(connectionForPost(post), post, value); await reload(); return result; },
     react: async (post, emoji) => { const result = await publishReaction(connectionForPost(post), post, emoji); await reload(); return result; },
     submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
@@ -274,18 +422,21 @@ function App() {
     loadComments: (post) => request(connectionForPost(post), `social/posts/${encodeURIComponent(post._id || post.id)}/comments`),
     loadGroup: (id) => request(active, `social/timeline/groups/${encodeURIComponent(id)}`),
     search: (query) => request(active, `social/search?q=${encodeURIComponent(query)}`),
-  }), [hidden, connections, active, identity, navigate, reload, posts]);
+  }), [hidden, connections, active, identity, navigate, reload, posts, network]);
 
   const data = {
     posts, ranked, groups, albums: [], connections, network: { name: active?.name || network?.name || null, id: active?.networkId || network?._id },
     identity, members: owner.members, devices: owner.devices, settings: owner.settings,
     invites: owner.invites, audit: owner.audit, disk: owner.disk, availability: owner.availability,
+    allDevices: owner.allDevices, deviceLinks: owner.deviceLinks,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline,
   };
   const props = { data, actions, navigate };
   const sharedDevice = new Set(connections.map((item) => item.identity?.id).filter(Boolean)).size > 1;
+  const setupRoute = route === "/setup";
+  const deviceLinkRoute = route === "/device-link" || route.startsWith("/device-link/");
   const chooseIdentity = (sharedDevice || connections.some(hasLocalPin)) && !identity;
-  const frontDoor = route === "/join" || route.startsWith("/join/") || route === "/pair" || route === "/device-link" || route === "/who-is-here" || chooseIdentity || !connections.length;
+  const frontDoor = setupRoute || route === "/join" || route.startsWith("/join/") || route === "/pair" || deviceLinkRoute || route === "/who-is-here" || chooseIdentity || !connections.length;
   useEffect(() => {
     // Signed-out-but-registered device: a fresh app open re-credentials
     // silently into the timeline (no wall). An explicit sign-out keeps the
@@ -295,12 +446,26 @@ function App() {
     if (!solo) return;
     actions.switchIdentity(connections[0].identity.id).catch(() => setOffline(true));
   }, [identity, connections, frontDoor, actions.switchIdentity]);
+  useEffect(() => {
+    // A hub with no identity at all is mid-bootstrap or fresh: its visitors
+    // land on the owner setup, never a bare join form.
+    if (!frontDoor || setupRoute || route.startsWith("/join/") || route === "/pair" || deviceLinkRoute) return;
+    let stale = false;
+    void (async () => {
+      try {
+        const account = await request({ url: origin }, "identity/account").catch(() => null);
+        if (!stale && account && account.exists === false) navigate("/setup");
+      } catch { /* hub unreachable: the join screen stays */ }
+    })();
+    return () => { stale = true; };
+  }, [frontDoor, route, setupRoute, deviceLinkRoute, navigate]);
   let page;
-  if (chooseIdentity && !["/join", "/pair", "/device-link"].includes(route)) page = <WhoIsHere {...props} />;
+  if (chooseIdentity && !["/join", "/pair", "/device-link", "/setup"].includes(route) && !route.startsWith("/join/") && !deviceLinkRoute) page = <WhoIsHere {...props} />;
   else
-  if (route === "/join" || route.startsWith("/join/")) page = <Join {...props} />;
+  if (setupRoute) page = <Setup {...props} />;
+  else if (route === "/join" || route.startsWith("/join/")) page = <Join {...props} />;
   else if (route === "/pair") page = <Pair {...props} />;
-  else if (route === "/device-link") page = <DeviceLink {...props} />;
+  else if (deviceLinkRoute) page = <DeviceLink {...props} />;
   else if (route === "/who-is-here") page = <WhoIsHere {...props} />;
   else if (route === "/profile") page = <Profile {...props} />;
   else if (route === "/groups" || route.startsWith("/groups/")) page = <Groups {...props} id={route.split("/")[2]} />;
@@ -325,6 +490,7 @@ function App() {
     </AppBar>}
     <Container maxWidth={false} sx={{ maxWidth: 1180, px: { xs: 2, lg: 4 }, pt: 4, pb: frontDoor ? 4 : { xs: 13, lg: 6 } }}>
       {offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Saved moments may be out of date.</Alert>}
+      {!frontDoor && networkLoaded && !network && identity && <Alert severity="info" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/setup")}>Continue</Button>}>Porch setup is not finished on this hub yet.</Alert>}
       {sharedDevice && !frontDoor && <Button size="small" onClick={() => navigate("/who-is-here")}>Switch person</Button>}
       {page}
     </Container>

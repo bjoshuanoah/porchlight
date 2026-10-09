@@ -330,3 +330,30 @@ test("forgotten PIN unblocks via the owner-routed link on the same device (ac-13
   assert.equal(rows.length, 1, "the fresh registration supersedes the stuck session");
   assert.equal(rows[0].status, "active");
 });
+
+test("device-link grants show console states, revoke instantly, and refuse revoked consumption (PORCH-010)", async () => {
+  const { devices } = fixture();
+  const minted = await devices.mintDeviceLink({ did: "did:porch:linkmember" });
+  assert.ok(minted.grantId.startsWith("dl_"));
+  assert.ok(minted.token);
+  let links = await devices.listDeviceLinks();
+  assert.equal(links.length, 1);
+  assert.equal(links[0].status, "unused");
+
+  const revoked = await devices.revokeDeviceLink({ grantId: minted.grantId });
+  assert.equal(revoked.revoked, true);
+  links = await devices.listDeviceLinks();
+  assert.equal(links[0].status, "revoked");
+
+  // Owner-revoked grants never authenticate; the member copy names it.
+  await assert.rejects(
+    () => devices.consumeDeviceLink({ token: minted.token, deviceId: "dev-1", publicKeyJwk: goodJwk() }),
+    (error) => error.code === "E_DEVICE_LINK_REVOKED",
+  );
+
+  // A consumed grant leaves the console state machine at "used".
+  const fresh = await devices.mintDeviceLink({ did: "did:porch:linkmember2" });
+  await devices.consumeDeviceLink({ token: fresh.token, deviceId: "dev-2", publicKeyJwk: goodJwk() });
+  const rows = await devices.listDeviceLinks();
+  assert.equal(rows.find((row) => row._id === fresh.grantId).status, "used");
+});

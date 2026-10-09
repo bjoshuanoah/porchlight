@@ -63,6 +63,23 @@ export class MembershipController {
   };
 
   /**
+   * POST /session/restore {identityAccessToken} — re-establish membership
+   * sessions for an already-admitted member on a re-bound device. Rides only
+   * live membership rows; never creates membership.
+   */
+  restore = async (req, res) => {
+    try {
+      const result = await this.membership.restoreSession({
+        identityAccessToken: req.body?.identityAccessToken ?? null,
+        deviceId: req.body?.deviceId ?? null,
+      });
+      return res.status(201).json(result);
+    } catch (error) {
+      return this.memberError(res, error);
+    }
+  };
+
+  /**
    * Member-facing error mapping: typed errors carry plain-language messages;
    * unknown codes become generic member text (never raw internals).
    */

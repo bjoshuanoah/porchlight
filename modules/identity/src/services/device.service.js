@@ -43,6 +43,11 @@ export class DeviceService {
     return this.deviceRegistrations.find({ did });
   }
 
+  /** Owner console view: every registration row, any identity. */
+  async listAllRegistrations() {
+    return this.deviceRegistrations.find({});
+  }
+
   /** Fetch one registration row by id (any status), or null. */
   async getRegistration({ registrationId }) {
     if (!registrationId) return null;
@@ -127,10 +132,37 @@ export class DeviceService {
       token: this.hash(token),
       expiresAt: isoPlus(at, DEVICE_LINK_TTL_SECONDS),
       consumed: false,
+      revokedAt: null,
       createdAt: at.toISOString(),
     };
     await this.deviceLinks.insertOne(row);
-    return { token, expiresAt: row.expiresAt };
+    return { grantId: row._id, token, expiresAt: row.expiresAt };
+  }
+
+  /**
+   * Owner console device-link lifecycle: instant revocation, same mechanics
+   * class as join links. An owner-revoked link is dead the moment it happens.
+   */
+  async revokeDeviceLink({ grantId, now = () => new Date() } = {}) {
+    if (!grantId) throw typedError("E_DEVICE_LINK_UNKNOWN", "no device link presented");
+    const row = await this.deviceLinks.findOne({ _id: grantId });
+    if (!row) throw typedError("E_DEVICE_LINK_UNKNOWN", `no device link ${grantId}`);
+    if (row.revokedAt || row.consumed) return { revoked: false, grantId, alreadyDead: true };
+    const revokedAt = now().toISOString();
+    await this.deviceLinks.updateOne({ _id: grantId }, { $set: { revokedAt } });
+    return { revoked: true, grantId, revokedAt };
+  }
+
+  /** Owner console list: grant rows with derived lifecycle states, no hashes. */
+  async listDeviceLinks({ now = () => new Date() } = {}) {
+    const at = now().getTime();
+    return (await this.deviceLinks.find({})).map((row) => ({
+      _id: row._id,
+      did: row.did,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      status: row.revokedAt ? "revoked" : row.consumed ? "used" : new Date(row.expiresAt).getTime() <= at ? "expired" : "unused",
+    }));
   }
 
   /**
@@ -148,6 +180,7 @@ export class DeviceService {
       unknownCode: "E_DEVICE_LINK_UNKNOWN",
       expiredCode: "E_DEVICE_LINK_EXPIRED",
       consumedCode: "E_DEVICE_LINK_CONSUMED",
+      revokedCode: "E_DEVICE_LINK_REVOKED",
     });
     assertAcceptableKey(publicKeyJwk);
     await this.deviceLinks.updateOne({ _id: link._id }, { $set: { consumed: true } });
@@ -206,13 +239,14 @@ export class DeviceService {
    * Shared one-time-row lookup: unknown / expired / consumed, stored value is
    * a sha256 hash of the presented plaintext.
    */
-  async consumeOneTimeRow({ collection, valueField, value, now, unknownCode, expiredCode, consumedCode }) {
+  async consumeOneTimeRow({ collection, valueField, value, now, unknownCode, expiredCode, consumedCode, revokedCode = null }) {
     if (!value) throw typedError(unknownCode, "no value presented");
     const row = await collection.findOne({ [valueField]: this.hash(value) });
     if (!row) throw typedError(unknownCode, "no such one-time value");
     if (new Date(row.expiresAt).getTime() <= now().getTime()) {
       throw typedError(expiredCode, "one-time value expired");
     }
+    if (revokedCode && row.revokedAt) throw typedError(revokedCode, "one-time value was revoked");
     if (row.consumed) throw typedError(consumedCode, "one-time value already consumed");
     return row;
   }

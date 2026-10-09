@@ -316,3 +316,56 @@ function sortKeys(value) {
   }
   return value;
 }
+test("ac-2 (PORCH-010): membership sessions restore for the unchanged member on a re-bound device", async () => {
+  const { invites, membership } = fixture();
+  const invite = await invites.issue({ networkId: "net_1", role: "member" });
+  const device = okp();
+  await membership.admit({
+    code: invite.token,
+    identityAccessToken: "did:porchlight:susan",
+    deviceId: "dev_1",
+    devicePublicKeyJwk: device.publicKeyJwk,
+    signature: device.sign(`porchlight-join:${invite.token}`).toString("base64url"),
+  });
+
+  // Re-bound device: identity proof in, network-scoped membership token out.
+  const restored = await membership.restoreSession({ identityAccessToken: "did:porchlight:susan", deviceId: "dev_2" });
+  assert.equal(restored.did, "did:porchlight:susan");
+  assert.equal(restored.sessions.length, 1);
+  assert.equal(restored.sessions[0].networkId, "net_1");
+  assert.ok(restored.sessions[0].accessToken);
+
+  // The restored token is exactly the admission scope: one network, never wide.
+  const round = await membership.verifyAccessToken(restored.sessions[0].accessToken, { networkId: "net_1" });
+  assert.ok(round?.membership);
+  assert.equal(await membership.verifyAccessToken(restored.sessions[0].accessToken, { networkId: "net_other" }), null);
+});
+
+test("ac-2 (PORCH-010): restore never widens the perimeter — no proof, no membership", async () => {
+  const { invites, membership } = fixture();
+  const invite = await invites.issue({ networkId: "net_1" });
+  const device = okp();
+  await membership.admit({
+    code: invite.token,
+    identityAccessToken: "did:porchlight:susan",
+    deviceId: "dev_1",
+    devicePublicKeyJwk: device.publicKeyJwk,
+    signature: device.sign(`porchlight-join:${invite.token}`).toString("base64url"),
+  });
+
+  await assert.rejects(
+    () => membership.restoreSession({ identityAccessToken: null }),
+    (error) => error.code === "E_MUST_SIGN_IN",
+  );
+  await assert.rejects(
+    () => membership.restoreSession({ identityAccessToken: "did:porchlight:stranger" }),
+    (error) => error.code === "E_NOT_A_MEMBER",
+  );
+
+  // Revocation closes the perimeter instantly: restore rides live rows only.
+  await membership.revokeMember({ networkId: "net_1", did: "did:porchlight:susan" });
+  await assert.rejects(
+    () => membership.restoreSession({ identityAccessToken: "did:porchlight:susan" }),
+    (error) => error.code === "E_NOT_A_MEMBER",
+  );
+});
