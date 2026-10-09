@@ -152,6 +152,10 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       system,
       verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
       registeredDeviceKey: identityAuth ? (did: string, deviceId: string) => identityAuth!.activeDeviceRegistration(did, deviceId) : undefined,
+      // PORCH-029: the member directory joins membership rows with the
+      // identity-plane display names through this injected callback — the
+      // same DI boundary shape as the two resolvers above.
+      memberNames: identityModule ? (dids: string[]) => identityModule.accountService.namesFor(dids) : undefined,
       media: { mediaRoot: join(options.bootstrap.configDir, "media") },
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,

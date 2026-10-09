@@ -15,7 +15,7 @@ import { cachedTimeline, hiddenPosts, hidePost, readConnections, readLocal, save
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
 import { publishPost, publishReply, publishReaction, publishVote, uploadOriginals, exportOriginals } from "./member-actions.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
-import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Setup, hasLocalPin } from "./identity.jsx";
+import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
 
 const origin = window.location.origin;
 const stored = window.localStorage;
@@ -515,6 +515,7 @@ function App() {
   else if (route === "/albums" || route.startsWith("/albums/")) page = <Albums {...props} id={route.split("/")[2]} />;
   else if (route === "/search") page = <Search {...props} />;
   else if (route === "/owner") page = <OwnerConsole {...props} />;
+  else if (route === "/members") page = <Members {...props} />;
   else if (!connections.length) page = <Join {...props} />;
   else page = <Timeline {...props} />;
 

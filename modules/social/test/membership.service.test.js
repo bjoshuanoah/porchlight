@@ -17,6 +17,7 @@ function fixture(options = {}) {
     networks: db.collection("networks"),
     audit: async () => {},
     registeredDeviceKey: options.registeredDeviceKey ?? null,
+    memberNames: options.memberNames ?? null,
   });
   return { db, invites, membership };
 }
@@ -461,4 +462,57 @@ test("verify carries the join link the invite names (PORCH-023 ac-2)", async () 
   const silent = await invites.issue({ networkId: "net_1" });
   const anonymous = await invites.verify(silent.token);
   assert.equal(anonymous.invite.joinUrl, `/join/${silent.token}`);
+});
+
+/* ---- member directory (PORCH-029) ---------------------------------------- */
+
+test("ac-1: the directory joins membership rows with identity display names", async () => {
+  const db = createMemoryStore();
+  db.collection("memberships").insertOne({ _id: "mem_o", networkId: "net_1", did: "did:porch:owner", role: "owner", state: "active", admittedAt: "2026-10-09T10:00:00.000Z", revokedAt: null });
+  db.collection("memberships").insertOne({ _id: "mem_m", networkId: "net_1", did: "did:porch:june", role: "member", state: "active", admittedAt: "2026-10-09T11:00:00.000Z", revokedAt: null });
+  db.collection("memberships").insertOne({ _id: "mem_r", networkId: "net_1", did: "did:porch:gone", role: "member", state: "revoked", admittedAt: "2026-10-09T12:00:00.000Z", revokedAt: "2026-10-09T13:00:00.000Z" });
+  const asked = [];
+  const membership = new MembershipService({
+    memberships: db.collection("memberships"),
+    membershipSessions: db.collection("membership_sessions"),
+    deviceKeys: db.collection("device_keys"),
+    invites: new InviteService(db.collection("invites")),
+    verifyMemberIdToken: async () => null,
+    networks: db.collection("networks"),
+    audit: async () => {},
+    memberNames: async (dids) => {
+      asked.push(...dids);
+      return [
+        { did: "did:porch:owner", displayName: "Brian Noah" },
+        { did: "did:porch:june", displayName: "June Noah" },
+      ];
+    },
+  });
+  const views = await membership.listMemberViews({ networkId: "net_1" });
+  const byDid = new Map(views.map((row) => [row.did, row]));
+  assert.equal(byDid.get("did:porch:owner").name, "Brian Noah");
+  assert.equal(byDid.get("did:porch:june").name, "June Noah");
+  // A membership whose identity row disappeared renders without a name.
+  assert.equal(byDid.get("did:porch:gone").name, null);
+  // Join state stays the membership row's own: role + active/revoked + dates.
+  assert.equal(byDid.get("did:porch:owner").role, "owner");
+  assert.equal(byDid.get("did:porch:june").state, "active");
+  assert.equal(byDid.get("did:porch:gone").state, "revoked");
+  assert.equal(byDid.get("did:porch:gone").revokedAt, "2026-10-09T13:00:00.000Z");
+  // Only this network's member DIDs ride the boundary callback.
+  assert.deepEqual([...asked].sort(), ["did:porch:gone", "did:porch:june", "did:porch:owner"]);
+  // The join row keeps its public shape; private key material never appears.
+  assert.ok(byDid.get("did:porch:june"));
+  assert.ok(!("publicKeyJwk" in byDid.get("did:porch:june")));
+  assert.ok(!("deviceId" in byDid.get("did:porch:june")));
+});
+
+test("ac-1: an assembly without the name resolver keeps the directory working", async () => {
+  const { membership } = fixture();
+  await membership.memberships.insertOne({ _id: "mem_1", networkId: "net_1", did: "did:porch:owner", role: "owner", state: "active", admittedAt: "2026-10-09T10:00:00.000Z", revokedAt: null });
+  const views = await membership.listMemberViews({ networkId: "net_1" });
+  assert.equal(views.length, 1);
+  assert.equal(views[0].name, null);
+  assert.equal(views[0].role, "owner");
+  assert.equal(views[0].state, "active");
 });

@@ -28,7 +28,9 @@ function typedError(code, message, extra = {}) {
  * social imports no identity source (CI boundary). The verifier resolves the
  * hub-issued member ID token to `{ did }` or null; authorization never rides
  * that token, it only proves the DID behind the device that is presenting the
- * invite.
+ * invite. A second injected callback (`memberNames`, PORCH-029) resolves
+ * member DIDs to family-facing display names for the owner's member
+ * directory — display fields only, still no identity source.
  */
 export class MembershipService {
   /**
@@ -50,8 +52,13 @@ export class MembershipService {
    *   PORCH-019 auth-failure capture: invoked when a member surface's
    *   membership token fails verification (failing step + session/device/
    *   membership identity state; never token material).
+   * @param {((dids: string[]) => Promise<Array<{did: string, displayName: string | null}>>) | null} [deps.memberNames]
+   *   Server-wired identity-plane name resolver for the owner's member
+   *   directory (PORCH-029): DIDs in, family-facing display fields out.
+   *   Null on assemblies that don't wire it — the directory renders without
+   *   names rather than failing.
    */
-  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey, authFailureSink }) {
+  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey, authFailureSink, memberNames }) {
     this.memberships = memberships;
     this.membershipSessions = membershipSessions;
     this.deviceKeys = deviceKeys;
@@ -59,6 +66,7 @@ export class MembershipService {
     this.verifyMemberIdToken = verifyMemberIdToken ?? (async () => null);
     this.networks = networks ?? null;
     this.registeredDeviceKey = registeredDeviceKey ?? null;
+    this.memberNames = memberNames ?? null;
     this.authFailureSink = authFailureSink ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
@@ -385,6 +393,22 @@ export class MembershipService {
   /** Owner console list of the network's members. */
   async listMembers({ networkId } = {}) {
     return this.memberships.find(networkId ? { networkId: String(networkId) } : {});
+  }
+
+  /**
+   * The owner's member directory (PORCH-029): membership rows joined with
+   * the family-facing member name resolved through the injected identity
+   * boundary callback. Members the hub has no identity row for render
+   * without a name (plain fallback at the client); the join state (role,
+   * active/revoked, dates) comes straight from the membership row.
+   */
+  async listMemberViews({ networkId } = {}) {
+    const rows = await this.listMembers({ networkId });
+    const names = this.memberNames
+      ? await this.memberNames([...new Set(rows.map((row) => row.did).filter(Boolean))])
+      : [];
+    const byDid = new Map((names ?? []).map((row) => [row.did, row.displayName]));
+    return rows.map((row) => ({ ...this.view(row), name: byDid.get(row.did) ?? null }));
   }
 
   /**
