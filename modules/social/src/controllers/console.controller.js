@@ -249,18 +249,22 @@ export class ConsoleController {
 
   /**
    * POST /console/groups — owner creates a within-network group container
-   * (groups ruling Oct 8 2026). Group membership must be a subset of the
-   * network membership; the group service enforces it.
+   * (groups ruling Oct 8 2026; the member plane is the open surface, PORCH-
+   * 030 — this console surface remains for the owner's tooling). Group
+   * membership must be a subset of the network membership; the group
+   * service enforces it. The creating owner is recorded as the group's
+   * creator (createdBy), same as the member plane records its creator.
    */
   createGroup = async (req, res) => {
-    if (!(await this.#requireOwner(req, res))) return;
+    const perimeter = await this.#requireOwner(req, res);
+    if (!perimeter) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
     }
     const { name, members } = req.body ?? {};
     try {
-      const group = await this.groups.create({ networkId: network._id, name, members });
+      const group = await this.groups.create({ networkId: network._id, name, members, createdBy: perimeter.session.did });
       await this.audit.record({ networkId: network._id, did: null, action: "group_create", detail: { groupId: group._id } });
       res.status(201).json({ group });
     } catch (error) {

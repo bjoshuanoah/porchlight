@@ -284,6 +284,8 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
 
   // The feed path opens only posts, derived_data, and groups (plus the
   // membership perimeter): no hidden-list collection is ever touched.
+  // `groups` is the PORCH-030 group-chip decoration read — a group's name
+  // decorates member views; it stores no hidden-list state.
   const opened = [];
   const recording = (name, coll) => ({
     findOne: (...a) => (opened.push(name), coll.findOne(...a)),
@@ -309,7 +311,7 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
   await spyFeed.timeline({ accessToken: susan });
   await spyFeed.ranked({ accessToken: susan });
   await spyFeed.search({ accessToken: susan, query: "hideable" });
-  assert.deepEqual([...new Set(opened)].sort(), ["derived_data", "membership", "posts"], "no hidden-list storage is ever opened by feed reads");
+  assert.deepEqual([...new Set(opened)].sort(), ["derived_data", "groups", "membership", "posts"], "no hidden-list storage is ever opened by feed reads");
   assert.equal(typeof spyFeed.storeHidden === "function", false, "no hidden-write surface exists on the feed service");
 
   // The client-side application: hidden ids drop from BOTH surfaces at

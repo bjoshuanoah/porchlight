@@ -144,11 +144,13 @@ export const socialModels = {
     },
   },
   /**
-   * Group (PORCH-006, groups ruling Brian Oct 8 2026): a container inside a
-   * network with its own timeline in the feed layer. Group membership is a
-   * subset of that network's membership, managed by the owner or a
-   * delegate. A post belongs to at most one network and at most one group;
-   * no cross-network groups in V1.
+   * Group (PORCH-006, groups ruling Brian Oct 8 2026; creation + membership
+   * management amended Oct 14 2026): a container inside a network with its
+   * own timeline in the feed layer. Every network member can create a
+   * group, and the creating member manages its membership (the earlier
+   * owner-or-delegate management wording is superseded). Group membership
+   * is a subset of that network's membership. A post belongs to at most one
+   * network and at most one group; no cross-network groups in V1.
    */
   group: {
     type: "object",
@@ -157,6 +159,8 @@ export const socialModels = {
       _id: { type: "string" },
       networkId: { type: "string" },
       name: { type: "string" },
+      /** The creating member (origin-network member DID); null on legacy rows. */
+      createdBy: { type: ["string", "null"] },
       /** Subset of the network's active membership (member DIDs). */
       members: { type: "array", items: { type: "string" } },
       createdAt: { type: "string" },
