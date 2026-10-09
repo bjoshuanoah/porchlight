@@ -5,7 +5,18 @@
 // the supervisor's contract; launchd/systemd keep the supervisor alive.
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { Supervisor, configFromPathsOrThrow, serverEntryPath, writeSupervisorState, supervisorRunningState, reclaimStaleChildren } from "./supervisor.mjs";
+import {
+  Supervisor,
+  configFromPathsOrThrow,
+  serverEntryPath,
+  writeSupervisorState,
+  supervisorRunningState,
+  reclaimStaleChildren,
+  hubReadyProbe,
+  hubFallbackState,
+  clearHubFallbackState,
+  readChildStateByPaths,
+} from "./supervisor.mjs";
 import { ensureDirs, home, clearStateFile } from "./state.mjs";
 import { ensureCloudflared, ensureRedis, ensureMongod } from "./binaries.mjs";
 import { loadTunnelIdentity, mintTunnelIdentity, spawnTunnel } from "./tunnel-identity.mjs";
@@ -16,7 +27,21 @@ const { version } = require("../package.json");
 export async function run(args = {}) {
   const paths = home({ PORCHLIGHT_HOME: args.home ?? process.env.PORCHLIGHT_HOME });
   ensureDirs(paths);
+  // A fresh start is a fresh cycle: any earlier crash-loop fallback was for
+  // the previous run (the owner has acted — stop/reinstall/start).
+  clearHubFallbackState(paths);
+  const installedVersion = version;
   let running = supervisorRunningState(paths);
+  if (running?.version && running.version !== installedVersion) {
+    // Release mixing diagnostic (PORCH-016 ac-5): an owner-run npm update
+    // lands on disk while the old supervisor still serves the old release.
+    // Never silent — the version gap is named at every start until the
+    // restart actually applies it.
+    process.stdout.write(
+      `release update detected: supervisor running v${running.version}, installed v${installedVersion} — ` +
+        "complete the update: `porchlight stop`, `porchlight start` (npm's rollback semantics cover a failed install).\n",
+    );
+  }
   if (running) {
     // A still-running-but-shutting-down predecessor must not wedge a re-run:
     // wait briefly for it to clear (its children hold the ports).
@@ -71,7 +96,12 @@ export async function run(args = {}) {
     { ready: redisReadyProbe(config.daemons.redisPort) },
   );
 
-  supervisor.spawnChild("hub", process.execPath, [serverEntry, "--serve", "--porchlight-home", paths.root], {});
+  supervisor.spawnChild(
+    "hub",
+    process.execPath,
+    [serverEntry, "--serve", "--porchlight-home", paths.root],
+    { ready: hubReadyProbe(config) },
+  );
 
   if (args.tunnel && config.hub.tunnel.enabled) {
     const cloudflared = await ensureCloudflared(paths.root, () => {});
@@ -112,7 +142,47 @@ export async function run(args = {}) {
       "Run `porchlight service install` to keep the hub alive across reboots (launchd-class).\n",
   );
 
+  await waitForPostStartVerification(supervisor, paths, installedVersion);
   await runSupervisorLoop(supervisor, paths);
+}
+
+/**
+ * Post-start verification (PORCH-016 ac-1/ac-2): once the hub child passes
+ * its health ready probe, the verification is journaled (named, local-only);
+ * if the child exhausts its restart budget instead, the named crash-loop
+ * fallback is printed with its diagnosis and recovery line. Either way the
+ * supervisor loop keeps the process idling — under launchd KeepAlive an
+ * exited start would just respawn into the same failures.
+ */
+async function waitForPostStartVerification(supervisor, paths, installedVersion, timeoutMs = 600_000) {
+  const startedAt = Date.now();
+  for (;;) {
+    const fallback = supervisor.fallbackState() ?? hubFallbackState(paths);
+    if (fallback) {
+      process.stdout.write(
+        `named fallback: ${fallback.state} — ${fallback.child} failed ${fallback.failedAttempts} ` +
+          `consecutive starts without readiness\n` +
+          `  diagnosis: ${fallback.lastError}\n` +
+          `  hub log: ${fallback.log}\n` +
+          `  recovery: reinstall the previous release (npm install -g porchlight@<previous>), ` +
+          "then `porchlight stop` and `porchlight start`\n",
+      );
+      return;
+    }
+    const hubState = readChildStateByPaths(paths, "hub");
+    if (hubState?.running && hubState.lastError == null) {
+      process.stdout.write(`post-start verification passed: hub healthy (release v${installedVersion})\n`);
+      return;
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      const message =
+        "post-start health smoke check failed: the hub did not report healthy within 600s (check: post-start health smoke check)";
+      supervisor.journalFailure("hub", message);
+      process.stdout.write(`post-start verification failed: ${message}\n`);
+      return;
+    }
+    await new Promise((wait) => setTimeout(wait, 500));
+  }
 }
 
 /** Foreground supervisor; SIGINT/SIGTERM stop the whole group. */
@@ -126,6 +196,13 @@ async function runSupervisorLoop(supervisor, paths) {
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // Idle keepalive (composition finding, PORCH-016): once the crash-loop
+  // fallback stops the whole process group, no child handles hold the event
+  // loop — an idle foreground supervisor would silently exit, and under
+  // launchd KeepAlive launchd would immediately respawn it into the same
+  // crash-loop. The running-but-idle supervisor process is the stable,
+  // nameable fallback state, so the loop stays alive until a signal.
+  setInterval(() => {}, 30_000);
   await new Promise(() => {}); // run until signaled
 }
 

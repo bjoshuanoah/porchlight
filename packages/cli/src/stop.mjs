@@ -2,7 +2,7 @@
 // running supervisor (which stops and journals its children); when the
 // supervisor is not running, clears stale state files so the next start is
 // clean.
-import { supervisorRunningState } from "./supervisor.mjs";
+import { supervisorRunningState, clearHubFallbackState } from "./supervisor.mjs";
 import { clearStateFile, home } from "./state.mjs";
 
 const SIGNALS = ["SIGTERM", "SIGTERM", "SIGKILL"];
@@ -14,6 +14,7 @@ export async function run(args = {}) {
     process.stdout.write("porchlight is not running.\n");
     clearStateFile(paths, "supervisor");
     clearStateFile(paths, "tunnel");
+    clearHubFallbackState(paths);
     return;
   }
   const pid = running.pid;
@@ -31,6 +32,7 @@ export async function run(args = {}) {
   }
   clearStateFile(paths, "supervisor");
   clearStateFile(paths, "tunnel");
+  clearHubFallbackState(paths);
   process.stdout.write("porchlight stopped.\n");
 }
 
