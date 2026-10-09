@@ -1,6 +1,8 @@
 // Browser-local preferences and cached reads are scoped by the hub origin.
 const prefix = "porchlight:v1:";
 
+export const storagePrefix = prefix;
+
 export function readLocal(storage, origin, field, fallback) {
   try {
     const value = storage.getItem(`${prefix}${origin}:${field}`);
@@ -47,4 +49,14 @@ export function readConnections(storage, origin) {
 
 export function saveConnections(storage, origin, connections) {
   writeLocal(storage, origin, "connections", connections);
+}
+
+// Token custody keys: where renewed token sets are published between tabs
+// (PORCH-028) and which tab is currently renewing for this origin.
+export function connectionsStorageKey(origin) {
+  return `${prefix}${origin}:connections`;
+}
+
+export function renewSlotKey(origin) {
+  return `${prefix}${origin}:renew-slot`;
 }

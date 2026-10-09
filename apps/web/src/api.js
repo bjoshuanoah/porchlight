@@ -1,5 +1,14 @@
 // Each connection carries one origin's membership; API calls never cross origins.
-export async function request(connection, path, init = {}) {
+
+// On a 401 the caller gets one chance to recover before the error surfaces:
+// sibling tokens may have been published by another tab's renewal (PORCH-028).
+// The handler returns a replacement connection to retry with, or null.
+let unauthorizedHandler = null;
+export function setUnauthorizedHandler(handler) {
+  unauthorizedHandler = handler;
+}
+
+async function attempt(connection, path, init = {}, recoverable) {
   const base = new URL(connection.url || window.location.origin);
   const target = new URL(`/api/${path.replace(/^\/+/, "")}`, base);
   const response = await fetch(target, {
@@ -16,9 +25,18 @@ export async function request(connection, path, init = {}) {
     error.code = result.code;
     error.status = response.status;
     error.body = result;
+    if (recoverable && response.status === 401 && unauthorizedHandler) {
+      const replacement = await unauthorizedHandler({ connection, error });
+      // A 401 never processed the request, so one retry of a signed body is safe.
+      if (replacement) return attempt(replacement, path, init, false);
+    }
     throw error;
   }
   return result;
+}
+
+export async function request(connection, path, init = {}) {
+  return attempt(connection, path, init, true);
 }
 
 export async function loadFeeds(connections) {

@@ -10,8 +10,9 @@ import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import { theme } from "./theme.js";
 import { readJoinQuery } from "./frontdoor.js";
 import { fullName } from "./setup-state.js";
-import { request, loadFeeds } from "./api.js";
-import { cachedTimeline, hiddenPosts, hidePost, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
+import { request, loadFeeds, setUnauthorizedHandler } from "./api.js";
+import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
+import { createCustody } from "./session-sync.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
 import { publishPost, publishReply, publishReaction, publishVote, uploadOriginals, exportOriginals } from "./member-actions.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
@@ -19,6 +20,14 @@ import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setu
 
 const origin = window.location.origin;
 const stored = window.localStorage;
+// Cross-tab token custody (PORCH-028): renewals publish through localStorage
+// and 401s adopt the published set instead of racing a superseded token.
+const custody = createCustody({ storage: stored, origin });
+setUnauthorizedHandler(({ connection, error }) => custody.recover({ connection, error }));
+// Token sets younger than half the renewal window live well inside the
+// 10-minute access TTL, so no tab needs to supersede a sibling's fresh
+// publication.
+const renewFreshMs = 6 * 60 * 1000;
 const initialConnections = readConnections(stored, origin);
 const localIdentities = [...new Set(initialConnections.map((item) => item.identity?.id).filter(Boolean))];
 const primary = ["/timeline", "/groups", "/compose", "/profile"];
@@ -49,8 +58,32 @@ function App() {
   const [newDevices, setNewDevices] = useState([]);
   const active = identity ? connections.find((item) => item.identity?.id === identity.id) : null;
   const identityConnections = identity ? connections.filter((item) => item.identity?.id === identity.id && item.token) : [];
-  const lastRenewed = useRef(new Map());
+  const renewRef = useRef(null);
   const signedOut = useRef(false);
+  useEffect(() => {
+    custody.setRenew(({ did }) => renewRef.current?.({ did }));
+    // Recovered tokens must land in React state immediately: the next 15s
+    // poll presents the published token instead of 401ing into recovery
+    // again (the wake-after-throttle case with no storage event received).
+    custody.setOnAdopt((live) => {
+      if (!signedOut.current) setConnections(live);
+    });
+    return () => {
+      custody.setRenew(null);
+      custody.setOnAdopt(null);
+    };
+  }, []);
+  useEffect(() => {
+    const onStorage = (event) => {
+      custody.notify(event);
+      if (event.key !== connectionsStorageKey(origin)) return;
+      // A sibling tab's renewal published here: adopt its token set in one
+      // cycle, before any of our requests can present the superseded one.
+      if (!signedOut.current) setConnections(readConnections(stored, origin));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   const observeDevices = useCallback((rows, current) => {
     if (!current?.identity?.id) return;
     const field = `seen-devices:${current.identity.id}`;
@@ -74,25 +107,37 @@ function App() {
   useEffect(() => {
     request({ url: origin }, "social/network").then((result) => setNetwork(result.network || null)).catch(() => {}).finally(() => setNetworkLoaded(true));
   }, []);
-  const renew = useCallback(async ({ force = false } = {}) => {
-    if (!active?.identity?.id) return;
-    // Self-gated silent renewal: at most one open per connection window, so
-    // state churn can never loop.
-    const gateKey = `${active.identity.id}:${active.deviceId}`;
-    if (!force && Date.now() - (lastRenewed.current.get(gateKey) || 0) < 8 * 60 * 1000) return;
-    lastRenewed.current.set(gateKey, Date.now());
-    const next = { ...active };
+  // Silent renewal (PORCH-028): reads live storage, never a stale state
+  // snapshot, and serializes through the per-origin renewal slot inside
+  // custody.renew so two tabs can never race supersessions past each other.
+  const renew = useCallback(async ({ did = null } = {}) => {
+    const live = readConnections(stored, origin);
+    const target = live.find((item) => item.identity?.id === (did || identity?.id));
+    if (!target?.deviceId || !target.identity?.id) return false;
+    // Cross-tab freshness gate: another tab's renewal younger than half the
+    // gate window keeps every presented token inside the 10-minute TTL, so
+    // skip the supersession and let that tab's publication ride adoption.
+    if (Date.now() - (target.renewedAt || 0) < renewFreshMs) return false;
+    const next = { ...target };
+    let membershipFailed = false;
     try {
       const identitySession = await openDeviceSession(next, { did: next.identity.id, deviceId: next.deviceId }, request);
       next.identityToken = identitySession.accessToken;
       next.identityRefreshToken = identitySession.refreshToken;
       const membershipRefreshToken = next.refreshToken ?? next.membershipRefreshToken;
       if (membershipRefreshToken) {
-        const membership = await request({ url: next.url }, "social/session/refresh", {
-          method: "POST", body: JSON.stringify({ refreshToken: membershipRefreshToken }),
-        });
-        next.token = membership.accessToken;
-        next.refreshToken = membership.refreshToken ?? next.refreshToken;
+        try {
+          const membership = await request({ url: next.url }, "social/session/refresh", {
+            method: "POST", body: JSON.stringify({ refreshToken: membershipRefreshToken }),
+          });
+          next.token = membership.accessToken;
+          next.refreshToken = membership.refreshToken ?? next.refreshToken;
+        } catch {
+          // Membership refresh failed; the identity tokens are still live, so
+          // publish them but leave renewedAt unstamped so the next renewal can
+          // re-credential the membership plane too.
+          membershipFailed = true;
+        }
       }
       // Founder binding rides restore (PORCH-018): a connection without a
       // membership token yet — a fresh owner connection, or any hub where
@@ -111,20 +156,24 @@ function App() {
           }
         } catch { /* no membership row yet: the plain notice below names it */ }
       }
-      const revised = connections.map((item) => item === active ? next : item);
+      next.renewedAt = membershipFailed ? undefined : Date.now();
+      const revised = live.map((item) => item.identity?.id === target.identity.id ? next : item);
       saveConnections(stored, origin, revised);
       setConnections(revised);
+      return true;
     } catch {
       setOffline(true);
+      return false;
     }
-  }, [active, connections]);
+  }, [identity]);
+  useEffect(() => { renewRef.current = renew; }, [renew]);
   useEffect(() => {
     if (!active?.identity?.id) return undefined;
-    const timer = setInterval(() => void renew({ force: true }), 8 * 60 * 1000);
-    const visible = () => { if (document.visibilityState === "visible") void renew(); };
+    const timer = setInterval(() => void custody.renew(), 8 * 60 * 1000);
+    const visible = () => { if (document.visibilityState === "visible") void custody.renew(); };
     document.addEventListener("visibilitychange", visible);
     return () => { clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
-  }, [active, renew]);
+  }, [active]);
 
   // Reads never ride a stale connections closure: renewal saves new tokens to
   // browser storage BEFORE state settles, so reads take the storage copy —
@@ -173,7 +222,7 @@ function App() {
     // re-credential BEFORE reads, or the page would render failure states.
     void (async () => {
       if (active?.identity?.id && !signedOut.current) {
-        try { await renew(); } catch { /* renew sets offline state itself */ }
+        try { await custody.renew(); } catch { /* renew sets offline state itself */ }
       }
       await reload();
     })();
@@ -209,6 +258,7 @@ function App() {
       identity: { id: registration.did, name: registration.label || "Family member" },
       identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
       deviceId: registration.deviceId, token: null, refreshToken: null, networkId: null,
+      renewedAt: Date.now(),
     };
     // Membership sessions ride LIVE rows only (never admission): a re-bound
     // device restores its network tokens silently so the timeline lands
@@ -252,6 +302,7 @@ function App() {
       identity: { id: did, name: identityName || "Family member" },
       identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
       deviceId, token: admitted.accessToken, refreshToken: admitted.refreshToken, networkId: admitted.networkId,
+      renewedAt: Date.now(),
     };
     const revised = connections.filter((item) => item.identity?.id !== did).concat(next);
     saveConnections(stored, origin, revised);
@@ -318,7 +369,7 @@ function App() {
       const next = connections.find((item) => item.identity?.id === id);
       if (!next) throw new Error("This person is not connected on this device.");
       const session = await openDeviceSession(next, { did: id, deviceId: next.deviceId }, request);
-      const updated = connections.map((item) => item === next ? { ...item, identityToken: session.accessToken, identityRefreshToken: session.refreshToken } : item);
+      const updated = connections.map((item) => item === next ? { ...item, identityToken: session.accessToken, identityRefreshToken: session.refreshToken, renewedAt: Date.now() } : item);
       saveConnections(stored, origin, updated);
       setConnections(updated);
       setIdentity(next.identity);
