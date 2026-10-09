@@ -16,6 +16,9 @@ export function mongoStore(db: Db): StoreLike {
       async findOne(filter: Record<string, unknown> = {}) {
         return (await raw.findOne(filter)) ?? null;
       },
+      async find(filter: Record<string, unknown> = {}) {
+        return await raw.find(filter).toArray();
+      },
       async insertOne(document: Record<string, unknown>) {
         const result = await raw.insertOne(document as Document);
         return { insertedId: result.insertedId };

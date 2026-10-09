@@ -1,80 +1,256 @@
-import { identityModels } from "../models.js";
+import { randomUUID } from "node:crypto";
 
 /**
- * Account service. Owns the bootstrap-period account surface for the
- * identity domain: the owner's first account, and adoption of an existing
- * identity from another hub (Porchlight Server TS 2, first account/adoption).
- * Models stay identity-owned; no social imports.
+ * Account service (Slice B): bootstrap-period account surface for the
+ * identity domain — the owner's first account with its device key binding
+ * (ac-1), separately minted agent identities (ac-2), and second-hub adoption
+ * of an identity the owner already holds elsewhere (ac-3).
+ *
+ * Identity rows live in the single `identities` collection (`_id ident_…`),
+ * key by key. Adoption NEVER copies the remote identity record, its keys or
+ * profile — it stores a reference account pointing at the home hub, and
+ * verifying the DID resolves there rides the injectable transport.
  */
+
+function typed(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+/**
+ * Default remote transport: global fetch, never following redirects
+ * (`redirect: "error"` — a redirect off the pinned hub is an attack signal).
+ * Resolves to `{ document }` (bare-document responses are wrapped) or null.
+ */
+async function defaultTransport(sourceHubUrl, did) {
+  try {
+    const response = await fetch(
+      `${sourceHubUrl}/api/identity/did/${encodeURIComponent(did)}`,
+      { redirect: "error" },
+    );
+    if (!response.ok) return null;
+    const body = await response.json();
+    return body && typeof body === "object"
+      ? { document: body.document ?? body }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Key-transport discipline for host-bound device keys (mirrors device.service): public OKP Ed25519 only. */
+function validateDeviceKey(publicKeyJwk) {
+  if (!publicKeyJwk || typeof publicKeyJwk !== "object") {
+    throw typed("E_KEY_TYPE_REJECTED", "device publicKeyJwk is required");
+  }
+  if ("d" in publicKeyJwk) {
+    throw typed(
+      "E_PRIVATE_KEY_REJECTED",
+      "device keys transport as public OKP JWKs — private key material is never accepted at the hub",
+    );
+  }
+  if (publicKeyJwk.kty !== "OKP" || publicKeyJwk.crv !== "Ed25519") {
+    throw typed("E_KEY_TYPE_REJECTED", "device keys must be OKP Ed25519 public JWKs");
+  }
+  return publicKeyJwk;
+}
+
 export class AccountService {
   /**
-   * @param {import("@porchlight/shared").StoreLike["collection"]} accounts
-   *        Identity-owned `accounts` collection handle.
+   * @param {object} deps
+   * @param {import("@porchlight/shared").CollectionLike} deps.identities
+   * @param {import("./did.service.js").DidService} deps.didService
+   * @param {import("@porchlight/shared").CollectionLike} deps.deviceRegistrations
+   * @param {(sourceHubUrl: string, did: string) => Promise<{document: object} | null>} [deps.transport]
+   *        Injectable for deterministic tests; defaults to no-redirect fetch.
+   * @param {() => string | null} [deps.hubUrlFn] hub URL provider for DID-document endpoints.
    */
-  constructor(accounts) {
-    this.accounts = accounts;
-    this.models = identityModels;
+  constructor({ identities, didService, deviceRegistrations, transport = null, hubUrlFn = null }) {
+    this.identities = identities;
+    this.didService = didService;
+    this.deviceRegistrations = deviceRegistrations;
+    this.transport = transport ?? defaultTransport;
+    this.hubUrlFn = hubUrlFn;
   }
 
-  /** Whether any hub account exists (drives the first-account/adoption offer). */
+  /** Whether any identity exists on this hub (drives the bootstrap offer). */
   async hasAccount() {
-    return (await this.accounts.findOne({})) !== null;
+    return (await this.identities.findOne({})) !== null;
   }
 
+  /** The account row driving the bootstrap page (first identity or null). */
   async get() {
-    return this.accounts.findOne({});
+    return this.identities.findOne({});
   }
 
-  /**
-   * Create the first owner account. Idempotent at the bootstrap level: an
-   * existing account is returned with created:false instead of a conflict.
-   */
-  async createFirstAccount({ email, displayName } = {}) {
-    const existing = await this.accounts.findOne({});
-    if (existing) return { created: false, account: existing };
-    const account = {
-      _id: `acct_${crypto.randomUUID()}`,
-      displayName: displayName ?? "Owner",
-      email: email ?? null,
-      kind: "owner",
-      adoptedIdentity: null,
+  async putDocument(did) {
+    return this.didService.putDocument(did, { hubUrlFn: this.hubUrlFn });
+  }
+
+  /** Create a first-account registration row directly (same shape as device.service). */
+  async bindDevice(did, { deviceId, label = null, publicKeyJwk, createdBy }) {
+    validateDeviceKey(publicKeyJwk);
+    if (!deviceId) {
+      throw typed("E_DEVICE_KEY_REQUIRED", "deviceId and publicKeyJwk are required to bind a device");
+    }
+    const registration = {
+      _id: `reg_${randomUUID()}`,
+      did,
+      deviceId,
+      label,
+      publicKeyJwk,
+      createdBy,
+      status: "active",
+      revokedAt: null,
       createdAt: new Date().toISOString(),
     };
-    await this.accounts.insertOne(account);
-    return { created: true, account };
+    await this.deviceRegistrations.insertOne(registration);
+    return { ...registration };
   }
 
   /**
-   * Adopt an identity the owner already holds on another porchlight hub.
-   * Offered by the bootstrap flow alongside first-account creation; refused
-   * with a typed reason when an owner account already exists.
+   * Owner bootstrap (ac-1): mint the identity + DID document and bind the
+   * device's own key. The bootstrap gate is one `kind:"owner"` account max —
+   * an existing owner is returned with `created:false`. The device key (and
+   * only the public half) binds at setup: a missing or incomplete device →
+   * E_DEVICE_KEY_REQUIRED; any private (`d`) field → E_PRIVATE_KEY_REJECTED.
    */
-  async adoptIdentity({ sourceHubUrl, externalIdentityId, displayName } = {}) {
-    if (!sourceHubUrl || !externalIdentityId) {
-      const error = new Error("sourceHubUrl and externalIdentityId required");
-      error.code = "E_ADOPTION_FIELDS_REQUIRED";
-      throw error;
+  async createFirstAccount({ displayName, email = null, device = null } = {}) {
+    if (!displayName) {
+      throw typed("E_DISPLAY_NAME_REQUIRED", "displayName is required");
     }
-    const existing = await this.accounts.findOne({});
-    if (existing) {
-      if (existing.kind === "adopted") return { adopted: false, alreadyAdopted: true, account: existing };
-      const error = new Error("An owner account already exists on this hub; adoption applies only before first-account creation");
-      error.code = "E_OWNER_ACCOUNT_EXISTS";
-      throw error;
+    const ownerGate = await this.identities.findOne({ kind: "owner" });
+    if (ownerGate) return { created: false, account: { ...ownerGate } };
+
+    if (!device || !device.deviceId || !device.publicKeyJwk) {
+      throw typed(
+        "E_DEVICE_KEY_REQUIRED",
+        "the first account requires a device binding (deviceId and publicKeyJwk)",
+      );
     }
-    const account = {
-      _id: `acct_${crypto.randomUUID()}`,
-      displayName: displayName ?? externalIdentityId,
-      email: null,
+    validateDeviceKey(device.publicKeyJwk);
+
+    const identity = await this.didService.createIdentity({
+      actorType: "human",
+      displayName,
+      email,
+    });
+    await this.identities.updateOne(
+      { _id: identity._id },
+      { $set: { kind: "owner" } },
+    );
+    const account = await this.identities.findOne({ _id: identity._id });
+
+    const didDocument = await this.putDocument(identity.did);
+    const registration = await this.bindDevice(identity.did, {
+      deviceId: device.deviceId,
+      label: device.label ?? null,
+      publicKeyJwk: device.publicKeyJwk,
+      createdBy: "first-account",
+    });
+    return { created: true, account, didDocument, registration };
+  }
+
+  /**
+   * Agent identity (ac-2): same account records, `actorType:"agent"` — the
+   * host mints its own key and binds it. Agents are separate identities
+   * minted freely: no single-owner gate applies.
+   */
+  async createAgentIdentity({ displayName, device }) {
+    if (!displayName) {
+      throw typed("E_DISPLAY_NAME_REQUIRED", "displayName is required");
+    }
+    if (!device || !device.deviceId || !device.publicKeyJwk) {
+      throw typed(
+        "E_DEVICE_KEY_REQUIRED",
+        "an agent identity requires its host-bound device key (deviceId and publicKeyJwk)",
+      );
+    }
+    const identity = await this.didService.createIdentity({ actorType: "agent", displayName });
+    const didDocument = await this.putDocument(identity.did);
+    const registration = await this.bindDevice(identity.did, {
+      deviceId: device.deviceId,
+      label: device.label ?? null,
+      publicKeyJwk: device.publicKeyJwk,
+      createdBy: "agent",
+    });
+    const account = await this.identities.findOne({ _id: identity._id });
+    return { created: true, account, didDocument, registration };
+  }
+
+  /**
+   * Adopt, onto this second hub, an identity the owner already holds at the
+   * home hub (ac-3). Verification rides the transport: the DID must resolve
+   * at its home hub (E_REMOTE_IDENTITY_NOT_FOUND when not). The account row
+   * stored here is a REFERENCE — the remote identity record, keys and profile
+   * are never copied; this hub stores only where the identity lives.
+   * Idempotent on (sourceHubUrl, did); one-owner bootstrap gate intact
+   * (E_OWNER_ACCOUNT_EXISTS).
+   */
+  async adoptIdentity({ sourceHubUrl, did, displayName = null } = {}) {
+    if (!sourceHubUrl || !did) {
+      throw typed("E_ADOPTION_FIELDS_REQUIRED", "sourceHubUrl and did are required");
+    }
+    const ownerGate = await this.identities.findOne({ kind: "owner" });
+    if (ownerGate) {
+      throw typed(
+        "E_OWNER_ACCOUNT_EXISTS",
+        "an owner account already exists on this hub; adoption applies only before first-account creation",
+      );
+    }
+    const existing = (await this.identities.find({ kind: "adopted" })).find(
+      (row) =>
+        row.identityRef?.did === did &&
+        row.identityRef?.sourceHubUrl === sourceHubUrl,
+    );
+    if (existing) return { adopted: false, alreadyAdopted: true, account: { ...existing } };
+
+    const remote = await this.transport(sourceHubUrl, did);
+    if (!remote || !remote.document) {
+      throw typed(
+        "E_REMOTE_IDENTITY_NOT_FOUND",
+        `the DID ${did} does not resolve at the source hub ${sourceHubUrl}`,
+      );
+    }
+
+    const row = {
+      _id: `ident_${randomUUID()}`,
+      did,
       kind: "adopted",
-      adoptedIdentity: {
-        sourceHubUrl: String(sourceHubUrl),
-        externalId: String(externalIdentityId),
-      },
+      identityRef: { did, sourceHubUrl: String(sourceHubUrl) },
+      adoptedIdentity: { sourceHubUrl: String(sourceHubUrl), did },
+      actorType: "human",
+      displayName: displayName ?? did,
+      email: null,
+      handle: null,
+      profile: {},
+      homingStatus: "home",
+      migratedToIssuer: null,
       createdAt: new Date().toISOString(),
     };
-    await this.accounts.insertOne(account);
-    return { adopted: true, alreadyAdopted: false, account };
+    await this.identities.insertOne(row);
+    return { adopted: true, alreadyAdopted: false, account: { ...row } };
+  }
+
+  /** Thin pass-through for controller wiring (DID stability: handles change, DIDs don't). */
+  setHandle(args) {
+    return this.didService.setHandle(args);
+  }
+
+  /** Update the identity's profile fields (profile data lives on the account row). */
+  async recordProfile({ did, displayName = undefined, profile = undefined }) {
+    const row = await this.identities.findOne({ did });
+    if (!row) {
+      throw typed("E_IDENTITY_NOT_FOUND", `no identity for ${did}`);
+    }
+    const $set = {};
+    if (displayName !== undefined) $set.displayName = displayName;
+    if (profile !== undefined) $set.profile = profile;
+    if (Object.keys($set).length > 0) {
+      await this.identities.updateOne({ did }, { $set });
+    }
+    return (await this.identities.findOne({ did }));
   }
 }
 

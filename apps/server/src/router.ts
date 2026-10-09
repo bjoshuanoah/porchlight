@@ -1,6 +1,6 @@
 import express, { Router } from "express";
 import { createSystemRouter } from "./routes/system.routes.js";
-import { createIdentityRouter } from "@porchlight/identity";
+import { assembleIdentityModule } from "@porchlight/identity";
 import { createSocialRouter } from "@porchlight/social";
 import { bootstrapPage } from "./bootstrap.page.js";
 import { loadConfig } from "@porchlight/shared";
@@ -31,7 +31,7 @@ const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
  * module routers so bootstrap progress is recorded without any module
  * depending on the system layer.
  */
-export function createServerRouter(options: ServerOptions): Router {
+export function createServerRouter(options: ServerOptions): { api: Router; wellKnown: Router | null } {
   const router: Router = Router();
   // The tunnel URL is captured by the supervisor after the server booted, so
   // health/bootstrap surfaces re-read the runtime config instead of holding
@@ -44,13 +44,20 @@ export function createServerRouter(options: ServerOptions): Router {
   };
   const hub = new HealthService(options.readiness ?? DOWN_PROBES, options.config.mode, hubUrl);
   router.use("/", createSystemRouter(hub, options.bootstrap));
+  let wellKnown: Router | null = null;
   if (options.store && options.config.mode.identityServingEnabled) {
-    router.use("/identity", createIdentityRouter({ store: options.store, ledger }));
+    // The identity module assembles its own route → controller → service →
+    // model path at its published entry; the server performs no domain logic.
+    // Standards discovery surfaces (.well-known/*) mount at the host root, so
+    // the app factory mounts them outside the /api prefix.
+    const identity = assembleIdentityModule(options.store, { hubUrl, ledger });
+    router.use("/identity", identity.api);
+    wellKnown = identity.wellKnown;
   }
   if (options.store && options.config.mode.socialServingEnabled) {
     router.use("/social", createSocialRouter({ store: options.store, ledger }));
   }
-  return router;
+  return { api: router, wellKnown };
 }
 
 function readTunnelUrl(options: ServerOptions): () => string | null {
@@ -64,7 +71,12 @@ function readTunnelUrl(options: ServerOptions): () => string | null {
 export function createServer(options: ServerOptions) {
   const app = express();
   app.use(express.json());
-  app.use("/api", createServerRouter(options));
+  const routers = createServerRouter(options);
+  if (routers.wellKnown) {
+    // RFC-style discovery paths live at the host root, not under /api.
+    app.use("/", routers.wellKnown);
+  }
+  app.use("/api", routers.api);
   app.get("/bootstrap", (_req, res) => {
     res.type("html").send(bootstrapPage());
   });

@@ -1,14 +1,29 @@
 declare module "@porchlight/identity" {
-  export function createIdentityRouter(options?: {
-    store?: { collection(name: string): unknown };
-    ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null };
-  }): import("express").Router;
-  export class AccountService {
-    constructor(accounts: unknown);
-    get(): Promise<unknown>;
-    hasAccount(): Promise<boolean>;
-    createFirstAccount(options?: { email?: string | null; displayName?: string | null }): Promise<{ created: boolean; account: { _id: string; kind: string; [key: string]: unknown } }>;
-    adoptIdentity(options: { sourceHubUrl?: string; externalIdentityId?: string; displayName?: string }): Promise<{ adopted: boolean; alreadyAdopted?: boolean; account?: { _id: string; kind: string; adoptedIdentity: { sourceHubUrl: string; externalId: string }; [key: string]: unknown } }>;
+  interface IdentityModule {
+    api: import("express").Router;
+    wellKnown: import("express").Router;
+    controllers: unknown;
+    signing: unknown;
+    didService: unknown;
+    accountService: unknown;
+    authService: unknown;
+    deviceService: unknown;
+    webfingerService: unknown;
+    trustService: unknown;
+    migrationService: unknown;
+  }
+  export function assembleIdentityModule(
+    store: { collection(name: string): unknown },
+    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null } },
+  ): IdentityModule;
+  export function createWellKnownRouter(wellKnownController: unknown): import("express").Router;
+  export class TrustService {
+    /** Receiving-network verification: pinned issuer, fixed EdDSA, fail-closed kid set. */
+    verifyMemberToken(
+      token: string,
+      options: { pinnedIssuer: string; audience: string; nonce?: string | null; pinnedKids?: string[]; transport?: unknown },
+    ): Promise<{ did: string; claims: Record<string, unknown> }>;
+    verifyHandoff(token: string, options: { oldIssuer: string; transport?: unknown }): Promise<{ header: unknown; payload: Record<string, unknown> }>;
   }
 }
 
