@@ -65,7 +65,9 @@ const errors = [];
 for (const moduleDir of MODULES) {
   for (const { file, dir } of collectModuleContexts(moduleDir)) {
     const source = readFileSync(file, "utf8");
-    const re = /from\s+['"]([^'"]+)['"]/g;
+    // Cover every import form: `import x from "..."` / `export ... from "..."`,
+    // side-effect `import "..."` (no from clause), and dynamic `import("...")`.
+    const re = /(?:from\s+|\bimport\s+|\bimport\(\s*)['"]([^'"]+)['"]/g;
     let match;
     while ((match = re.exec(source))) {
       const specifier = match[1];
