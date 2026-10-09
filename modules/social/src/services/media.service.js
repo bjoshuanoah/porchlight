@@ -586,7 +586,7 @@ export class MediaService {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", MESSAGES.E_MUST_SIGN_IN);
     }
-    const perimeter = await this.membership.verifyAccessToken(accessToken);
+    const perimeter = await this.membership.verifyAccessToken(accessToken, { surface: "media" });
     if (!perimeter) {
       throw typedError("E_NOT_PERMITTED", MESSAGES.E_NOT_PERMITTED);
     }

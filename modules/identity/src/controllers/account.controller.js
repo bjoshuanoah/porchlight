@@ -1,3 +1,5 @@
+import { requireSessionOr401 } from "../util/session-guard.js";
+
 /**
  * Account controller: transport only. Bootstrap first-account creation,
  * second-hub adoption, handle reassignment — every decision lives in
@@ -12,23 +14,18 @@ export class AccountController {
    * @param {AccountService} accountService
    * @param {import("authService").AuthService} authService
    * @param {{ record: (step: string, detail?: object) => Promise<void> }} [ledger]
+   * @param {((line: string) => void) | null} [log] - auth-failure capture sink (PORCH-019).
    */
-  constructor(accountService, authService, ledger) {
+  constructor(accountService, authService, ledger, log = null) {
     this.accountService = accountService;
     this.authService = authService;
     this.ledger = ledger ?? { record: async () => {} };
+    this.log = log;
   }
 
   /** Resolve the Bearer access token to a session identity or fail closed (401). */
   async requireSession(req, res) {
-    const header = req.headers.authorization ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
-    const identity = token ? await this.authService.verifyAccessToken(token) : null;
-    if (!identity) {
-      res.status(401).json({ error: "active session required", code: "E_SESSION_REQUIRED" });
-      return null;
-    }
-    return identity;
+    return requireSessionOr401({ req, res, authService: this.authService, log: this.log });
   }
 
   /** GET /account — bootstrap state for the first-account offer (adoption is flag-hidden, PORCH-026). */

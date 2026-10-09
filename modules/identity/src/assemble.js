@@ -22,9 +22,11 @@ import { createIdentityRouter, createWellKnownRouter } from "./routes.js";
  * identity by DID only and never imports this file's internals.
  *
  * @param {import("@porchlight/shared").StoreLike} store
- * @param {{ hubUrl?: () => string|null, ledger?: { record: (step: string, detail?: object) => Promise<void> }, adoptionEnabled?: boolean }} [options]
+ * @param {{ hubUrl?: () => string|null, ledger?: { record: (step: string, detail?: object) => Promise<void> }, adoptionEnabled?: boolean, log?: ((line: string) => void) | null }} [options]
  *        `adoptionEnabled` (PORCH-026) re-enters second-hub identity
  *        adoption: flag-hidden by default (V1 build offers creation only).
+ *        `log` (PORCH-019) is the auth-failure capture sink; defaults to
+ *        console.log (the hub supervisor pipes it into logs/hub.log).
  */
 export function assembleIdentityModule(store, options = {}) {
   const hubUrlFn = options.hubUrl ?? (() => null);
@@ -68,12 +70,12 @@ export function assembleIdentityModule(store, options = {}) {
   });
 
   const controllers = {
-    auth: new AuthController(authService, didService),
-    account: new AccountController(accountService, authService, ledger),
-    device: new DeviceController(deviceService, authService),
+    auth: new AuthController(authService, didService, options.log ?? null),
+    account: new AccountController(accountService, authService, ledger, options.log ?? null),
+    device: new DeviceController(deviceService, authService, options.log ?? null),
     did: new DidController(didService),
-    oidc: new OidcController(trustService, authService),
-    migration: new MigrationController(migrationService, authService),
+    oidc: new OidcController(trustService, authService, options.log ?? null),
+    migration: new MigrationController(migrationService, authService, options.log ?? null),
     wellKnown: new WellKnownController({ webfingerService, signing, hubUrlFn }),
   };
 

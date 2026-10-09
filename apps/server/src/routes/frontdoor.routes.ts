@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logAuthFailure } from "@porchlight/shared";
 
 /**
  * Front-door composition routes (PORCH-010). Transport-level composition
@@ -66,25 +67,32 @@ interface FrontDoorDeps {
   membership: {
     verifyAccessToken(token: string, options?: { networkId?: string; now?: () => Date }): Promise<{ membership: Record<string, unknown>; session: Record<string, unknown> } | null>;
     activeMembership(options: { networkId: string; did: string }): Promise<Record<string, unknown> | null>;
+    /** PORCH-019: failing-step diagnosis for the 401 capture. */
+    diagnoseAccessToken?(token: string, options?: { networkId?: string | null }): Promise<Record<string, unknown> | null>;
   };
   audit(record: { networkId: string | null; did?: string | null; action: string; detail?: object }): Promise<unknown>;
   /** Identity account + device services (identity birth, continuity). */
   accountService: FrontDoorAccountService;
   deviceService: FrontDoorDeviceService;
   hubUrl: () => string | null;
+  /** PORCH-019: auth-failure capture sink; defaults to console.log. */
+  log?: ((line: string) => void) | null;
 }
 
 /** Owner console's current-network row shape (network service view). */
 type NetworkRow = { _id: string; name?: string | null; hubUrl?: string | null } | null;
 
-export function createFrontDoorRouter({ invites, networks, membership, audit, accountService, deviceService, hubUrl }: FrontDoorDeps): Router {
+export function createFrontDoorRouter({ invites, networks, membership, audit, accountService, deviceService, hubUrl, log }: FrontDoorDeps): Router {
   const router = Router();
 
   const networkOf = async (): Promise<NetworkRow> =>
     (await networks.get()) as { _id: string; name?: string | null; hubUrl?: string | null } | null;
 
   /** Owner perimeter, shaped identically to the social console's guard. */
-  async function requireOwner(req: { headers: { authorization?: string } }, res: { status(n: number): { json(b: object): unknown } }): Promise<{ membership: Record<string, unknown> } | null> {
+  async function requireOwner(
+    req: { headers: { authorization?: string }; method?: string; originalUrl?: string; url?: string },
+    res: { status(n: number): { json(b: object): unknown } },
+  ): Promise<{ membership: Record<string, unknown> } | null> {
     const header = req.headers.authorization ?? "";
     const accessToken = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
     const network = await networkOf();
@@ -93,6 +101,19 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
         ? await membership.verifyAccessToken(accessToken, { networkId: network._id })
         : null;
     if (!perimeter) {
+      // PORCH-019: captured with the failing step (membership-plane
+      // diagnosis) and the session/device identity state — never tokens.
+      const diagnosis =
+        (await membership.diagnoseAccessToken?.(accessToken ?? "", { networkId: network?._id ?? null })) ??
+        { reason: accessToken ? "unknown_token" : "missing_token" };
+      logAuthFailure(
+        {
+          endpoint: `${req.method ?? "UNKNOWN"} ${req.originalUrl ?? req.url ?? "unknown"}`,
+          code: "E_SESSION_REQUIRED",
+          ...diagnosis,
+        },
+        log ?? undefined,
+      );
       res.status(401).json({ error: "Open your membership before using the owner actions.", code: "E_SESSION_REQUIRED" });
       return null;
     }

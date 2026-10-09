@@ -24,6 +24,12 @@ export interface ServerOptions {
   version?: string | null;
   /** Built SPA directory; defaults to the files copied into the published server package. */
   webRoot?: string;
+  /**
+   * Auth-failure capture sink (PORCH-019), passed to the module assembles
+   * and the front door; defaults to console.log (the supervisor pipes the
+   * hub child's stdout into logs/hub.log).
+   */
+  log?: ((line: string) => void) | null;
 }
 
 const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
@@ -121,6 +127,8 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       // PORCH-026: second-hub identity adoption is flag-hidden (default off);
       // the runtime config flip re-enables the unchanged architecture.
       adoptionEnabled: options.config.identity.adoptionEnabled,
+      // PORCH-019: 401 auth-failure capture.
+      log: options.log ?? null,
     });
     identityModule = identity;
     router.use("/identity", identity.api);
@@ -145,6 +153,8 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
       registeredDeviceKey: identityAuth ? (did: string, deviceId: string) => identityAuth!.activeDeviceRegistration(did, deviceId) : undefined,
       media: { mediaRoot: join(options.bootstrap.configDir, "media") },
+      // PORCH-019: 401 auth-failure capture.
+      log: options.log ?? null,
     });
     router.use("/social", socialModule.api);
   }
@@ -160,6 +170,8 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       accountService: identityModule.accountService as FrontDoorAccountService,
       deviceService: identityModule.deviceService as FrontDoorDeviceService,
       hubUrl,
+      // PORCH-019: 401 auth-failure capture.
+      log: options.log ?? null,
     });
     router.use("/", frontDoor);
   }

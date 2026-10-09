@@ -63,7 +63,7 @@ export class ExportService {
     if (!signature) {
       throw typedError("E_SIGNATURE_REQUIRED", MESSAGES.E_SIGNATURE_REQUIRED);
     }
-    const perimeter = await this.membership.verifyAccessToken(accessToken);
+    const perimeter = await this.membership.verifyAccessToken(accessToken, { surface: "export" });
     if (!perimeter) {
       throw typedError("E_NOT_PERMITTED", MESSAGES.E_NOT_PERMITTED);
     }

@@ -349,7 +349,7 @@ export class PostService {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", POST_MESSAGES.E_MUST_SIGN_IN);
     }
-    return this.membership.verifyAccessToken(accessToken).then((perimeter) => {
+    return this.membership.verifyAccessToken(accessToken, { surface: "post" }).then((perimeter) => {
       if (!perimeter) {
         // The membership token IS the perimeter: no resolve, no write, no
         // read. It is scoped to exactly one network, so its network is the

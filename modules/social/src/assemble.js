@@ -1,3 +1,4 @@
+import { logAuthFailure } from "@porchlight/shared";
 import { NetworkService } from "./services/network.service.js";
 import { InviteService } from "./services/invite.service.js";
 import { MembershipService } from "./services/membership.service.js";
@@ -44,6 +45,9 @@ import { createSocialRouter } from "./routes.js";
  *   },
  *   verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>,
  *   registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null>,
+ *   log?: ((line: string) => void) | null,
+ *     Auth-failure capture sink (PORCH-019); defaults to console.log (the
+ *     hub supervisor pipes it into logs/hub.log).
  *   rankingConfig?: object,
  *   media?: {
  *     mediaRoot?: string,
@@ -89,6 +93,9 @@ export function assembleSocialModule(store, options = {}) {
     invites: inviteService,
     verifyMemberIdToken: options.verifyMemberIdToken ?? (async () => null),
     registeredDeviceKey: options.registeredDeviceKey ?? null,
+    // PORCH-019: member surfaces' 401 capture rides the shared sink
+    // (default console.log — the supervisor pipes it into logs/hub.log).
+    authFailureSink: (event) => logAuthFailure(event, options.log ?? undefined),
     networks,
     audit,
   });
@@ -175,7 +182,7 @@ export function assembleSocialModule(store, options = {}) {
     bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger),
     content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService }),
     feed: new FeedController({ feed: feedService }),
-    membership: new MembershipController(membershipService, networkService),
+    membership: new MembershipController(membershipService, networkService, options.log ?? null),
     console: new ConsoleController({
       networks: networkService,
       invites: inviteService,
@@ -187,6 +194,7 @@ export function assembleSocialModule(store, options = {}) {
       media: mediaService,
       system: options.system ?? null,
       hubUrl: options.hubUrl ?? null,
+      log: options.log ?? null,
     }),
     media: new MediaController({ media: mediaService, export: exportService }),
     albums: new AlbumController({ albums: albumService }),

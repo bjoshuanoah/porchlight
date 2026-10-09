@@ -359,7 +359,7 @@ export class AlbumService {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", ALBUM_MESSAGES.E_MUST_SIGN_IN);
     }
-    return this.membership.verifyAccessToken(accessToken).then((perimeter) => {
+    return this.membership.verifyAccessToken(accessToken, { surface: "album" }).then((perimeter) => {
       if (!perimeter) {
         throw typedError("E_NOT_PERMITTED", ALBUM_MESSAGES.E_NOT_PERMITTED);
       }

@@ -229,7 +229,7 @@ export class InteractionService {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", "Sign in to your membership before writing content.");
     }
-    const perimeter = await this.membership.verifyAccessToken(accessToken);
+    const perimeter = await this.membership.verifyAccessToken(accessToken, { surface: "interaction" });
     if (!perimeter) {
       // The membership token is scoped to exactly one network; a request
       // without a resolvable perimeter has no origin to touch.

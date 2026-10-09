@@ -62,3 +62,8 @@ export interface StoreLike {
 }
 
 export declare function createMemoryStore(): StoreLike;
+
+/** PORCH-019: one captured 401's diagnosis payload. Token material never rides it. */
+export type AuthFailureEvent = Record<string, unknown>;
+
+export declare function logAuthFailure(event: AuthFailureEvent, log?: ((line: string) => void) | null): void;

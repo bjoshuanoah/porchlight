@@ -96,7 +96,7 @@ export class NotificationService {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", "Sign in to your membership to see your notifications.");
     }
-    const perimeter = await this.membership.verifyAccessToken(accessToken);
+    const perimeter = await this.membership.verifyAccessToken(accessToken, { surface: "notification.inbox" });
     if (!perimeter) {
       throw typedError("E_NOT_PERMITTED", "This action is not available to you in this network.");
     }
@@ -130,7 +130,7 @@ export class NotificationService {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", "Sign in to your membership to mention someone.");
     }
-    const perimeter = await this.membership.verifyAccessToken(accessToken);
+    const perimeter = await this.membership.verifyAccessToken(accessToken, { surface: "notification.suggest" });
     if (!perimeter) {
       throw typedError("E_NOT_PERMITTED", "This action is not available to you in this network.");
     }
