@@ -1,4 +1,10 @@
+<div align="center">
+
+<img src="apps/web/brand/lamp-logo-original.png" alt="Porchlight lamp logo" width="240">
+
 # Porchlight
+
+</div>
 
 Porchlight is a private social hub for a family: photo sharing, a timeline, albums, comments, and reactions, running on your own machine and reachable from your own web or mobile web browser by approved members. No algorithmic feed, no advertising, no analytics, no content on anyone else's servers.
 
