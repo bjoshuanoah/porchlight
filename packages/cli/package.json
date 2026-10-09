@@ -1,7 +1,7 @@
 {
   "name": "porchlight",
   "version": "0.1.0",
-  "description": "Porchlight CLI — the npm global install surface and entrypoint. Domain behavior (start, bootstrap) lands with PORCH-003 bring-up.",
+  "description": "Porchlight CLI \u2014 the npm global install surface and the hub's one-command bring-up: setup, daemon supervision, tunnel, remote bootstrap.",
   "license": "MIT",
   "author": "Brian Noah",
   "type": "module",
@@ -12,8 +12,23 @@
     "porchlight": "bin/porchlight.mjs"
   },
   "files": [
-    "bin"
+    "bin",
+    "src"
   ],
+  "bundleDependencies": [
+    "@porchlight/server",
+    "@porchlight/shared",
+    "mongodb",
+    "redis",
+    "mongodb-memory-server"
+  ],
+  "dependencies": {
+    "@porchlight/server": "0.1.0",
+    "@porchlight/shared": "0.1.0",
+    "mongodb": "^6.10.0",
+    "redis": "^4.7.0",
+    "mongodb-memory-server": "^11.3.0"
+  },
   "scripts": {
     "test": "node --test 'test/**/*.test.js'",
     "lint": "eslint ."

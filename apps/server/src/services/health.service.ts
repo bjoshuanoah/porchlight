@@ -1,21 +1,51 @@
-import { healthModel } from "../models/health.model.js";
+import type { ProbeResult, Probe } from "../dependencies.js";
+
+export interface DepsHealth {
+  mongo: ProbeResult;
+  redis: ProbeResult;
+}
 
 export interface HealthDoc {
-  status: string;
+  status: "ok" | "degraded";
   service: string;
+  deps: DepsHealth;
+  mode: { deploymentMode: string; socialServingEnabled: boolean; identityServingEnabled: boolean };
+  hubUrl: string | null;
 }
 
 /**
- * Health service — the system module's model owner. This completes the
- * vertical slice: route -> controller -> service -> model. Health is a thin
- * system check, so the model is a trivial status document, but the layering
- * is exactly what every domain module mirrors.
+ * Health service — the system module. Reports live dependency probes (Mongo,
+ * Redis) plus the phase-configuration mode and the tunnel-bound hub URL the
+ * owner dashboard consumes. Zero external telemetry: probes are local-only.
  */
 export class HealthService {
-  readonly models = healthModel;
+  private readonly probes: { mongo: Probe; redis: Probe };
+  private readonly phase: { deploymentMode: string; socialServingEnabled: boolean; identityServingEnabled: boolean };
+  private readonly hubUrl: () => string | null;
 
-  getHealth(): HealthDoc {
-    return { status: "ok", service: "porchlight-server" };
+  constructor(
+    probes: { mongo: Probe; redis: Probe },
+    phase: { deploymentMode: string; socialServingEnabled: boolean; identityServingEnabled: boolean },
+    hubUrl: () => string | null,
+  ) {
+    this.probes = probes;
+    this.phase = phase;
+    this.hubUrl = hubUrl;
+  }
+
+  async getHealth(): Promise<HealthDoc> {
+    const deps = { mongo: await this.probes.mongo(), redis: await this.probes.redis() };
+    return {
+      status: deps.mongo === "ok" && deps.redis === "ok" ? "ok" : "degraded",
+      service: "porchlight-server",
+      deps,
+      mode: {
+        deploymentMode: this.phase.deploymentMode,
+        socialServingEnabled: this.phase.socialServingEnabled,
+        identityServingEnabled: this.phase.identityServingEnabled,
+      },
+      hubUrl: this.hubUrl(),
+    };
   }
 }
 

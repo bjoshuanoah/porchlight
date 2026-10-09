@@ -30,6 +30,7 @@
     "directory": "modules/social"
   },
   "dependencies": {
+    "@porchlight/shared": "0.1.0",
     "express": "^4.19.2"
   }
 }

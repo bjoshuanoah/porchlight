@@ -25,7 +25,7 @@ const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
 
 // Workspace entries in the lock have no `resolved`/`link`; anything else is a registry package.
 const workspaceDirs = Object.entries(lock.packages)
-  .filter(([key, entry]) => entry.link === undefined && entry.resolved === undefined && entry.name !== undefined)
+  .filter(([_key, entry]) => entry.link === undefined && entry.resolved === undefined && entry.name !== undefined)
   .map(([key]) => (key === "" ? "." : key));
 if (workspaceDirs.length < 2) {
   process.stderr.write(`no workspace entries found in package-lock.json — aborting\n`);

@@ -59,9 +59,10 @@ jobs:
       tag: ${{ steps.env.outputs.tag }}
       version: ${{ steps.env.outputs.version }}
     env:
-      # Published packages, in dependency-tolerant order. @porchlight/server
-      # and @porchlight/web are private (never published).
-      PUBLISHED: "@porchlight/shared @porchlight/identity @porchlight/social porchlight"
+      # Published packages, in dependency-tolerant order. @porchlight/server is
+      # published since PORCH-003 (the global porchlight CLI carries the hub
+      # runtime in its install closure). @porchlight/web remains private.
+      PUBLISHED: "@porchlight/shared @porchlight/identity @porchlight/social @porchlight/server porchlight"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,6 +110,10 @@ jobs:
           for ws in $PUBLISHED; do
             npm pack -w "$ws" --pack-destination release-assets
           done
+          # The porchlight tarball must be self-contained (bundleDependencies +
+          # npm workspaces pack bug): build + verify it explicitly (PORCH-003).
+          rm release-assets/porchlight-*.tgz
+          node scripts/release/bundle-cli.mjs "$VERSION" --out release-assets
           (cd release-assets && shasum -a 256 -- *.tgz > SHA256SUMS)
           echo "Packed:" && ls -la release-assets
       - name: Sign SHA256SUMS (Sigstore keyless)
@@ -125,7 +130,13 @@ jobs:
             exit 1
           fi
           for ws in $PUBLISHED; do
-            npm publish --provenance --access public -w "$ws"
+            if [ "$ws" = "porchlight" ]; then
+              # porchlight publishes from the release asset: the tarball is
+              # self-contained (bundled runtime closure; see bundle-cli.mjs)
+              npm publish release-assets/porchlight-"$VERSION".tgz --provenance --access public
+            else
+              npm publish --provenance --access public -w "$ws"
+            fi
           done
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
