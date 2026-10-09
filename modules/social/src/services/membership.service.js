@@ -46,8 +46,12 @@ export class MembershipService {
    *   registration row for (did, deviceId)) — the session-key copy source
    *   for founder device enrollment. Resolves nothing identity-side here:
    *   possession was already proven when the identity session opened.
+   * @param {((event: Record<string, unknown>) => void) | null} [deps.authFailureSink]
+   *   PORCH-019 auth-failure capture: invoked when a member surface's
+   *   membership token fails verification (failing step + session/device/
+   *   membership identity state; never token material).
    */
-  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey }) {
+  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey, authFailureSink }) {
     this.memberships = memberships;
     this.membershipSessions = membershipSessions;
     this.deviceKeys = deviceKeys;
@@ -55,6 +59,7 @@ export class MembershipService {
     this.verifyMemberIdToken = verifyMemberIdToken ?? (async () => null);
     this.networks = networks ?? null;
     this.registeredDeviceKey = registeredDeviceKey ?? null;
+    this.authFailureSink = authFailureSink ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
   }
@@ -198,20 +203,103 @@ export class MembershipService {
   }
 
   /**
+   * Resolve WHY a refresh token failed (PORCH-019 ac-1): the failing step in
+   * the renewal path, for the capture the session surfaces log. A refresh
+   * token that would rotate resolves null (nothing to diagnose).
+   * Reasons: missing_token | unknown_token | session_<status> |
+   * expired_refresh_token.
+   */
+  async diagnoseRefreshToken(refreshToken, now = () => new Date()) {
+    if (typeof refreshToken !== "string" || refreshToken.length === 0) return { reason: "missing_token" };
+    const session = await this.membershipSessions.findOne({ refreshTokenHash: sha256(refreshToken) });
+    if (!session) return { reason: "unknown_token" };
+    const state = {
+      did: session.did,
+      deviceId: session.deviceId,
+      sessionId: session._id,
+      sessionStatus: session.status,
+      networkId: session.networkId,
+      refreshExpiresAt: session.refreshExpiresAt,
+    };
+    if (session.status !== "active") return { reason: `session_${session.status}`, ...state };
+    if (new Date(session.refreshExpiresAt).getTime() <= now().getTime()) {
+      return { reason: "expired_refresh_token", ...state };
+    }
+    const membership = await this.memberships.findOne({ _id: session.membershipId });
+    if (!membership) return { reason: "membership_missing", ...state };
+    if (membership.state !== "active") {
+      return { reason: `membership_${membership.state}`, ...state, membershipState: membership.state };
+    }
+    return null;
+  }
+
+  /**
    * Membership-token verification. Opaque bearer token stored as a hash;
    * only an active session on an active membership inside its access window
    * resolves, and ALWAYS within exactly the network it was admitted to —
    * there is no membership token that spans networks.
+   *
+   * PORCH-019: caller surfaces pass `surface` (their domain surface name) —
+   * a token that fails here is captured via the auth-failure sink with the
+   * failing step and the session/device/membership identity state (never
+   * token material), so member read/write 401s land in the hub log too.
    */
-  async verifyAccessToken(accessToken, { networkId, now = () => new Date() } = {}) {
-    if (!accessToken) return null;
+  async verifyAccessToken(accessToken, { networkId, now = () => new Date(), surface = null } = {}) {
+    const resolution = await this.resolveAccessToken(accessToken, { networkId, now });
+    if (resolution.perimeter) return resolution.perimeter;
+    if (surface) {
+      this.authFailureSink?.({ endpoint: surface, code: "E_SESSION_REQUIRED", ...resolution.diagnosis });
+    }
+    return null;
+  }
+
+  /**
+   * Resolve WHY a membership access token failed (PORCH-019 ac-1): the
+   * failing step on the membership plane, for the auth-failure capture. A
+   * token that verifies resolves null (nothing to diagnose). Reasons:
+   * missing_token | unknown_token | session_<status> | expired_access_token |
+   * membership_missing | membership_<state> | network_mismatch.
+   */
+  diagnoseAccessToken(accessToken, { networkId, now = () => new Date() } = {}) {
+    return this.resolveAccessToken(accessToken, { networkId, now }).then(
+      (resolution) => resolution.diagnosis ?? null,
+    );
+  }
+
+  /**
+   * One pass over the membership session plane: the verified perimeter, or
+   * the failing-step diagnosis. Never token material.
+   * @private
+   */
+  async #resolve(accessToken, { networkId, now }) {
+    if (!accessToken) return { diagnosis: { reason: "missing_token" } };
     const session = await this.membershipSessions.findOne({ accessTokenHash: sha256(accessToken) });
-    if (!session || session.status !== "active") return null;
-    if (new Date(session.accessExpiresAt).getTime() <= now().getTime()) return null;
+    const state = session ? {
+      did: session.did,
+      deviceId: session.deviceId,
+      sessionId: session._id,
+      sessionStatus: session.status,
+      accessExpiresAt: session.accessExpiresAt,
+      networkId: session.networkId,
+    } : {};
+    if (!session) return { diagnosis: { reason: "unknown_token" } };
+    if (session.status !== "active") return { diagnosis: { reason: `session_${session.status}`, ...state } };
+    if (new Date(session.accessExpiresAt).getTime() <= now().getTime()) {
+      return { diagnosis: { reason: "expired_access_token", ...state } };
+    }
     const membership = await this.memberships.findOne({ _id: session.membershipId });
-    if (!membership || membership.state !== "active") return null;
-    if (networkId !== undefined && networkId !== null && session.networkId !== networkId) return null;
-    return { membership, session: { _id: session._id, deviceId: session.deviceId, did: session.did } };
+    if (!membership) return { diagnosis: { reason: "membership_missing", ...state } };
+    if (membership.state !== "active") {
+      return { diagnosis: { reason: `membership_${membership.state}`, ...state, membershipId: membership._id, membershipState: membership.state } };
+    }
+    if (networkId !== undefined && networkId !== null && session.networkId !== networkId) {
+      return { diagnosis: { reason: "network_mismatch", ...state, membershipId: membership._id, membershipState: membership.state } };
+    }
+    return { perimeter: { membership, session: { _id: session._id, deviceId: session.deviceId, did: session.did } } };
+  }
+
+  resolveAccessToken(accessToken, options = {}) {
+    return this.#resolve(accessToken, { now: () => new Date(), ...options });
   }
 
   /** Active membership row for a (networkId, did), or null. */

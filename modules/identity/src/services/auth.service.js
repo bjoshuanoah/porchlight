@@ -153,6 +153,52 @@ export class AuthService {
   }
 
   /**
+   * Resolve WHY an access token failed (PORCH-019 ac-1): the failing step in
+   * the session path, plus the session and device identity state, for the
+   * auth-failure capture the transport guards log. Token material never
+   * rides the result. A token that verifies resolves null (nothing to
+   * diagnose). Reasons: missing_token | unknown_token | expired_access_token |
+   * session_<status> (superseded, revoked, ...). registrationStatus is the
+   * (did, deviceId) device registration's current state, "none" if the row
+   * is gone.
+   */
+  async diagnoseAccessToken(accessToken, now = () => new Date()) {
+    const diagnosis = await this.#diagnoseSession(accessToken, now);
+    if (!diagnosis || !diagnosis.did) return diagnosis;
+    return { registrationStatus: await this.registrationStatusFor(diagnosis), ...diagnosis };
+  }
+
+  /**
+   * PORCH-019: the (did, deviceId) device registration's current state for a
+   * diagnosis line — the registration the session opened on; "none" when no
+   * row remains.
+   */
+  async registrationStatusFor({ did, deviceId }) {
+    if (!did) return "none";
+    const registration = await this.deviceRegistrations.findOne({ did, deviceId });
+    return registration?.status ?? "none";
+  }
+
+  /** @private the session-plane pass (no registration lookup yet). */
+  async #diagnoseSession(accessToken, now) {
+    if (!accessToken) return { reason: "missing_token" };
+    const session = await this.sessions.findOne({ accessTokenHash: this.hash(accessToken) });
+    if (!session) return { reason: "unknown_token" };
+    const state = {
+      did: session.did,
+      deviceId: session.deviceId,
+      sessionId: session._id,
+      sessionStatus: session.status,
+      accessExpiresAt: session.accessExpiresAt,
+    };
+    if (session.status !== "active") return { reason: `session_${session.status}`, ...state };
+    if (new Date(session.accessExpiresAt).getTime() <= now().getTime()) {
+      return { reason: "expired_access_token", ...state };
+    }
+    return null;
+  }
+
+  /**
    * Rotate the access token off a still-valid refresh token. Boring choice:
    * new access only — the refresh hash stays until it expires.
    */

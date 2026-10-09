@@ -1,3 +1,5 @@
+import { logAuthFailure } from "@porchlight/shared";
+
 /**
  * Membership controller. Transport-specific: translates the join-link and
  * session surfaces between HTTP and the MembershipService; no domain logic.
@@ -7,10 +9,26 @@ export class MembershipController {
   /**
    * @param {import("../services/membership.service.js").MembershipService} membership
    * @param {import("../services/network.service.js").NetworkService} networks
+   * @param {((line: string) => void) | null} [log] - auth-failure capture sink (PORCH-019).
    */
-  constructor(membership, networks) {
+  constructor(membership, networks, log = null) {
     this.membership = membership;
     this.networks = networks;
+    this.log = log;
+  }
+
+  /** The failing-step capture for the renewal surfaces (PORCH-019). */
+  captureSessionFailure(req, error, extra = {}) {
+    logAuthFailure(
+      {
+        endpoint: `${req.method ?? "UNKNOWN"} ${req.originalUrl ?? req.url ?? "unknown"}`,
+        code: error.code ?? "E_INTERNAL",
+        reason: error.reason ?? error.code ?? "unknown",
+        detail: error.message,
+        ...extra,
+      },
+      this.log ?? undefined,
+    );
   }
 
   /**
@@ -58,6 +76,14 @@ export class MembershipController {
       const result = await this.membership.refresh({ refreshToken: req.body?.refreshToken });
       return res.json(result);
     } catch (error) {
+      if (error.code === "E_SESSION_REQUIRED") {
+        // PORCH-019: a renewal failing at a specific step (unknown token,
+        // inactive/expired session, inactive membership) — captured with the
+        // reason. The refresh-token diagnosis resolves the session row it
+        // claimed without logging token material.
+        const diagnosis = await this.membership.diagnoseRefreshToken?.(req.body?.refreshToken ?? null);
+        this.captureSessionFailure(req, error, { ...(diagnosis ?? {}) });
+      }
       return this.memberError(res, error);
     }
   };
@@ -76,6 +102,12 @@ export class MembershipController {
       });
       return res.status(201).json(result);
     } catch (error) {
+      if (error.code === "E_MUST_SIGN_IN") {
+        // PORCH-019: the re-credential failing because the device's identity
+        // token did not resolve (identity plane owns that step's diagnosis;
+        // social only records that it failed).
+        this.captureSessionFailure(req, error, { reason: "identity_token_unresolved", claimedDeviceId: req.body?.deviceId ?? null });
+      }
       return this.memberError(res, error);
     }
   };

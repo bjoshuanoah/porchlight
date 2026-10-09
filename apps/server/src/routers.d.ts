@@ -26,7 +26,7 @@ declare module "@porchlight/identity" {
   }
   export function assembleIdentityModule(
     store: { collection(name: string): unknown },
-    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean },
+    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null },
   ): IdentityModule;
   export function createWellKnownRouter(wellKnownController: unknown): import("express").Router;
   export class TrustService {
@@ -77,6 +77,8 @@ declare module "@porchlight/social" {
       };
       verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>;
       registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown> } | null>;
+      /** PORCH-019: auth-failure capture sink. */
+      log?: ((line: string) => void) | null;
       media?: {
         mediaRoot?: string;
         store?: {
@@ -150,7 +152,10 @@ declare module "@porchlight/social" {
       membershipSessionId: string;
     }>;
     refresh(options?: { refreshToken?: string; now?: () => Date }): Promise<{ accessToken: string; networkId: string; did: string }>;
-    verifyAccessToken(token: string, options?: { networkId?: string; now?: () => Date }): Promise<{ membership: Record<string, unknown>; session: Record<string, unknown> } | null>;
+    verifyAccessToken(token: string, options?: { networkId?: string; now?: () => Date; surface?: string | null }): Promise<{ membership: Record<string, unknown>; session: Record<string, unknown> } | null>;
+    /** PORCH-019: failing-step diagnosis for the 401 capture. */
+    diagnoseAccessToken(token: string, options?: { networkId?: string | null; now?: () => Date }): Promise<Record<string, unknown> | null>;
+    diagnoseRefreshToken(token: string, options?: { now?: () => Date }): Promise<Record<string, unknown> | null>;
     verifyMemberWrite(options: { networkId: string; did: string; deviceId: string; payload: unknown; signature: string }): Promise<{ verified: boolean }>;
     activeMembership(options: { networkId: string; did: string }): Promise<Record<string, unknown> | null>;
     restoreSession(options: { identityAccessToken: string; deviceId?: string | null }): Promise<{ did: string; sessions: Array<{ networkId: string; role: string; accessToken: string; refreshToken: string }> }>;

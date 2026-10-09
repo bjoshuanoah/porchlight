@@ -14,7 +14,28 @@ export function isPresent(value) {
   return value !== undefined && value !== null && value !== "";
 }
 
-export default { DOMAIN, isPresent };
+/**
+ * Auth-failure capture (PORCH-019). Every 401 writes ONE auditable line: the
+ * failing endpoint, the failing step resolved against the session plane
+ * (reason), and the session/device/membership identity state. Token material
+ * is NEVER included — tokens are stored as hashes and are never logged.
+ * The default sink is console.log: the hub supervisor pipes the hub child's
+ * stdout into $PORCHLIGHT_HOME/logs/hub.log, so captured failures persist
+ * beside the hub's other logs. Both domain modules call this so the 401
+ * evidence shape stays identical across the identity and membership planes.
+ *
+ * @param {Record<string, unknown>} event - {endpoint, reason, code} plus
+ *        whatever session/device identity state the caller resolved.
+ * @param {((line: string) => void) | null} [log] - sink override (tests);
+ *        defaults to console.log.
+ */
+export function logAuthFailure(event, log = null) {
+  const line = `[${new Date().toISOString()}] hub: auth-failure ${JSON.stringify(event)}`;
+  if (log) log(line);
+  else console.log(line);
+}
+
+export default { DOMAIN, isPresent, logAuthFailure };
 
 /**
  * Runtime-config schema version (phase-configuration architecture, Porchlight

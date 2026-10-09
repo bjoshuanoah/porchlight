@@ -1,4 +1,6 @@
 
+import { requireSessionOr401 } from "../util/session-guard.js";
+
 /**
  * Device-continuity controller: transport only. Device registrations
  * (per identity, keys transported as public halves only), self-serve pairing
@@ -9,21 +11,16 @@ export class DeviceController {
   /**
    * @param {import("deviceService").DeviceService} deviceService
    * @param {import("authService").AuthService} authService
+   * @param {((line: string) => void) | null} [log] - auth-failure capture sink (PORCH-019).
    */
-  constructor(deviceService, authService) {
+  constructor(deviceService, authService, log = null) {
     this.deviceService = deviceService;
     this.authService = authService;
+    this.log = log;
   }
 
   async requireSession(req, res) {
-    const header = req.headers.authorization ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
-    const identity = token ? await this.authService.verifyAccessToken(token) : null;
-    if (!identity) {
-      res.status(401).json({ error: "active session required", code: "E_SESSION_REQUIRED" });
-      return null;
-    }
-    return identity;
+    return requireSessionOr401({ req, res, authService: this.authService, log: this.log });
   }
 
   /** GET /devices?did= — registrations for an identity, revoked rows included. */

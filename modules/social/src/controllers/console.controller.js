@@ -5,6 +5,8 @@
  * guard status, retention sweep, and the member-action audit trail.
  * Transport-specific only — all domain logic lives in the services.
  */
+import { logAuthFailure } from "@porchlight/shared";
+
 export class ConsoleController {
   /**
    * @param {object} deps
@@ -24,8 +26,10 @@ export class ConsoleController {
    *   The hub's current public URL provider (read per call — never a stale
    *   copy, PORCH-017). Recorded on join links so a landing invite names the
    *   hub it was made for (PORCH-023).
+   * @param {((line: string) => void) | null} [deps.log]
+   *   Auth-failure capture sink (PORCH-019); defaults to console.log.
    */
-  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system, hubUrl }) {
+  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system, hubUrl, log }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
@@ -36,6 +40,7 @@ export class ConsoleController {
     this.media = media ?? null;
     this.system = system ?? null;
     this.hubUrl = typeof hubUrl === "function" ? hubUrl : null;
+    this.log = log ?? null;
   }
 
   /**
@@ -58,6 +63,17 @@ export class ConsoleController {
         ? await this.membership.verifyAccessToken(accessToken, { networkId: network._id })
         : null;
     if (!perimeter) {
+      // PORCH-019: captured with the failing step (membership-plane
+      // diagnosis) and the session/device identity state — never tokens.
+      const diagnosis = await this.membership.diagnoseAccessToken?.(accessToken, { networkId: network?._id ?? null }) ?? { reason: accessToken ? "unknown_token" : "missing_token" };
+      logAuthFailure(
+        {
+          endpoint: `${req.method ?? "UNKNOWN"} ${req.originalUrl ?? req.url ?? "unknown"}`,
+          code: "E_SESSION_REQUIRED",
+          ...diagnosis,
+        },
+        this.log ?? undefined,
+      );
       res.status(401).json({
         error: "Sign in to your membership before opening the owner console.",
         code: "E_SESSION_REQUIRED",

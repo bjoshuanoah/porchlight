@@ -1,4 +1,6 @@
 
+import { logAuthSurfaceFailure } from "../util/session-guard.js";
+
 /**
  * Identity auth controller: transport only. The controller maps HTTP to the
  * AuthService (challenge-signature → session tokens); every domain decision
@@ -8,10 +10,12 @@ export class AuthController {
   /**
    * @param {import("authService").AuthService} authService
    * @param {DidService|null} [didService] — presentation-plane handle resolution.
+   * @param {((line: string) => void) | null} [log] - auth-failure capture sink (PORCH-019).
    */
-  constructor(authService, didService = null) {
+  constructor(authService, didService = null, log = null) {
     this.authService = authService;
     this.didService = didService;
+    this.log = log;
   }
 
   /** Resolve the Bearer access token to its session identity, or null. */
@@ -64,6 +68,11 @@ export class AuthController {
         E_SIGNATURE_INVALID: 401,
         E_IDENTITY_NOT_FOUND: 404,
       };
+      if (statusByCode[error.code] === 401) {
+        // PORCH-019: captured with the failing step (the code) and the
+        // claimed did/deviceId — claims only, since no session could open.
+        logAuthSurfaceFailure(req, error.code, { did, deviceId, detail: error.message }, this.log);
+      }
       res
         .status(statusByCode[error.code] ?? 500)
         .json({ error: error.message, code: error.code ?? "E_INTERNAL" });
@@ -80,6 +89,12 @@ export class AuthController {
       res.json(await this.authService.refresh({ refreshToken }));
     } catch (error) {
       const status = error.code === "E_REFRESH_INVALID" ? 401 : 500;
+      if (status === 401) {
+        // PORCH-019: the renewal failing at a known step (unknown session,
+        // inactive session, or an expired refresh token — detail carries
+        // which).
+        logAuthSurfaceFailure(req, error.code, { detail: error.message }, this.log);
+      }
       res.status(status).json({ error: error.message, code: error.code ?? "E_INTERNAL" });
     }
   };
