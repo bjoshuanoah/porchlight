@@ -250,13 +250,44 @@ test("ac-4: interactions are origin-contained — no cross-origin write or read 
 test("ac-4: interaction views carry no vote material", async () => {
   const { interactions, dev, juneDev, familyToken, juneToken, post } = await contentFixture();
 
-  const commentPayload = { postId: post._id, body: "nice" };
+  const commentPayload = { postId: post._id, body: "nice", mentions: [SUSAN] };
   const commentView = (await interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
-  assert.deepEqual(Object.keys(commentView).sort(), ["_id", "authorDid", "authorName", "body", "createdAt", "mentions", "parentId", "postId"]);
+  assert.deepEqual(
+    Object.keys(commentView).sort(),
+    ["_id", "authorDid", "authorName", "body", "createdAt", "mentionNames", "mentions", "parentId", "postId"],
+  );
+  // Mention names resolve at read time alongside the author name
+  // (PORCH-037): one name per mention, aligned by position (null here
+  // because this fixture wires no name resolver).
+  assert.deepEqual(commentView.mentionNames, [null]);
 
   const starPayload = { postId: post._id, emoji: "🌟" };
   const reacted = (await interactions.react({ accessToken: familyToken, payload: starPayload, signature: dev.signPayload(starPayload) })).reaction;
   assert.deepEqual(Object.keys(reacted).sort(), ["_id", "createdAt", "emoji", "memberDid"]);
+});
+
+test("ac-2: mention names render as the member's family-facing name, resolved at the origin (PORCH-037)", async () => {
+  const NAMES = { [SUSAN]: "Susan Bell", [JUNE]: "June Bell", [MEG]: "Meg Rivers" };
+  const fx = fixture({
+    networkIds: [FAMILY, OTHER],
+    memberNames: async (dids) => dids.map((did) => ({ did, displayName: NAMES[did] ?? null })),
+  });
+  const dev = device("dev_s");
+  const juneDev = device("dev_j");
+  const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
+  const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
+  const postPayload = { type: "text", body: "root post" };
+  const post = (await fx.posts.create({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) })).post;
+
+  const payload = { postId: post._id, body: `thanks @${NAMES[JUNE]}`, mentions: [JUNE] };
+  const comment = (await fx.interactions.comment({ accessToken: juneToken, payload, signature: juneDev.signPayload(payload) })).comment;
+  assert.deepEqual(comment.mentions, [JUNE]);
+  assert.deepEqual(comment.mentionNames, ["June Bell"]);
+
+  // The thread read names the mentioned member too — rendering surfaces
+  // never resolve a mention id themselves.
+  const thread = (await fx.interactions.commentThread({ accessToken: familyToken, postId: post._id })).comments;
+  assert.deepEqual(thread.find((row) => row._id === comment._id).mentionNames, ["June Bell"]);
 });
 
 test("ac-4: interaction writes are actor-signed — a tampered comment does not verify", async () => {

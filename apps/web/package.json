@@ -14,7 +14,7 @@
     "dev": "vite --host 127.0.0.1",
     "lint": "eslint src test scripts vite.config.js && node scripts/audit.mjs",
     "test": "node --test test/*.test.js",
-    "typecheck": "node --check vite.config.js && node --check src/store.js && node --check src/api.js && node --check src/frontdoor.js && node --check src/setup-state.js && node --check src/member-actions.js && node --check src/member-directory.js && node --check src/device.js && node --check scripts/audit.mjs"
+    "typecheck": "node --check vite.config.js && node --check src/store.js && node --check src/api.js && node --check src/frontdoor.js && node --check src/setup-state.js && node --check src/member-actions.js && node --check src/mentions.js && node --check src/member-directory.js && node --check src/device.js && node --check scripts/audit.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

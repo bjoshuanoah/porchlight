@@ -258,8 +258,19 @@ export class InteractionService {
    * fallback (names render for network members only).
    */
   async #withAttribution(views, networkId) {
-    const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorDid) });
-    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorDid)) ?? null }));
+    const names = await this.membership.attributionNames({
+      networkId,
+      dids: views.flatMap((view) => [view.authorDid, ...(view.mentions ?? [])]),
+    });
+    return views.map((view) => ({
+      ...view,
+      authorName: names.get(String(view.authorDid)) ?? null,
+      // Mention names (PORCH-037): every comment view resolves each
+      // mentioned member's family-facing name at READ time against the
+      // origin's active membership. Clients render @Name — a mention that
+      // no longer resolves (left member) renders the plain body text.
+      mentionNames: (view.mentions ?? []).map((mentionedDid) => names.get(String(mentionedDid)) ?? null),
+    }));
   }
 
   static reactionView(reaction) {

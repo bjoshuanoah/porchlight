@@ -124,7 +124,8 @@ export class NotificationService {
    * content rides the candidates — membership identity fields only.
    * @param {object} deps
    * @param {string} [deps.accessToken]
-   * @param {string} [deps.q] substring filter on the member DID
+   * @param {string} [deps.q] substring filter on the family-facing member name
+   *   (PORCH-037: autocomplete keys on the name, never on an identifier)
    */
   async mentionCandidates({ accessToken, q } = {}) {
     if (!accessToken) {
@@ -135,13 +136,17 @@ export class NotificationService {
       throw typedError("E_NOT_PERMITTED", "This action is not available to you in this network.");
     }
     const networkId = perimeter.membership.networkId;
-    const rows = await this.membership.listMembers({ networkId });
+    const rows = (await this.membership.listMembers({ networkId }))
+      .filter((row) => row.state === "active" && row.did !== perimeter.session.did);
+    const names = await this.membership.attributionNames({ networkId, dids: rows.map((row) => row.did) });
     const query = typeof q === "string" ? q.trim().toLowerCase() : "";
     const candidates = rows
-      .filter((row) => row.state === "active" && row.did !== perimeter.session.did)
-      .filter((row) => query === "" || row.did.toLowerCase().includes(query))
-      .sort((a, b) => (a.did < b.did ? -1 : a.did > b.did ? 1 : 0))
-      .map((row) => ({ did: row.did, role: row.role, admittedAt: row.admittedAt }));
+      .map((row) => ({ did: row.did, name: names.get(String(row.did)) ?? null, role: row.role, admittedAt: row.admittedAt }))
+      .filter((candidate) => query === "" || (candidate.name !== null && candidate.name.toLowerCase().includes(query)))
+      .sort((a, b) => {
+        const names = (a.name ?? "").localeCompare(b.name ?? "");
+        return names !== 0 || a.did === b.did ? names : a.did < b.did ? -1 : 1;
+      });
     return { candidates };
   }
 }
