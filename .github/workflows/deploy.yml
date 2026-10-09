@@ -99,7 +99,7 @@ jobs:
       - name: npm ci
         run: npm ci
       - name: Version (all workspaces → $VERSION)
-        run: npm version "$VERSION" --workspaces --include-workspace-root --no-git-tag-version --allow-same-version
+        run: node scripts/release/version.mjs "$VERSION"
       - name: Build
         run: npm run build
       - name: Pack release assets
