@@ -1,8 +1,15 @@
 import { Router } from "express";
-import { healthController } from "./controllers/health.controller.js";
+import { healthRouter } from "./routes/health.routes.js";
+import { createIdentityRouter } from "@porchlight/identity";
+import { createSocialRouter } from "@porchlight/social";
 
+/**
+ * The /api router aggregates the module routers plus the thin health system
+ * route. Server performs no domain logic — routes stay thin, controllers are
+ * transport-specific, services own the models (inside the modules).
+ */
 export const router = Router();
 
-// Health is a thin system route; every domain module mirrors this path:
-// routes (this file) → controllers (health.controller.ts) → services → models.
-router.get("/health", healthController.health);
+router.use("/health", healthRouter);
+router.use("/identity", createIdentityRouter());
+router.use("/social", createSocialRouter());
