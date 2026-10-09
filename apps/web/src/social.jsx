@@ -7,6 +7,7 @@ import {
 import { AddReactionOutlined } from '@mui/icons-material';
 import { tokens } from './theme.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
+import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction } from './reactions.js';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
@@ -255,7 +256,10 @@ function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
 // glow is CSS, and the CTA opens compose without navigating away.
 function EmptyTimeline({ navigate }) {
   return <Paper elevation={0} sx={{ textAlign: 'center', py: 8, px: 3, borderRadius: '14px', border: `1px solid ${tokens.border}`, background: 'transparent' }}>
-    <Box aria-hidden="true" sx={{ mx: 'auto', mb: 3, width: 64, height: 64, borderRadius: '50%', background: `radial-gradient(circle at 50% 30%, ${tokens.amberGlow}, ${tokens.amberSoft})` }} />
+    {/* Brand surface (PORCH-032): the porch-at-dusk glow carries the new lamp mark. */}
+    <Box aria-hidden="true" sx={{ mx: 'auto', mb: 3, width: 88, height: 88, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `radial-gradient(circle at 50% 30%, ${tokens.amberGlow}, ${tokens.amberSoft})` }}>
+      <LampMark size={48} />
+    </Box>
     <Typography variant="h3" component="p" sx={{ mb: 1 }}>It's quiet here.</Typography>
     <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>Share the first moment with your family.</Typography>
     <Button variant="contained" sx={{ height: 48 }} onClick={() => navigate?.('/compose')}>Create a post</Button>
