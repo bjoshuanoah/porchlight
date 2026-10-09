@@ -520,7 +520,7 @@ function App() {
         <Typography variant="h6" onClick={() => navigate("/timeline")} sx={{ fontWeight: 700, color: "primary.main", cursor: "pointer", flex: { xs: 1, lg: 0 }, minWidth: { lg: 180 } }}>☀ Porchlight</Typography>
         <Stack direction="row" spacing={3} alignItems="center" sx={{ display: { xs: "none", lg: "flex" }, flex: 1, justifyContent: "center" }}>
           {primary.map((path, index) => index === 2
-            ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
+            ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", boxShadow: "0 6px 18px rgba(216,138,36,.28)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
             : <Button key={path} onClick={() => navigate(path)} sx={{ color: route.startsWith(path) ? "primary.main" : "text.secondary" }}>{labels[index]}</Button>)}
         </Stack>
         <IconButton aria-label="Search family moments" onClick={() => navigate("/search")}><SearchOutlined /></IconButton>
@@ -534,7 +534,10 @@ function App() {
     </Container>
     {!frontDoor && <Paper elevation={0} sx={{ display: { xs: "block", lg: "none" }, position: "fixed", left: 0, bottom: 0, right: 0, zIndex: 10, borderTop: "1px solid", borderColor: "divider", pb: "env(safe-area-inset-bottom)" }}>
       <BottomNavigation showLabels value={primary.findIndex((path) => route.startsWith(path))} onChange={(_event, value) => value === 2 ? setComposeOpen(true) : navigate(primary[value])} sx={{ minHeight: 68 }}>
-        {primary.map((path, index) => <BottomNavigationAction key={path} label={labels[index]} icon={icons[index]} sx={index === 2 ? { "& .MuiSvgIcon-root": { bgcolor: "secondary.main", width: 52, height: 52, p: 1.5, borderRadius: "50%", transform: "translateY(-8px)" } } : { minWidth: 44 }} />)}
+        {primary.map((path, index) => <BottomNavigationAction key={path} label={labels[index]} icon={icons[index]}
+          sx={{ ...(index === 2
+            ? { "& .MuiSvgIcon-root": { bgcolor: "secondary.main", color: "primary.main", width: 52, height: 52, p: 1.5, borderRadius: "50%", transform: "translateY(-8px)", boxShadow: "0 6px 18px rgba(216,138,36,.28)" } }
+            : { minWidth: 44 }), ...(route.startsWith(path) ? { "&::before": { content: '""', position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", width: 24, height: 2, borderRadius: 1, bgcolor: "secondary.main" } } : {}) }} />)}
       </BottomNavigation>
     </Paper>}
     <Compose open={composeOpen} onClose={() => setComposeOpen(false)} {...props} />
