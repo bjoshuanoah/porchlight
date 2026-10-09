@@ -20,7 +20,7 @@ This block is written and re-added by `turbo` before repository-scoped commands 
 ```
 porchlight/
 ├── apps/
-│   ├── server/     # Express API transport + thin system health vertical (routes, controllers, service, model) — @porchlight/server (private)
+│   ├── server/     # Hub runtime: Express API transport + thin system vertical (health, bootstrap) — @porchlight/server (published: the install closure of the global CLI)
 │   └── web/        # Static SPA shell placeholder — @porchlight/web (private)
 ├── modules/
 │   ├── identity/   # Identity domain: routes → controllers → services → models — @porchlight/identity (public)
@@ -37,11 +37,11 @@ porchlight/
 
 Every domain module owns its complete route → controller → service → model path. Endpoints are traceable to exactly one owning module:
 
-- `apps/server` routes/controllers call into `@porchlight/identity` and `@porchlight/social`; it performs no domain logic.
+- `apps/server` routes/controllers call into `@porchlight/identity` and `@porchlight/social`; it performs no domain logic. It is published (`@porchlight/server`) because the global `porchlight` CLI carries the hub runtime as its install-closure dependency (PORCH-003: `npm install -g porchlight` must be dependency-complete); the CLI spawns it as the hub child process and imports no domain code.
 - `@porchlight/identity` owns all identity models and identity-only service logic.
 - `@porchlight/social` owns all social models and social-only service logic.
 - `@porchlight/shared` owns no domain models — only cross-domain-agnostic helpers.
-- `packages/cli` (`porchlight`) is the global install surface and entrypoint; it performs no domain logic (domain behavior lands with the bring-up task) and imports no domain models.
+- `packages/cli` (`porchlight`) is the global install surface and entrypoint — the one-command bring-up owner (`setup`/`start`/`stop`/`status`/`bootstrap`/`service`): it manages daemon processes (installer-managed Mongo + Redis binaries), the tunnel, launchd/systemd supervision, and drives bootstrap over HTTP. It performs no domain logic and imports no domain models (domain behavior lives in the hub server's module services).
 - `apps/web` is a static shell; no server-side imports.
 
 Cross-module rule: a module's implementation source tree is never imported by another module. A module may only import another module's **published public entry** (`@porchlight/<module>`) — never its internals (`.../models`, `.../src/...`), and never its models. `identity` and `social` share zero models and never import each other's internals. `@porchlight/shared` is the sole permitted cross-module import; `@porchlight/server` and `@porchlight/web` are private and never imported by name.
@@ -62,6 +62,7 @@ route (REST/MCP surface)
 - Integration-level (package-level) tests live under the package and cover cross-package behavior.
 - `apps/server` ships MUI-less API contract tests proving the vertical slice (health, identity, social routes), plus a co-located unit test for the system health service.
 - `npm run test` at the repo root runs `turbo run test` then the boundary check — it is the one command that runs the whole test matrix locally.
+- The real bring-up proof (`PORCHLIGHT_E2E=1`) is env-gated: it downloads the actual daemon binaries and runs the full hub (PORCH-003); run `npm run build` first, then `PORCHLIGHT_E2E=1 node --test packages/cli/test/bringup-e2e.test.js`. The default matrix stays deterministic without network.
 - `npm run lint` (turbo lint) runs ESLint per workspace against the root flat config; `npm run typecheck` (turbo typecheck) typechecks TS workspaces. CI runs `turbo run lint typecheck build test --affected` on Node 24, scoped to changed workspaces plus their dependents.
 - Published releases are verified with `node scripts/release/verify-release.mjs` — instructions in `docs/release-verification.md`.
 

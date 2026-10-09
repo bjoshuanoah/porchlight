@@ -1,17 +1,22 @@
 {
   "name": "@porchlight/server",
   "version": "0.1.0",
-  "private": true,
-  "description": "Porchlight Express API — transport layer (routes, controllers). Domain logic lives in service-layer packages.",
+  "description": "Porchlight Express API — transport layer (routes, controllers) and hub runtime entrypoint. Domain logic lives in service-layer packages.",
   "license": "MIT",
   "author": "Brian Noah",
   "engines": {
     "node": ">= 24"
   },
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "dev": "node --import ../../scripts/register.mjs --watch src/index.ts",
@@ -19,8 +24,11 @@
   },
   "dependencies": {
     "@porchlight/identity": "0.1.0",
+    "@porchlight/shared": "0.1.0",
     "@porchlight/social": "0.1.0",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "mongodb": "^6.10.0",
+    "redis": "^4.7.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
@@ -30,5 +38,10 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjoshuanoah/porchlight.git",
+    "directory": "apps/server"
   }
 }
