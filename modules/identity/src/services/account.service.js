@@ -83,13 +83,17 @@ export class AccountService {
    * @param {(sourceHubUrl: string, did: string) => Promise<{document: object} | null>} [deps.transport]
    *        Injectable for deterministic tests; defaults to no-redirect fetch.
    * @param {() => string | null} [deps.hubUrlFn] hub URL provider for DID-document endpoints.
+   * @param {boolean} [deps.adoptionEnabled] PORCH-026 flag: second-hub identity
+   *        adoption is flag-hidden in the current build (default false); a
+   *        config flip re-enables the unchanged architecture.
    */
-  constructor({ identities, didService, deviceRegistrations, transport = null, hubUrlFn = null }) {
+  constructor({ identities, didService, deviceRegistrations, transport = null, hubUrlFn = null, adoptionEnabled = false }) {
     this.identities = identities;
     this.didService = didService;
     this.deviceRegistrations = deviceRegistrations;
     this.transport = transport ?? defaultTransport;
     this.hubUrlFn = hubUrlFn;
+    this.adoptionEnabled = adoptionEnabled === true;
   }
 
   /** Whether any identity exists on this hub (drives the bootstrap offer). */
@@ -97,9 +101,23 @@ export class AccountService {
     return (await this.identities.findOne({})) !== null;
   }
 
-  /** The account row driving the bootstrap page (first identity or null). */
+  /**
+   * The account row driving the bootstrap page (first identity or null).
+   */
   async get() {
     return this.identities.findOne({});
+  }
+
+  /**
+   * GET /account bootstrap state (adoption offer, PORCH-026): the offer is a
+   * single flag-driven service decision — hidden builds never advertise
+   * adoption (`adoptionAvailable: false`, the fresh invite/join path is the
+   * only one any setup surface sees); enabling `identity.adoptionEnabled`
+   * restores the offer on a hub with no first account yet.
+   */
+  async bootstrapOffer() {
+    const account = await this.get();
+    return { account, adoptionAvailable: account === null && this.adoptionEnabled };
   }
 
   async putDocument(did) {
@@ -247,6 +265,16 @@ export class AccountService {
    * (E_OWNER_ACCOUNT_EXISTS).
    */
   async adoptIdentity({ sourceHubUrl, did, displayName = null } = {}) {
+    // PORCH-026 (Oct 14, 2026 ruling): adoption is flag-hidden in V1 — no
+    // adoption entry point is visible anywhere and the capability refuses
+    // when hidden; identity.adoptionEnabled re-enables the unchanged
+    // architecture (a flag flip, never a rebuild).
+    if (!this.adoptionEnabled) {
+      throw typed(
+        "E_ADOPTION_HIDDEN",
+        "identity adoption is hidden in this build; setting identity.adoptionEnabled in the runtime config re-enables it",
+      );
+    }
     if (!sourceHubUrl || !did) {
       throw typed("E_ADOPTION_FIELDS_REQUIRED", "sourceHubUrl and did are required");
     }

@@ -22,7 +22,9 @@ import { createIdentityRouter, createWellKnownRouter } from "./routes.js";
  * identity by DID only and never imports this file's internals.
  *
  * @param {import("@porchlight/shared").StoreLike} store
- * @param {{ hubUrl?: () => string|null }} [options]
+ * @param {{ hubUrl?: () => string|null, ledger?: { record: (step: string, detail?: object) => Promise<void> }, adoptionEnabled?: boolean }} [options]
+ *        `adoptionEnabled` (PORCH-026) re-enters second-hub identity
+ *        adoption: flag-hidden by default (V1 build offers creation only).
  */
 export function assembleIdentityModule(store, options = {}) {
   const hubUrlFn = options.hubUrl ?? (() => null);
@@ -48,6 +50,7 @@ export function assembleIdentityModule(store, options = {}) {
     identities: collection("identities"),
     didService,
     deviceRegistrations: collection("device_registrations"),
+    adoptionEnabled: options.adoptionEnabled === true,
   });
   const trustService = new TrustService({
     authCodes: collection("auth_codes"),

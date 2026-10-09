@@ -115,7 +115,13 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     // the app factory mounts them outside the /api prefix.
     // Identity keeps a record-only ledger: its bootstrap surface records
     // progress but carries no era gate (the gate is the social perimeter's).
-    const identity = assembleIdentityModule(options.store, { hubUrl, ledger: { record: ledger.record } });
+    const identity = assembleIdentityModule(options.store, {
+      hubUrl,
+      ledger: { record: ledger.record },
+      // PORCH-026: second-hub identity adoption is flag-hidden (default off);
+      // the runtime config flip re-enables the unchanged architecture.
+      adoptionEnabled: options.config.identity.adoptionEnabled,
+    });
     identityModule = identity;
     router.use("/identity", identity.api);
     wellKnown = identity.wellKnown;

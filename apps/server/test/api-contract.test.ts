@@ -10,9 +10,13 @@ import { BootstrapService } from "../src/services/bootstrap.service.js";
 import { createServer } from "../src/router.js";
 import type { Probe } from "../src/dependencies.js";
 
-function mutableConfig(overrides: Partial<PorchlightConfig["mode"]> = {}): PorchlightConfig {
+function mutableConfig(
+  overrides: Partial<PorchlightConfig["mode"]> = {},
+  identity: Partial<PorchlightConfig["identity"]> = {},
+): PorchlightConfig {
   const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as PorchlightConfig;
   Object.assign(config.mode, overrides);
+  Object.assign(config.identity, identity);
   // Re-normalize so derived fields (identity-only disables social serving)
   // stay consistent with what setup writes to disk.
   return normalizeConfig(config);
@@ -41,9 +45,10 @@ function testHub(
   overrides: Partial<PorchlightConfig["mode"]> = {},
   home = "/tmp/porchlight-test-home",
   hubUrl: () => string | null = () => null,
+  identity: Partial<PorchlightConfig["identity"]> = {},
 ): TestHub {
   const db = createMemoryStore();
-  const config = mutableConfig(overrides);
+  const config = mutableConfig(overrides, identity);
   const bootstrap = new BootstrapService(db, config, home);
   const app = createServer({ store: db, readiness: OK_PROBES, config, bootstrap, hubUrl });
   const { promise, resolve } = Promise.withResolvers<number>();
@@ -666,9 +671,11 @@ test("the served ledger reads already-bootstrapped once both steps complete (POR
   assert.equal(body.lastError, null);
 });
 
-test("identity adoption flows through the API and records the ledger", async (t) => {
+test("identity adoption flows through the API and records the ledger (flag-enabled, PORCH-026)", async (t) => {
+  // Flag-on build = the re-enabled posture: the SAME architecture serves the
+  // adoption (hidden capability, unchanged behavior — no rebuild, PORCH-026 ac-2).
   const homeHub = testHub();
-  const adoptingHub = testHub();
+  const adoptingHub = testHub({}, undefined, undefined, { adoptionEnabled: true });
   t.after(() => { homeHub.close(); adoptingHub.close(); });
   const homePort = await homeHub.port;
   const port = await adoptingHub.port;
@@ -697,6 +704,41 @@ test("identity adoption flows through the API and records the ledger", async (t)
   assert.equal(body.account.kind, "adopted");
   assert.equal(body.account.did, createdBody.account.did);
   assert.equal(body.account.adoptedIdentity.did, createdBody.account.did);
+});
+
+test("default build hides adoption: no offer on the setup surface, fresh path only (PORCH-026)", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+
+  // ac-1/ac-3: GET /account — the bootstrap state surface never advertises
+  // an adopt-identity entry point; the only first-account path is creation.
+  const res = await fetch(`http://127.0.0.1:${port}/api/identity/account`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { exists: boolean; adoptionAvailable: boolean };
+  assert.equal(body.exists, false);
+  assert.equal(body.adoptionAvailable, false, "no adopt-identity option is visible anywhere");
+
+  // The adoption capability itself refuses while hidden (flag flip re-enters it).
+  const adopt = await call(port, "/api/identity/bootstrap/adopt", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceHubUrl: "https://home.example", did: "did:porch:abc" }),
+  });
+  assert.equal(adopt.status, 403);
+  assert.equal(adopt.body.code, "E_ADOPTION_HIDDEN");
+});
+
+test("flag flip restores the adoption offer on a fresh hub without build work (PORCH-026 ac-2)", async (t) => {
+  const hub = testHub({}, undefined, undefined, { adoptionEnabled: true });
+  t.after(hub.close);
+  const port = await hub.port;
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/identity/account`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { exists: boolean; adoptionAvailable: boolean };
+  assert.equal(body.exists, false);
+  assert.equal(body.adoptionAvailable, true, "identity.adoptionEnabled: true is the single re-entry switch");
 });
 
 test("network creation and invite issuance complete the social bootstrap steps", async (t) => {

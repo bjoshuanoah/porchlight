@@ -15,6 +15,10 @@ export interface PorchlightConfig {
     httpPort: number;
     tunnel: { enabled: boolean; url: string | null };
   };
+  /** PORCH-026: second-hub identity adoption is flag-hidden (default off). */
+  identity: {
+    adoptionEnabled: boolean;
+  };
   daemons: { mongoPort: number; redisPort: number };
   quota: { storageCeilingMb: number | null; retentionDays: number | null };
 }

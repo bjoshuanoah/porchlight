@@ -36,6 +36,11 @@ function twoHubFixture() {
         didService,
         deviceRegistrations,
         hubUrlFn: () => hubUrl,
+        // Capability tests stand in for the flag-on build (PORCH-026): the
+        // adoption architecture is unchanged when identity.adoptionEnabled
+        // is set; the flag-hiding behavior is proven by the hidden-build
+        // tests below.
+        adoptionEnabled: true,
       }),
     };
   }
@@ -198,4 +203,51 @@ test("adoption without source hub or did refuses with E_ADOPTION_FIELDS_REQUIRED
   await assert.rejects(() => adopting.accountService.adoptIdentity({ sourceHubUrl: "https://x" }), {
     code: "E_ADOPTION_FIELDS_REQUIRED",
   });
+});
+
+test("adoption is flag-hidden by default: no offer, refuse before any transport use (PORCH-026)", async () => {
+  // Default constructor (the assembled module passes the runtime-config flag;
+  // absent/false == hidden, the V1 posture).
+  const store = createMemoryStore();
+  const signing = new HubSigningService(store.collection("issuer_keys"));
+  const didService = new DidService({
+    identities: store.collection("identities"),
+    didDocuments: store.collection("did_documents"),
+    signing,
+  });
+  const service = new AccountService({
+    identities: store.collection("identities"),
+    didService,
+    deviceRegistrations: store.collection("device_registrations"),
+  });
+  service.transport = async () => {
+    throw new Error("a hidden adoption must never reach the transport");
+  };
+
+  const offer = await service.bootstrapOffer();
+  assert.equal(offer.account, null);
+  assert.equal(offer.adoptionAvailable, false, "no adopt-identity entry point is advertised on a fresh hidden hub");
+
+  await assert.rejects(
+    () => service.adoptIdentity({ sourceHubUrl: "https://home.example", did: "did:porch:abc" }),
+    { code: "E_ADOPTION_HIDDEN" },
+  );
+});
+
+test("identity.adoptionEnabled is the single re-entry switch: the same capability returns", async () => {
+  const store = createMemoryStore();
+  const signing = new HubSigningService(store.collection("issuer_keys"));
+  const didService = new DidService({
+    identities: store.collection("identities"),
+    didDocuments: store.collection("did_documents"),
+    signing,
+  });
+  const service = new AccountService({
+    identities: store.collection("identities"),
+    didService,
+    deviceRegistrations: store.collection("device_registrations"),
+    adoptionEnabled: true,
+  });
+
+  assert.equal((await service.bootstrapOffer()).adoptionAvailable, true, "the offer returns without new build work");
 });

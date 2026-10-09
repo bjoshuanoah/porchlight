@@ -26,7 +26,7 @@ declare module "@porchlight/identity" {
   }
   export function assembleIdentityModule(
     store: { collection(name: string): unknown },
-    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null } },
+    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean },
   ): IdentityModule;
   export function createWellKnownRouter(wellKnownController: unknown): import("express").Router;
   export class TrustService {
