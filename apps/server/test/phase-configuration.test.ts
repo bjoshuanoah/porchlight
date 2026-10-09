@@ -180,7 +180,7 @@ async function bootServingHub(mode: Mode): Promise<BootedHub> {
   const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
   });
   assert.equal(account.status, 201, JSON.stringify(account.body));
   const did = (account.body.account as Json).did as string;
@@ -286,7 +286,7 @@ test("phase configuration: identity-only mode exposes no social endpoint and ope
   const created = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Solo", device: { deviceId: device.deviceId, publicKeyJwk: device.publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Solo", lastName: "Test", device: { deviceId: device.deviceId, publicKeyJwk: device.publicKeyJwk } }),
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
 

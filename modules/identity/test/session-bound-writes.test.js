@@ -63,7 +63,7 @@ async function hub() {
 
   const jwksA = newEd25519Jwks();
   const created = await call(base, "/bootstrap/account", {
-    body: { displayName: "Brian", device: { deviceId: "dev_1", publicKeyJwk: jwksA.publicKeyJwk } },
+    body: { firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_1", publicKeyJwk: jwksA.publicKeyJwk } },
   });
   assert.equal(created.status, 201);
   const didA = created.body.account.did;

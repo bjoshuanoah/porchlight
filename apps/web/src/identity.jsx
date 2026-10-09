@@ -5,7 +5,7 @@ import {
   Paper, Stack, TextField, Typography,
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
-import { fullName, resumedDetail, setupStage } from './setup-state.js';
+import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { tokens } from './theme.js';
 
 const section = { mb: 3 };
@@ -141,7 +141,10 @@ export function Join({ data, actions, navigate }) {
   const [code, setCode] = useState(() => parseJoinCode(window.location.pathname) || readJoinQuery(window.location.search));
   const [stage, setStage] = useState('fields'); // fields | confirm | naming | busy | done | mismatch
   const [network, setNetwork] = useState(null);
-  const [name, setName] = useState('');
+  // Required names (PORCH-024): the join screen captures first and last;
+  // each empty field shows its own error at submit.
+  const [names, setNames] = useState({ first: '', last: '' });
+  const [nameErrors, setNameErrors] = useState({ first: '', last: '' });
   const [chosen, setChosen] = useState(null);
   const [mismatch, setMismatch] = useState(null);
   const operation = useOperation(actions);
@@ -209,8 +212,15 @@ export function Join({ data, actions, navigate }) {
       if (existing) {
         await actions.joinDevice({ url: origin, code: codeValue, did: existing.identity.id, deviceId: existing.deviceId, label: existing.name });
       } else {
-        if (!name.trim()) { setStage('naming'); operation.setError('Your family needs something to call you. Add a name here.'); return; }
-        await actions.joinNew({ url: origin, code: codeValue, displayName: name.trim() });
+        const first = names.first.trim();
+        const last = names.last.trim();
+        const errors = joinNameErrors(first, last);
+        if (errors.first || errors.last) {
+          setStage('naming');
+          setNameErrors(errors);
+          return;
+        }
+        await actions.joinNew({ url: origin, code: codeValue, firstName: first, lastName: last });
       }
       setStage('done');
     } catch (cause) {
@@ -243,7 +253,16 @@ export function Join({ data, actions, navigate }) {
           {stage === 'busy' ? 'Checking this hub…' : `You're joining ${network?.name || 'your family'}. Connect once and this device stays yours.`}
         </Alert>
         {stage === 'naming' && <>
-          <TextField label="What should your family call you?" value={name} onChange={(event) => setName(event.target.value)} autoFocus fullWidth />
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            <TextField label="First name" value={names.first} onChange={(event) => {
+              setNames((current) => ({ ...current, first: event.target.value }));
+              setNameErrors((current) => ({ ...current, first: '' }));
+            }} required autoFocus fullWidth autoComplete="given-name" error={Boolean(nameErrors.first)} helperText={nameErrors.first} />
+            <TextField label="Last name" value={names.last} onChange={(event) => {
+              setNames((current) => ({ ...current, last: event.target.value }));
+              setNameErrors((current) => ({ ...current, last: '' }));
+            }} required fullWidth autoComplete="family-name" error={Boolean(nameErrors.last)} helperText={nameErrors.last} />
+          </Stack>
           <Button variant="contained" fullWidth sx={{ height: 48 }} disabled={operation.busy} onClick={() => proceed(null)}>Join Porchlight</Button>
           {local.length > 0 && <Typography variant="body2" color="text.secondary">Someone is already connected on this device — pick them instead:</Typography>}
         </>}
@@ -325,7 +344,7 @@ function NetworkNameStep({ name, onChange, onNext, busy }) {
   </Box>;
 }
 
-function AccountStep({ stageIndex, network, fields, onField, photo, onPhoto, onSubmit, busy, existing }) {
+function AccountStep({ stageIndex, network, fields, onField, errors, photo, onPhoto, onSubmit, busy, existing }) {
   return <Box sx={section}>
     <SetupProgress stageIndex={stageIndex} />
     <Box component="form" onSubmit={onSubmit}><Stack spacing={2}>
@@ -335,8 +354,8 @@ function AccountStep({ stageIndex, network, fields, onField, photo, onPhoto, onS
           : `Say who you are on ${network}. First and last names, and — only if you like — a photo.`}
       </Typography>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-        <TextField label="First name" value={fields.first} onChange={(event) => onField("first", event.target.value)} required autoFocus fullWidth autoComplete="given-name" />
-        <TextField label="Last name" value={fields.last} onChange={(event) => onField("last", event.target.value)} required fullWidth autoComplete="family-name" />
+        <TextField label="First name" value={fields.first} onChange={(event) => onField("first", event.target.value)} required autoFocus fullWidth autoComplete="given-name" error={Boolean(errors?.first)} helperText={errors?.first} />
+        <TextField label="Last name" value={fields.last} onChange={(event) => onField("last", event.target.value)} required fullWidth autoComplete="family-name" error={Boolean(errors?.last)} helperText={errors?.last} />
       </Stack>
       <Button variant="text" component="label" sx={{ alignSelf: "flex-start" }}>{photo ? "Photo chosen — change it" : "Add a photo (optional)"}
         <input type="file" accept="image/*" hidden onChange={onPhoto} />
@@ -382,6 +401,7 @@ export function Setup({ data, actions, navigate }) {
   const [stage, setStage] = useState('network');
   const [networkName, setNetworkName] = useState('');
   const [fields, setFields] = useState({ first: '', last: '' });
+  const [fieldErrors, setFieldErrors] = useState({ first: '', last: '' });
   const [photo, setPhoto] = useState('');
   const network = networkName;
 
@@ -425,10 +445,11 @@ export function Setup({ data, actions, navigate }) {
 
   async function finishSetup(event) {
     event.preventDefault();
-    const name = fullName(fields.first, fields.last);
-    if (!fields.first.trim() || !fields.last.trim()) { operation.setError("Add your first and last name — this is who your family sees."); return; }
+    const errors = joinNameErrors(fields.first, fields.last);
+    if (errors.first || errors.last) { setFieldErrors(errors); return; }
+    setFieldErrors({ first: '', last: '' });
     const owner = await operation.run("createOwnerAccount", [{
-      displayName: name, firstName: fields.first.trim(), lastName: fields.last.trim(), avatar: photo || undefined,
+      firstName: fields.first.trim(), lastName: fields.last.trim(), avatar: photo || undefined,
     }]);
     if (!owner) return;
     const founded = await operation.run("startNetwork", [{ name: networkName.trim(), ownerDid: owner.registration.did }]);
@@ -448,6 +469,7 @@ export function Setup({ data, actions, navigate }) {
       <Feedback operation={operation} />
       <AccountStep stageIndex={1} network={networkName || "your network"}
         fields={fields} onField={(field, value) => setFields((current) => ({ ...current, [field]: value }))}
+        errors={fieldErrors}
         photo={photo} onPhoto={(event) => {
           const file = event.target.files?.[0];
           if (!file) return;

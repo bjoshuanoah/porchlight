@@ -38,18 +38,21 @@ export class AccountController {
   };
 
   /**
-   * POST /bootstrap/account {displayName, email?, actorType?, device?{deviceId, label, publicKeyJwk}}
+   * POST /bootstrap/account {firstName, lastName, email?, device?{deviceId, label, publicKeyJwk}}
    * First-account creation with the device-held key bound at setup (ac-1).
+   * Required names (PORCH-024): the hub validates first and last regardless
+   * of client state; the display name is composed server-side.
    */
   createFirstAccount = async (req, res) => {
-    const { displayName, email, device } = req.body ?? {};
+    const { firstName, lastName, email, device } = req.body ?? {};
     try {
-      const result = await this.accountService.createFirstAccount({ displayName, email: email ?? null, device: device ?? null });
+      const result = await this.accountService.createFirstAccount({ firstName, lastName, email: email ?? null, device: device ?? null });
       if (result.created) await this.ledger.record("account", { detail: "owner account created with device-held key" });
       res.status(result.created ? 201 : 200).json(result);
     } catch (error) {
       const statusByCode = {
-        E_DISPLAY_NAME_REQUIRED: 400,
+        E_FIRST_NAME_REQUIRED: 400,
+        E_LAST_NAME_REQUIRED: 400,
         E_DEVICE_KEY_REQUIRED: 400,
         E_KEY_TYPE_REJECTED: 400,
         E_PRIVATE_KEY_REJECTED: 400,

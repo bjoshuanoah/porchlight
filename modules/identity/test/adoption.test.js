@@ -54,7 +54,8 @@ function twoHubFixture() {
 test("adoption verifies the DID at its home hub and stores a reference account", async () => {
   const { home, adopting } = twoHubFixture();
   const created = await home.accountService.createFirstAccount({
-    displayName: "Susan",
+    firstName: "Susan",
+    lastName: "Bell",
     device: okpDevice(),
   });
 
@@ -76,7 +77,8 @@ test("adoption verifies the DID at its home hub and stores a reference account",
 test("adoption NEVER copies the identity record, keys or profile — reference fields only", async () => {
   const { home, adopting } = twoHubFixture();
   const created = await home.accountService.createFirstAccount({
-    displayName: "Susan",
+    firstName: "Susan",
+    lastName: "Bell",
     email: "susan@home.example",
     device: okpDevice(),
   });
@@ -136,7 +138,8 @@ test("adoption fails closed when the DID does not resolve at the source hub", as
 test("adoption is idempotent on (sourceHubUrl, did): the same reference row returns", async () => {
   const { home, adopting } = twoHubFixture();
   const created = await home.accountService.createFirstAccount({
-    displayName: "Susan",
+    firstName: "Susan",
+    lastName: "Bell",
     device: okpDevice(),
   });
   const first = await adopting.accountService.adoptIdentity({
@@ -155,8 +158,8 @@ test("adoption is idempotent on (sourceHubUrl, did): the same reference row retu
 
 test("the bootstrap gate holds: E_OWNER_ACCOUNT_EXISTS when an owner account already exists", async () => {
   const { home, adopting } = twoHubFixture();
-  const created = await home.accountService.createFirstAccount({ displayName: "Susan", device: okpDevice() });
-  await adopting.accountService.createFirstAccount({ displayName: "Local Owner", device: okpDevice() });
+  const created = await home.accountService.createFirstAccount({ firstName: "Susan", lastName: "Bell", device: okpDevice() });
+  await adopting.accountService.createFirstAccount({ firstName: "Local", lastName: "Owner", device: okpDevice() });
   await assert.rejects(
     () => adopting.accountService.adoptIdentity({ sourceHubUrl: home.hubUrl, did: created.account.did }),
     (error) => error.code === "E_OWNER_ACCOUNT_EXISTS",
@@ -165,7 +168,7 @@ test("the bootstrap gate holds: E_OWNER_ACCOUNT_EXISTS when an owner account alr
 
 test("adoption from different source hubs for the same DID are distinct references", async () => {
   const { home, adopting } = twoHubFixture();
-  const created = await home.accountService.createFirstAccount({ displayName: "Susan", device: okpDevice() });
+  const created = await home.accountService.createFirstAccount({ firstName: "Susan", lastName: "Bell", device: okpDevice() });
   const mirrorHub = "https://mirror.example";
   adopting.accountService.transport = async (sourceHubUrl, did) => {
     if (sourceHubUrl === home.hubUrl) {

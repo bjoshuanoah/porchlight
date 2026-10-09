@@ -9,7 +9,8 @@ test("the first owner account creates identity + DID document + first-account de
   const { accountService } = fixture();
   const device = okpDevice({ deviceId: "owner-phone", label: "Pocket" });
   const result = await accountService.createFirstAccount({
-    displayName: "Brian",
+    firstName: "Brian",
+    lastName: "Noah",
     email: "b@example.com",
     device,
   });
@@ -20,7 +21,9 @@ test("the first owner account creates identity + DID document + first-account de
   assert.match(account.did, /^did:porch:[0-9a-f]{40}$/);
   assert.equal(account.actorType, "human");
   assert.equal(account.kind, "owner");
-  assert.equal(account.displayName, "Brian");
+  assert.equal(account.firstName, "Brian");
+  assert.equal(account.lastName, "Noah");
+  assert.equal(account.displayName, "Brian Noah", "the display name composes from the required names");
   assert.equal(account.email, "b@example.com");
   assert.equal(account.homingStatus, "home");
   assert.equal(account.migratedToIssuer, null);
@@ -49,13 +52,14 @@ test("the first owner account creates identity + DID document + first-account de
 test("bootstrap is idempotent: an existing owner account returns created:false, nothing minted", async () => {
   const { accountService } = fixture();
   const first = await accountService.createFirstAccount({
-    displayName: "Brian",
+    firstName: "Brian",
+    lastName: "Noah",
     device: okpDevice(),
   });
-  const second = await accountService.createFirstAccount({ displayName: "Someone Else" });
+  const second = await accountService.createFirstAccount({ firstName: "Someone", lastName: "Else" });
   assert.equal(second.created, false);
   assert.equal(second.account._id, first.account._id);
-  assert.equal(second.account.displayName, "Brian");
+  assert.equal(second.account.displayName, "Brian Noah");
   assert.equal("didDocument" in second, false, "no second document or registration minted");
   assert.equal("registration" in second, false);
   assert.equal((await accountService.identities.find({ kind: "owner" })).length, 1);
@@ -65,10 +69,10 @@ test("bootstrap is idempotent: an existing owner account returns created:false, 
 test("bootstrap requires the device binding: missing or incomplete device → E_DEVICE_KEY_REQUIRED", async () => {
   const { accountService } = fixture();
   for (const arg of [
-    { displayName: "Brian" },
-    { displayName: "Brian", device: {} },
-    { displayName: "Brian", device: { deviceId: "no-key-device" } },
-    { displayName: "Brian", device: { publicKeyJwk: okpDevice().publicKeyJwk } },
+    { firstName: "Brian", lastName: "Noah" },
+    { firstName: "Brian", lastName: "Noah", device: {} },
+    { firstName: "Brian", lastName: "Noah", device: { deviceId: "no-key-device" } },
+    { firstName: "Brian", lastName: "Noah", device: { publicKeyJwk: okpDevice().publicKeyJwk } },
   ]) {
     await assert.rejects(
       () => accountService.createFirstAccount(arg),
@@ -85,7 +89,7 @@ test("private key material is rejected at the hub: E_PRIVATE_KEY_REJECTED (and n
   const { privateKeyJwk } = newEd25519Jwks(); // the only place a private key exists: the test itself
   const badDevice = { deviceId: "d1", label: null, publicKeyJwk: { ...privateKeyJwk, d: privateKeyJwk.d } };
   await assert.rejects(
-    () => accountService.createFirstAccount({ displayName: "Brian", device: badDevice }),
+    () => accountService.createFirstAccount({ firstName: "Brian", lastName: "Noah", device: badDevice }),
     (error) => error.code === "E_PRIVATE_KEY_REJECTED",
   );
   assert.equal((await accountService.deviceRegistrations.find()).length, 0);
@@ -96,7 +100,8 @@ test("non-OKP / non-Ed25519 device keys are rejected: E_KEY_TYPE_REJECTED", asyn
   await assert.rejects(
     () =>
       accountService.createFirstAccount({
-        displayName: "Brian",
+        firstName: "Brian",
+        lastName: "Noah",
         device: { deviceId: "d1", publicKeyJwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
       }),
     (error) => error.code === "E_KEY_TYPE_REJECTED",
@@ -147,7 +152,7 @@ test("agent creation enforces the same key discipline (device required, private 
 
 test("recordProfile updates profile (and displayName) on the account row; unknown DID → E_IDENTITY_NOT_FOUND", async () => {
   const { accountService } = fixture();
-  const created = await accountService.createFirstAccount({ displayName: "Brian", device: okpDevice() });
+  const created = await accountService.createFirstAccount({ firstName: "Brian", lastName: "Noah", device: okpDevice() });
   const updated = await accountService.recordProfile({
     did: created.account.did,
     displayName: "Bri",
@@ -168,7 +173,7 @@ test("recordProfile updates profile (and displayName) on the account row; unknow
 
 test("setHandle rides through to the DID service: DID unchanged, per-hub uniqueness enforced", async () => {
   const { accountService, didService } = fixture();
-  const created = await accountService.createFirstAccount({ displayName: "Brian", device: okpDevice() });
+  const created = await accountService.createFirstAccount({ firstName: "Brian", lastName: "Noah", device: okpDevice() });
   await accountService.setHandle({ did: created.account.did, handle: "brian" });
   const updated = await accountService.identities.findOne({ did: created.account.did });
   assert.equal(updated.handle, "brian");
@@ -186,7 +191,7 @@ test("setHandle rides through to the DID service: DID unchanged, per-hub uniquen
 
 test("no stored row — identity, document, or registration — ever carries private key material", async () => {
   const { accountService, identities, deviceRegistrations, didDocuments } = fixture();
-  await accountService.createFirstAccount({ displayName: "Brian", device: okpDevice() });
+  await accountService.createFirstAccount({ firstName: "Brian", lastName: "Noah", device: okpDevice() });
   await accountService.createAgentIdentity({ displayName: "Agent", device: okpDevice() });
   assert.equal((await identities.find()).length, 2);
   for (const rows of [
@@ -203,16 +208,46 @@ test("no stored row — identity, document, or registration — ever carries pri
 test("member identity birth at the front door mints kind member and binds the device key (PORCH-010)", async () => {
   const { accountService } = fixture();
   const device = okpDevice({ deviceId: "member-tablet", label: "Kitchen tablet" });
-  const result = await accountService.createMemberAccount({ displayName: "Sophie", device });
+  const result = await accountService.createMemberAccount({ firstName: "Sophie", lastName: "Marten", device });
 
   assert.equal(result.created, true);
   assert.equal(result.account.kind, "member");
   assert.equal(result.account.actorType, "human");
   assert.match(result.account.did, /^did:porch:[0-9a-f]{40}$/);
-  assert.equal(result.account.displayName, "Sophie");
+  assert.equal(result.account.firstName, "Sophie");
+  assert.equal(result.account.lastName, "Marten");
+  assert.equal(result.account.displayName, "Sophie Marten", "the display name composes from the required names");
   assert.equal(result.registration.createdBy, "join");
   assert.equal(result.registration.deviceId, "member-tablet");
   assert.equal(result.registration.publicKeyJwk, device.publicKeyJwk);
+});
+
+test("required names: distinct fields stored, trimmed, display name composed (PORCH-024)", async () => {
+  const { accountService } = fixture();
+  const member = await accountService.createMemberAccount({
+    firstName: "  Sophie  ",
+    lastName: "  Marten ",
+    device: okpDevice(),
+  });
+  assert.equal(member.account.firstName, "Sophie", "first name trimmed, stored as its own field");
+  assert.equal(member.account.lastName, "Marten", "last name trimmed, stored as its own field");
+  assert.equal(member.account.displayName, "Sophie Marten", "display name composes server-side from the two");
+
+  const owner = await accountService.createFirstAccount({
+    firstName: " Brian ",
+    lastName: " Noah ",
+    device: okpDevice(),
+  });
+  assert.equal(owner.account.firstName, "Brian");
+  assert.equal(owner.account.lastName, "Noah");
+  assert.equal(owner.account.displayName, "Brian Noah");
+
+  // Agents carry no human names: their creation surface still rides a single
+  // display name, and their row leaves the name fields null.
+  const agent = await accountService.createAgentIdentity({ displayName: "Bookkeeper", device: okpDevice() });
+  assert.equal(agent.account.firstName, null);
+  assert.equal(agent.account.lastName, null);
+  assert.equal(agent.account.displayName, "Bookkeeper");
 });
 
 test("member identity birth is not owner-gated and fails loud on bad input", async () => {
@@ -220,27 +255,41 @@ test("member identity birth is not owner-gated and fails loud on bad input", asy
   // Member birth before and after an owner account exists: the single-owner
   // gate never applies to members.
   const owner = await accountService.createFirstAccount({
-    displayName: "Brian",
+    firstName: "Brian",
+    lastName: "Noah",
     device: okpDevice({ deviceId: "owner-phone" }),
   });
   assert.equal(owner.created, true);
   const member = await accountService.createMemberAccount({
-    displayName: "Jake",
+    firstName: "Jake",
+    lastName: "River",
     device: okpDevice({ deviceId: "jake-phone" }),
   });
   assert.equal(member.created, true);
 
   await assert.rejects(
-    () => accountService.createMemberAccount({ displayName: "", device: okpDevice() }),
-    (error) => error.code === "E_DISPLAY_NAME_REQUIRED",
+    () => accountService.createMemberAccount({ lastName: "River", device: okpDevice() }),
+    (error) => error.code === "E_FIRST_NAME_REQUIRED",
   );
   await assert.rejects(
-    () => accountService.createMemberAccount({ displayName: "No Device" }),
+    () => accountService.createMemberAccount({ firstName: "Jake", device: okpDevice() }),
+    (error) => error.code === "E_LAST_NAME_REQUIRED",
+  );
+  await assert.rejects(
+    () => accountService.createMemberAccount({ firstName: "   ", lastName: "River", device: okpDevice() }),
+    (error) => error.code === "E_FIRST_NAME_REQUIRED",
+  );
+  await assert.rejects(
+    () => accountService.createMemberAccount({ firstName: 42, lastName: "River", device: okpDevice() }),
+    (error) => error.code === "E_FIRST_NAME_REQUIRED",
+  );
+  await assert.rejects(
+    () => accountService.createMemberAccount({ firstName: "No Device", lastName: "River" }),
     (error) => error.code === "E_DEVICE_KEY_REQUIRED",
   );
   const { publicKeyJwk } = newEd25519Jwks();
   await assert.rejects(
-    () => accountService.createMemberAccount({ displayName: "Leak", device: { deviceId: "dev", publicKeyJwk: { ...publicKeyJwk, d: "x" } } }),
+    () => accountService.createMemberAccount({ firstName: "Leak", lastName: "Test", device: { deviceId: "dev", publicKeyJwk: { ...publicKeyJwk, d: "x" } } }),
     (error) => error.code === "E_PRIVATE_KEY_REJECTED",
   );
 });

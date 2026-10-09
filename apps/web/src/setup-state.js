@@ -24,6 +24,18 @@ export function fullName(first = "", last = "") {
 }
 
 /**
+ * Required names (PORCH-024, Brian Oct 14, 2026): a join or identity form
+ * submitted without a first or last name shows a clear error on the empty
+ * field itself — the member is never left at a dead end.
+ */
+export function joinNameErrors(first = "", last = "") {
+  return {
+    first: String(first).trim() ? "" : "Add your first name — this is who your family sees.",
+    last: String(last).trim() ? "" : "Add your last name — this is who your family sees.",
+  };
+}
+
+/**
  * Resumed-setup banner copy. Old ledgers could embed a raw settings object
  * in a failure detail; the banner must name the state only — never a data
  * dump in the viewport.

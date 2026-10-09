@@ -137,7 +137,7 @@ test("a partial ledger skips only the completed step and resumes the other", asy
 
 test("a fresh ledger prints no skips and drives account then network", async (t) => {
   const hub = await stubHub(t, freshLedger());
-  const lines = await drive(t, hub.base, { name: "Owner", network: "Family" });
+  const lines = await drive(t, hub.base, { firstName: "Owner", lastName: "Name", network: "Family" });
   assert.ok(!lines.some((line) => line.includes("[skip]")), "nothing is complete, so nothing may print skip");
   assert.deepEqual(hub.postCalls, ["account", "network"]);
   assert.ok(lines.includes("[done] account — owner account ident_stub created"));
@@ -150,7 +150,7 @@ test("a previously failed step warns with its recorded detail, then retries", as
   ledger.account.status = "failed";
   ledger.account.detail = "the owner never finished first-account creation";
   const hub = await stubHub(t, ledger, { lastError: "the owner never finished first-account creation" });
-  const lines = await drive(t, hub.base, { name: "Owner", network: "Family" });
+  const lines = await drive(t, hub.base, { firstName: "Owner", lastName: "Name", network: "Family" });
   assert.ok(lines.includes("[warn] account previously failed: the owner never finished first-account creation — retrying (completed steps are kept)"));
   assert.deepEqual(hub.postCalls, ["account", "network"]);
   hub.close();
