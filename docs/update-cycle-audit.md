@@ -81,6 +81,52 @@ The matrix is written with the report (`PORCHLIGHT_UPDATE_CYCLE_REPORT=<path>`,
 a JSON file with every scenario's ordered stages, checks, and log excerpts)
 and the run's summary is recorded on the task trail.
 
+## The in-place update surfaces (PORCH-040, Brian Oct 14, 2026)
+
+V1 also ships two owner-initiated conveniences over the same owner-run cycle
+above. Both ride ONE shared update service — the hub's system-vertical
+`UpdateService` (`apps/server/src/services/update.service.ts`), injected into
+the social module's console controller as the `system.update` hub-global —
+over the same npm-backed path; there is no second implementation and no CLI-side
+shortcut:
+
+- **npm stays the version source of record.** The check resolves the latest
+  release with `npm view porchlight version`; the apply runs
+  `npm install -g porchlight@<latest>`; npm's rollback semantics cover a
+  failed install (nothing else in the path mutates the install closure).
+- **Owner-initiated only.** The service owns no timers and no background
+  machinery: the registry is consulted ONLY inside an owner-initiated request
+  — the owner opened the console's update card (`GET /api/social/console/update`,
+  part of the owner console's data fan-out) or ran `porchlight update`.
+- **Already-latest is a version statement.** No install, no restart, no side
+  effects; the console renders the same statement.
+- **Failed apply keeps the prior release serving.** A registry failure or an
+  install failure exits before the restart is ever scheduled; the hub never
+  leaves its request loop, and every failure names its state in plain
+  language — on the console (`502` with the service's message) and in the CLI
+  output (exit 1).
+- **The restart rides the install-time supervision.** On success the hub
+  performs its own graceful shutdown after the HTTP response flushes
+  (`index.ts` late-binds the same `shutdown` SIGTERM uses); the supervisor
+  respawns the freshly installed release on the same address (1s ready-reset
+  backoff). A new release that cannot reach readiness resolves into the named
+  crash-loop fallback (PORCH-016 ac-5) — the supervisor's plain-language
+  state with the recovery line, never a silent unreachable hub.
+- **Perimeter.** Two keys open the surface and nothing else: the owner's
+  Bearer membership session (console) and the machine-local ops token the
+  hub minted at boot (`<home>/state/ops-token.json`, mode 0600, sent as
+  `x-porchlight-ops-token` — the CLI on the hub machine can read it; a
+  tunnel or LAN peer cannot, PORCH-025 zero-trust posture).
+- **CLI surface.** `porchlight update` (`packages/cli/src/update.mjs`) runs
+  the check, applies through the hub's endpoint, waits for the restarted hub
+  to answer `/api/health` (the supervisor's 90s readiness budget mirrored),
+  and reports completion with both versions; on a non-returning hub it names
+  the state and points at `porchlight status`.
+
+Deterministic coverage: `apps/server/test/update.service.test.ts`,
+`modules/social/test/console-update.test.js`,
+`packages/cli/test/update-command.test.js`, `apps/web/test/update.test.js`.
+
 ## Reproduce
 
 ```bash

@@ -7,6 +7,7 @@ import {
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { copyLink, directoryRows, inviteDialogCopy, inviteRows } from './member-directory.js';
+import { updateCardModel } from './update.js';
 import { Lockup, LampMark } from './brand.jsx';
 import { tokens } from './theme.js';
 
@@ -703,6 +704,8 @@ export function OwnerConsole({ data, actions, navigate }) {
   const [issuedDeviceLink, setIssuedDeviceLink] = useState('');
   const [draftLimits, setLimits] = useState(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateFeedback, setUpdateFeedback] = useState(null);
   const members = available(data, 'members') ? data?.members || [] : null;
   const invites = available(data, 'invites') ? data?.invites || [] : null;
   const audit = available(data, 'audit') ? data?.audit || [] : null;
@@ -713,6 +716,26 @@ export function OwnerConsole({ data, actions, navigate }) {
     storageCeilingMb: settings?.quota?.storageCeilingMb ?? '',
     retentionDays: settings?.quota?.retentionDays ?? '',
   };
+  // The one owner action (PORCH-040): apply through the hub's shared update
+  // service. The server speaks its own plain language on failure (the prior
+  // release keeps serving, nothing half-changed), so its message surfaces
+  // verbatim instead of the generic member fallback.
+  async function applyNewRelease() {
+    setUpdating(true);
+    setUpdateFeedback(null);
+    operation.setError('');
+    operation.setNotice('');
+    try {
+      const result = await actions.applyUpdate();
+      setUpdateFeedback(result?.status === 'latest'
+        ? { severity: 'info', message: 'This is already the latest release — nothing changed.' }
+        : { severity: 'success', message: 'Update applied — the hub restarted and serves the new release at the same address.' });
+    } catch (cause) {
+      operation.setError(cause?.body?.error || memberError(cause));
+    } finally {
+      setUpdating(false);
+    }
+  }
   async function makeJoinLink() {
     const result = await operation.run('issueInvite');
     if (!result) return;
@@ -792,6 +815,22 @@ export function OwnerConsole({ data, actions, navigate }) {
         </Box></> : <Typography color="text.secondary">Storage settings are not available from this hub.</Typography>}
       <Box sx={{ mt: 2 }}><Button disabled={!data?.identity || !data?.connections?.some(item => item.identity?.id === data.identity.id && item.token) || operation.busy || typeof actions?.exportData !== 'function'} onClick={() => operation.run('exportData', [], 'Archive download started.')}>Download archive</Button></Box>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>The archive includes your authored posts, comments, reactions, and original media. Backup status is not exposed by this hub.</Typography>
+    </CardContent></Card>
+    <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Updates</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Updates are owner-initiated only — this hub never fetches, downloads, or applies a release on its own.</Typography>
+      {!available(data, 'update') || !data.update ? <Typography color="text.secondary">Release status is not available from this hub.</Typography>
+        : (() => {
+          const card = updateCardModel(data.update);
+          return <>
+            {card.lines.map((line, index) => <Typography key={index}>{line}</Typography>)}
+            {card.note && <Typography color="text.secondary" sx={{ mt: 1 }}>{card.note}</Typography>}
+            {card.state === 'newer' && <Box sx={{ mt: 2 }}>
+              <Button variant="contained" disabled={updating || typeof actions?.applyUpdate !== 'function'} onClick={applyNewRelease}>Update now</Button>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>One owner action: the hub installs the release through npm and restarts itself, serving at the same address.</Typography>
+            </Box>}
+          </>;
+        })()}
+      {updateFeedback && <Alert severity={updateFeedback.severity} sx={{ mt: 2 }}>{updateFeedback.message}</Alert>}
     </CardContent></Card>
     <Card><CardContent><Typography variant="h6" gutterBottom>Recent activity</Typography>
       {audit === null ? <Typography color="text.secondary">Activity status is not available from this hub.</Typography>

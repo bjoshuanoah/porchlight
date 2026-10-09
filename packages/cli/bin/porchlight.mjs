@@ -21,6 +21,7 @@ Commands:
   start        start the hub process group (daemons, server, tunnel) under the supervisor
   stop         stop the hub process group
   status       supervisor/daemon/bootstrap diagnostics (local-only, zero phone-home)
+  update       check the npm registry for a newer release and apply it (owner-initiated; restart included)
   bootstrap    drive the remaining bootstrap steps over the hub URL (resumable)
   service      install/uninstall the launchd-class supervisor service (auto-restart on boot/crash)
   tunnel       tunnel identity: status (default) | mint [--hostname <host>] | reset
@@ -73,6 +74,7 @@ const commands = {
   start: async () => (await import("../src/start.mjs")).run(flags(args.slice(1))),
   stop: async () => (await import("../src/stop.mjs")).run(flags(args.slice(1))),
   status: async () => (await import("../src/status.mjs")).run(flags(args.slice(1))),
+  update: async () => (await import("../src/update.mjs")).run(flags(args.slice(1))),
   bootstrap: async () => (await import("../src/bootstrap.mjs")).run(flags(args.slice(1))),
   service: async () => (await import("../src/service.mjs")).run(flags(args.slice(1))),
   tunnel: async () => (await import("../src/tunnel.mjs")).run(flags(args.slice(1))),

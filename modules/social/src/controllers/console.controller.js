@@ -302,6 +302,61 @@ export class ConsoleController {
   };
 
   /**
+   * Update-surface perimeter (PORCH-040). The owner console reaches the
+   * shared update service with its owner Bearer session; `porchlight update`
+   * reaches the SAME service from the hub machine with the machine-local ops
+   * token the hub minted for it (<home>/state/ops-token.json, mode 0600,
+   * sent as the x-porchlight-ops-token header — it can never arrive over
+   * the tunnel or the LAN boundary). No third way in: any other credential
+   * falls through to the standard owner guard.
+   *
+   * @returns {Promise<object|null>} the verified perimeter, or null after
+   *   writing the error response.
+   */
+  async #requireUpdateAccess(req, res) {
+    const opsHeader = req.headers?.["x-porchlight-ops-token"];
+    const opsToken = typeof opsHeader === "string" ? opsHeader.trim() : null;
+    if (opsToken && this.system?.update?.verifyToken(opsToken)) return { ops: true };
+    return this.#requireOwner(req, res);
+  }
+
+  /**
+   * GET /console/update — the owner-initiated release check (PORCH-040):
+   * the running release plus the npm registry's latest, resolved ONLY when
+   * the owner actually opens this surface (console view or `porchlight
+   * update`). No background fetch exists anywhere; an unreachable registry
+   * is a plain-language note, never an error crash.
+   */
+  updateStatus = async (req, res) => {
+    if (!(await this.#requireUpdateAccess(req, res))) return;
+    if (!this.system?.update) {
+      return res.status(501).json({ error: "The update surface is not wired into this deployment" });
+    }
+    res.json({ release: await this.system.update.status() });
+  };
+
+  /**
+   * POST /console/update — the single owner action that applies a newer
+   * release and restarts the hub (PORCH-040). The console button and
+   * `porchlight update` ride this one shared service over the same npm-backed
+   * path. Already-latest is the version statement only — no install, no
+   * restart; a failed apply changes nothing and the prior release keeps
+   * serving. After a successful apply the hub restarts itself; the response
+   * is flushed first.
+   */
+  applyUpdate = async (req, res) => {
+    if (!(await this.#requireUpdateAccess(req, res))) return;
+    if (!this.system?.update) {
+      return res.status(501).json({ error: "The update surface is not wired into this deployment" });
+    }
+    const result = await this.system.update.apply();
+    if (result.status === "failed") {
+      return res.status(502).json(result);
+    }
+    res.json(result);
+  };
+
+  /**
    * GET /console/ranking — the owner-readable ranking parameters (Feed
    * Ranking Contract: fixed, published formula with every parameter a
    * named configuration value). Read-only; the vote-privacy surface of
