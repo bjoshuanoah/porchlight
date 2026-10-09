@@ -20,7 +20,7 @@ This block is written and re-added by `turbo` before repository-scoped commands 
 ```
 porchlight/
 ├── apps/
-│   ├── server/     # Express API transport (routes + controllers) — @porchlight/server (private)
+│   ├── server/     # Express API transport + thin system health vertical (routes, controllers, service, model) — @porchlight/server (private)
 │   └── web/        # Static SPA shell placeholder — @porchlight/web (private)
 ├── modules/
 │   ├── identity/   # Identity domain: routes → controllers → services → models — @porchlight/identity (public)
@@ -56,7 +56,7 @@ route (REST/MCP surface)
 
 - Every module ships co-located unit tests at `<module>/test/**` run with `node --test`.
 - Integration-level (package-level) tests live under the package and cover cross-package behavior.
-- `apps/server` ships one API contract test (MUI-less) proving the vertical slice.
+- `apps/server` ships MUI-less API contract tests proving the vertical slice (health, identity, social routes), plus a co-located unit test for the system health service.
 - `npm run test` at the repo root runs `turbo run test` then the boundary check.
 
 ## Enforcement (CI)
