@@ -75,6 +75,10 @@ export function normalizeConfig(raw) {
   merged.daemons = { ...merged.daemons, ...src.daemons };
   merged.quota = { ...merged.quota, ...src.quota };
   merged.hub = { ...merged.hub, ...src.hub, tunnel: { ...merged.hub.tunnel, ...src.hub?.tunnel } };
+  // An incoming schemaVersion is honored, never silently defaulted: a file
+  // written by a newer reader must fail loudly at read time (bootstrap
+  // diagnostics contract).
+  merged.schemaVersion = src.schemaVersion ?? DEFAULT_CONFIG.schemaVersion;
   if (merged.schemaVersion !== CONFIG_SCHEMA_VERSION) {
     throw new Error(`config schemaVersion ${merged.schemaVersion} is not supported (expected ${CONFIG_SCHEMA_VERSION})`);
   }
@@ -92,8 +96,15 @@ export function normalizeConfig(raw) {
       throw new Error(`config ${name} must be an integer TCP port`);
     }
   }
+  // Phase-3 mode name is its contract (Porchlight Server TS 6): an
+  // identity-only hub hosts accounts with no network attached, so social
+  // serving is off and identity serving stays on — derived at runtime,
+  // never a build-time fork. Hosted and self-hosted keep the flags
+  // owner-choosable (configuration may disable identity serving for hosted
+  // network modes).
   if (merged.mode.deploymentMode === "identity-only") {
     merged.mode.socialServingEnabled = false;
+    merged.mode.identityServingEnabled = true;
   }
   return merged;
 }

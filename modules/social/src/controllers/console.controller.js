@@ -16,8 +16,12 @@ export class ConsoleController {
    * @param {import("../services/group.service.js").GroupService} deps.groups
    * @param {import("../services/ranking.service.js").RankingService} deps.ranking
    * @param {import("../services/media.service.js").MediaService} [deps.media]
+   * @param {{ release: { service: string, version: string | null }, launch: () => Promise<{ resumable: boolean, lastError: string | null, steps: Record<string, { status: string }>, diagnostics: Array<{ at: string, source: string, message: string }> }> }} [deps.system]
+   *   Hub-global release identity + launch diagnostics ledger, injected by
+   *   apps/server (the system vertical owns the ledger; the social module
+   *   imports no system source).
    */
-  constructor({ networks, invites, membership, quota, audit, groups, ranking, media }) {
+  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
@@ -26,6 +30,7 @@ export class ConsoleController {
     this.groups = groups;
     this.ranking = ranking;
     this.media = media ?? null;
+    this.system = system ?? null;
   }
 
   /**
@@ -248,6 +253,24 @@ export class ConsoleController {
       return res.status(409).json({ error: "No network exists yet" });
     }
     res.json({ groups: await this.groups.list({ networkId: network._id }) });
+  };
+
+  /**
+   * GET /console/system — the console's update-status surface (PORCH-011
+   * ac-4): the running hub release and version, plus the launch diagnostics
+   * ledger (bootstrap step statuses and diagnostic entries — a failed start
+   * is diagnosable because the failing check is named in an entry).
+   * Updates are owner-run in V1 (npm install + the install-time restart,
+   * Brian Oct 13, 2026): nothing on this surface checks for updates, polls
+   * a registry, or schedules any background machinery — a stale read of
+   * static release identity and the local-only diagnostics ledger.
+   */
+  systemStatus = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
+    if (!this.system) {
+      return res.status(501).json({ error: "The system release surface is not wired into this deployment" });
+    }
+    res.json({ release: this.system.release, launch: await this.system.launch() });
   };
 
   /**

@@ -1,4 +1,5 @@
 import express, { Router } from "express";
+import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSystemRouter } from "./routes/system.routes.js";
@@ -20,6 +21,8 @@ export interface ServerOptions {
   bootstrap: BootstrapService;
   /** Live tunnel URL; defaults to re-reading the runtime config per call. */
   hubUrl?: () => string | null;
+  /** Running hub release version; defaults to the server package's own. */
+  version?: string | null;
   /** Built SPA directory; defaults to the files copied into the published server package. */
   webRoot?: string;
 }
@@ -75,6 +78,22 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
   };
   const hub = new HealthService(options.readiness ?? DOWN_PROBES, options.config.mode, hubUrl);
   router.use("/", createSystemRouter(hub, options.bootstrap));
+  // Owner-console release/launch surface (PORCH-011 ac-4): the running
+  // release identity plus the bootstrap ledger's diagnostics. Owner-run
+  // updates (Brian, Oct 13, 2026): this is a static read — no registry
+  // polling, no update check, no background machinery anywhere.
+  const system = {
+    release: { service: "porchlight-server", version: options.version ?? SERVER_PACKAGE_VERSION },
+    launch: async () => {
+      const status = await options.bootstrap.status();
+      return {
+        resumable: status.resumable,
+        lastError: status.lastError,
+        steps: status.steps,
+        diagnostics: status.diagnostics,
+      };
+    },
+  };
   let wellKnown: Router | null = null;
   let frontDoor: Router | null = null;
   let identityModule: ReturnType<typeof assembleIdentityModule> | null = null;
@@ -102,6 +121,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     socialModule = assembleSocialModule(options.store, {
       hubUrl,
       ledger,
+      system,
       verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
       media: { mediaRoot: join(options.bootstrap.configDir, "media") },
     });
@@ -126,11 +146,26 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
 }
 
 function readTunnelUrl(options: ServerOptions): () => string | null {
-  // The supervisor rewrites the runtime config when the tunnel binds, so the
-  // server re-reads it per call instead of holding a stale copy — the config
-  // file remains the single source of truth (never a fork).
+  // The supervisor rewrites the runtime config when the tunnel binds, so
+  // the server re-reads it per call instead of holding a stale copy — the
+  // config file remains the single source of truth (never a fork).
   return () => loadConfig(options.bootstrap.configDir)?.hub.tunnel.url ?? null;
 }
+
+/**
+ * The running release version of this hub process — read from the server
+ * package file that carries it (owner-run updates, Brian Oct 13, 2026, mean
+ * npm swaps the package between restarts; the version is static for the
+ * life of the process and no call ever consults a registry).
+ */
+const SERVER_PACKAGE_VERSION: string | null = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
+})();
 
 /** App factory. Null store/readiness = system surfaces only (dependency-less use). */
 export function createServer(options: ServerOptions) {

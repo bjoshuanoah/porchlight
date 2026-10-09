@@ -45,6 +45,7 @@ export function createSocialRouter(controllers) {
   router.delete("/posts/:postId", content.deletePost);
   router.delete("/me/content", content.sweepMemberContent);
   router.get("/notifications", content.inbox);
+  router.get("/mentions/candidates", content.mentionCandidates);
 
   // Feed assembly (PORCH-007): base timeline, group timelines, and the
   // ranked section — all token-scoped to exactly one origin network. The
@@ -85,6 +86,7 @@ export function createSocialRouter(controllers) {
   router.get("/console/limits", ownerConsole.getLimits);
   router.put("/console/limits", ownerConsole.setLimits);
   router.get("/console/audit", ownerConsole.listAudit);
+  router.get("/console/system", ownerConsole.systemStatus);
   router.post("/console/retention/sweep", ownerConsole.sweepRetention);
   router.post("/console/groups", ownerConsole.createGroup);
   router.get("/console/groups", ownerConsole.listGroups);
