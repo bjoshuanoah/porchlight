@@ -1,0 +1,16 @@
+{
+  "name": "@porchlight/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Porchlight static SPA shell (placeholder).",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "scripts": {
+    "build": "cp -r public/* dist/ 2>/dev/null || true",
+    "dev": "npx http-server public -p 3001 -c-1",
+    "test": "echo 'no tests (SPA shell placeholder)'"
+  }
+}
