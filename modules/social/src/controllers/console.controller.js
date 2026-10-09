@@ -13,13 +13,15 @@ export class ConsoleController {
    * @param {import("../services/membership.service.js").MembershipService} deps.membership
    * @param {import("../services/quota.service.js").QuotaService} deps.quota
    * @param {import("../services/audit.service.js").AuditService} deps.audit
+   * @param {import("../services/group.service.js").GroupService} deps.groups
    */
-  constructor({ networks, invites, membership, quota, audit }) {
+  constructor({ networks, invites, membership, quota, audit, groups }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
     this.quota = quota;
     this.audit = audit;
+    this.groups = groups;
   }
 
   /** GET /console/invites — owner-visible join-link states (unused/used/revoked). */
@@ -132,6 +134,36 @@ export class ConsoleController {
     }
     const result = await this.quota.sweep({ networkId: network._id });
     res.json(result);
+  };
+
+  /**
+   * POST /console/groups — owner creates a within-network group container
+   * (groups ruling Oct 8 2026). Group membership must be a subset of the
+   * network membership; the group service enforces it.
+   */
+  createGroup = async (req, res) => {
+    const network = await this.networks.get();
+    if (!network) {
+      return res.status(409).json({ error: "No network exists yet" });
+    }
+    const { name, members } = req.body ?? {};
+    try {
+      const group = await this.groups.create({ networkId: network._id, name, members });
+      await this.audit.record({ networkId: network._id, did: null, action: "group_create", detail: { groupId: group._id } });
+      res.status(201).json({ group });
+    } catch (error) {
+      const status = error.code === "E_GROUP_NOT_MEMBER" ? 403 : 400;
+      res.status(status).json({ error: error.message, code: error.code ?? "E_INTERNAL" });
+    }
+  };
+
+  /** GET /console/groups — the network's group containers. */
+  listGroups = async (_req, res) => {
+    const network = await this.networks.get();
+    if (!network) {
+      return res.status(409).json({ error: "No network exists yet" });
+    }
+    res.json({ groups: await this.groups.list({ networkId: network._id }) });
   };
 }
 

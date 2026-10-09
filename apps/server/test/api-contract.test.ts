@@ -21,6 +21,14 @@ function mutableConfig(overrides: Partial<PorchlightConfig["mode"]> = {}): Porch
 
 const OK_PROBES: { mongo: Probe; redis: Probe } = { mongo: async () => "ok", redis: async () => "ok" };
 
+interface Json {
+  [key: string]: unknown;
+}
+async function call(port: number, path: string, init?: RequestInit): Promise<{ status: number; body: Json }> {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, init);
+  return { status: res.status, body: (await res.json()) as Json };
+}
+
 interface TestHub {
   app: Express;
   bootstrap: BootstrapService;
@@ -131,22 +139,125 @@ test("identity hub serves well-known discovery surfaces (contract)", async (t) =
   assert.equal(discovery.issuer, "https://hub.test");
 });
 
-test("social module owns /api/social post creation (contract)", async (t) => {
+test("content engine: membership-gated signed post creation ends to end (contract)", async (t) => {
   const hub = testHub();
   t.after(hub.close);
   const port = await hub.port;
 
-  const res = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
+  // Member identity + admission (perimeter; see membership-perimeter test
+  // for the full join flow): account → session → network → invite → admit.
+  const device = generateKeyPairSync("ed25519");
+  const publicKeyJwk = device.publicKey.export({ format: "jwk" });
+  const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ userId: "user_1", body: "hello" }),
+    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_1", publicKeyJwk } }),
   });
-  assert.equal(res.status, 201);
+  assert.equal(account.status, 201);
+  const did = (account.body.account as Json).did as string;
+  const challenge = await call(port, "/api/identity/session/challenge", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did }),
+  });
+  const session = await call(port, "/api/identity/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did, deviceId: "dev_1", nonce: challenge.body.nonce, signature: sign(null, Buffer.from(challenge.body.nonce as string, "utf8"), device.privateKey).toString("base64url") }),
+  });
+  assert.equal(session.status, 201);
+  const identityToken = (session.body as Json).accessToken as string;
 
-  const body = (await res.json()) as { userId: string; body: string };
-  assert.equal(body.userId, "user_1");
-  assert.equal(body.body, "hello");
+  await call(port, "/api/social/bootstrap/network", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Family" }) });
+  const invite = await call(port, "/api/social/bootstrap/invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+  const code = (invite.body.joinUrl as string).split("/join/")[1];
+  const admit = await call(port, "/api/social/join/admit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      code,
+      identityAccessToken: identityToken,
+      deviceId: "dev_1",
+      devicePublicKeyJwk: publicKeyJwk,
+      signature: sign(null, Buffer.from(`porchlight-join:${code}`, "utf8"), device.privateKey).toString("base64url"),
+    }),
+  });
+  assert.equal(admit.status, 201);
+  const membershipToken = (admit.body as Json).accessToken as string;
+
+  // A post write carries the signed payload + the membership Bearer token.
+  const payload = { type: "text", body: "hello family" };
+  const signature = sign(null, Buffer.from(canonicalJson(payload), "utf8"), device.privateKey).toString("base64url");
+  const created = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${membershipToken}` },
+    body: JSON.stringify({ payload, signature }),
+  });
+  assert.equal(created.status, 200);
+  const createdBody = (await created.json()) as { post: Json; did: string };
+  assert.equal(createdBody.post.type, "text");
+  assert.equal(createdBody.post.body, "hello family");
+  assert.equal("interactionCounters" in createdBody.post, false); // rank inputs never leave
+  assert.equal(createdBody.did, did);
+
+  // An unsigned write is refused before any domain state exists.
+  const unsigned = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${membershipToken}` },
+    body: JSON.stringify({ payload }),
+  });
+  assert.equal(unsigned.status, 403);
+
+  // A tokenless write cannot resolve a perimeter at all.
+  const tokenless = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ payload, signature }),
+  });
+  assert.equal(tokenless.status, 401);
+
+  // Comment + vote under the same perimeter; the view strips vote data.
+  const postId = createdBody.post._id as string;
+  const commentPayload = { postId, body: "nice!" };
+  const comment = await fetch(`http://127.0.0.1:${port}/api/social/posts/${postId}/comments`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${membershipToken}` },
+    body: JSON.stringify({
+      payload: commentPayload,
+      signature: sign(null, Buffer.from(canonicalJson(commentPayload), "utf8"), device.privateKey).toString("base64url"),
+    }),
+  });
+  assert.equal(comment.status, 200);
+  const reactions = await fetch(`http://127.0.0.1:${port}/api/social/posts/${postId}/reactions`);
+  assert.equal(reactions.status, 401); // reads need a membership too
+
+  // Deleting the authored post cascades through the same surface.
+  const postJson = createdBody.post as Json;
+  const originNetworkId = postJson.originNetworkId as string;
+  const deletePayload = { kind: "delete", postId, networkId: originNetworkId };
+  const removed = await fetch(`http://127.0.0.1:${port}/api/social/posts/${postId}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json", authorization: `Bearer ${membershipToken}` },
+    body: JSON.stringify({ signature: sign(null, Buffer.from(canonicalJson(deletePayload), "utf8"), device.privateKey).toString("base64url") }),
+  });
+  assert.equal(removed.status, 200);
+  const removedBody = (await removed.json()) as { deleted: boolean; cascadeRows: number };
+  assert.equal(removedBody.deleted, true);
+  assert.equal(removedBody.cascadeRows >= 2, true); // post + comment at minimum
 });
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortKeys(value as Record<string, unknown>));
+}
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>).sort().map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
+    );
+  }
+  return value;
+}
 
 test("missing fields return 400 without domain state", async (t) => {
   const hub = testHub();

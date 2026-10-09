@@ -3,8 +3,12 @@ import { InviteService } from "./services/invite.service.js";
 import { MembershipService } from "./services/membership.service.js";
 import { QuotaService } from "./services/quota.service.js";
 import { AuditService } from "./services/audit.service.js";
+import { PostService } from "./services/post.service.js";
+import { InteractionService } from "./services/interaction.service.js";
+import { NotificationService } from "./services/notification.service.js";
+import { GroupService } from "./services/group.service.js";
 import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
-import { FeedController } from "./controllers/feed.controller.js";
+import { ContentController } from "./controllers/content.controller.js";
 import { MembershipController } from "./controllers/membership.controller.js";
 import { ConsoleController } from "./controllers/console.controller.js";
 import { createSocialRouter } from "./routes.js";
@@ -35,6 +39,13 @@ export function assembleSocialModule(store, options = {}) {
   const deviceKeys = collection("device_keys");
   const artifacts = collection("artifacts");
   const auditEvents = collection("audit_events");
+  const posts = collection("posts");
+  const comments = collection("comments");
+  const reactions = collection("reactions");
+  const votes = collection("votes");
+  const notifications = collection("notifications");
+  const derivedData = collection("derived_data");
+  const groups = collection("groups");
 
   const auditService = new AuditService(auditEvents, ledger);
   const audit = auditService.recorderFor(null);
@@ -50,10 +61,33 @@ export function assembleSocialModule(store, options = {}) {
     audit,
   });
   const quotaService = new QuotaService({ artifacts, networks, audit });
+  const groupService = new GroupService({ groups, memberships });
+  const notificationService = new NotificationService({ notifications, membership: membershipService });
+  const postService = new PostService({
+    posts,
+    comments,
+    reactions,
+    votes,
+    notifications,
+    derivedData,
+    artifacts,
+    groups,
+    membership: membershipService,
+    audit,
+  });
+  const interactionService = new InteractionService({
+    posts,
+    comments,
+    reactions,
+    votes,
+    membership: membershipService,
+    notifications: notificationService,
+    audit,
+  });
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, ledger),
-    feed: new FeedController(),
+    content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService }),
     membership: new MembershipController(membershipService, networkService),
     console: new ConsoleController({
       networks: networkService,
@@ -61,6 +95,7 @@ export function assembleSocialModule(store, options = {}) {
       membership: membershipService,
       quota: quotaService,
       audit: auditService,
+      groups: groupService,
     }),
   };
 
@@ -70,6 +105,10 @@ export function assembleSocialModule(store, options = {}) {
     membershipService,
     quotaService,
     auditService,
+    groupService,
+    postService,
+    interactionService,
+    notificationService,
     controllers,
     api: createSocialRouter(controllers),
   };
