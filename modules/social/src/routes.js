@@ -13,11 +13,12 @@ import express, { Router } from "express";
  *   membership: import("./controllers/membership.controller.js").MembershipController,
  *   console: import("./controllers/console.controller.js").ConsoleController,
  *   media: import("./controllers/media.controller.js").MediaController,
+ *   albums: import("./controllers/album.controller.js").AlbumController,
  * }} controllers
  */
 export function createSocialRouter(controllers) {
   const router = Router();
-  const { bootstrap, content, feed, membership, console: ownerConsole, media } = controllers;
+  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums } = controllers;
 
   // Bootstrap-era network + invite surface (PORCH-003 contract; unchanged).
   router.get("/network", bootstrap.get);
@@ -73,6 +74,20 @@ export function createSocialRouter(controllers) {
   router.get("/media/:mediaId/renditions/:kind", media.serveRendition);
   router.get("/media/:mediaId/original", media.serveOriginal);
   router.get("/media/export", media.exportArchive);
+
+  // Albums (PORCH-013): manual, deterministic organization. Membership rows
+  // are derived-artifact-class records keyed to the original post (deletion-
+  // cascade bound); the album surface serves renditions by default with
+  // original-quality retrieval as the explicit member action. Every surface
+  // is token-scoped to exactly one origin network; writes are device-signed.
+  router.get("/albums", albums.listAlbums);
+  router.get("/albums/:name", albums.getAlbum);
+  router.post("/albums/:name/items", albums.addItem);
+  router.delete("/albums/:name/items/:postId", albums.removeItem);
+  router.delete("/albums/:name", albums.deleteAlbum);
+  router.get("/albums/:name/media", albums.mediaList);
+  router.get("/albums/:name/media/:mediaId/renditions/:kind", albums.serveRendition);
+  router.get("/albums/:name/media/:mediaId/original", albums.serveOriginal);
 
   // Owner console server behaviors (PORCH-005 ac-1/3/4) + group containers.
   router.get("/console/ranking", ownerConsole.getRanking);

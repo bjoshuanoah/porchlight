@@ -218,6 +218,12 @@ export class PostService {
       (row) => row.type === "reply" && row.commentId !== null && theirCommentIds.has(row.commentId),
     );
     const keyed = await this.#keyedRows({ networkId, posts: authoredPosts });
+    // Derived-artifact-class rows (people tags, album memberships) are keyed
+    // to the originals — they die with the same transactional write. Without
+    // this part the sweep would orphan every manual-organization row keyed
+    // to the member's posts.
+    const sweptPostIdSet = new Set(authoredPosts.map((post) => post._id));
+    const sweptDerived = (await this.derivedData.find({ networkId })).filter((row) => sweptPostIdSet.has(row.postId));
 
     const snapshot = [
       { collection: this.posts, rows: authoredPosts },
@@ -225,6 +231,7 @@ export class PostService {
       { collection: this.reactions, rows: theirReactions },
       { collection: this.votes, rows: theirVotes },
       { collection: this.notifications, rows: repliesToTheirComments },
+      { collection: this.derivedData, rows: sweptDerived },
       ...keyed,
     ];
     await this.runTransactional(snapshot);
