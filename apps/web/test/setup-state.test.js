@@ -26,6 +26,21 @@ test("a fully completed ledger lands in the network, never a detached screen", (
   assert.equal(setupStage(ledger({ account: "complete", network: "complete", invite: "complete", quota: "complete" })), "landed");
 });
 
+test("setupStage reads the exact document /api/bootstrap/state serves (PORCH-021)", () => {
+  // The served shape, verbatim from the system route: resumable, lastError,
+  // steps, diagnostics, config. The wizard maps this one state — the same
+  // source the CLI resume driver reads — never a second stored copy.
+  const served = (statuses, extra = {}) => ({
+    resumable: false, lastError: null, steps: ledger(statuses).steps, diagnostics: [],
+    config: { mode: {}, quota: {}, hubUrl: null }, updatedAt: "2026-10-09T00:00:00.000Z", ...extra,
+  });
+  assert.equal(setupStage(served({ account: "complete", network: "complete" })), "landed");
+  assert.equal(setupStage(served({ account: "complete", network: "pending" })), "network");
+  assert.equal(setupStage(served({ account: "pending", network: "complete" })), "account");
+  assert.equal(setupStage(served({ account: "failed", network: "pending" }, { lastError: "account step crashed mid-bootstrap" })), "network");
+  assert.equal(setupStage(served({ account: "failed", network: "complete" }, { lastError: "account step crashed mid-bootstrap" })), "account");
+});
+
 test("the wizard carries exactly two prompts", () => {
   assert.deepEqual(SETUP_STEPS, ["network", "account"]);
 });

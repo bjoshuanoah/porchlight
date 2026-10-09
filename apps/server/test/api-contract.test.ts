@@ -626,6 +626,46 @@ test("first account creation records into the bootstrap ledger", async (t) => {
   assert.equal(state.steps.account.status, "complete");
 });
 
+interface BootstrapLedgerBody {
+  resumable: boolean;
+  lastError: string | null;
+  steps: Record<string, { status: string }>;
+}
+
+test("the served ledger reads already-bootstrapped once both steps complete (PORCH-021)", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+
+  // Drive bootstrap through the same endpoints the CLI driver and the web
+  // wizard call: the single stored state both surfaces resume from.
+  const device = generateKeyPairSync("ed25519");
+  const account = await call(port, "/api/identity/bootstrap/account", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_1", publicKeyJwk: device.publicKey.export({ format: "jwk" }) } }),
+  });
+  assert.equal(account.status, 201);
+  assert.ok(account.body.account, "first-account creation returns the account row");
+  const did = (account.body.account as NotificationAccountBody).did as string;
+  const network = await call(port, "/api/social/bootstrap/network", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "The Noah Family", ownerDid: did }),
+  });
+  assert.equal(network.status, 201);
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/bootstrap/state`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as BootstrapLedgerBody;
+  // Fresh boot, already-bootstrapped hub: both surfaces read these same
+  // complete rows — the CLI prints the skips ("bootstrap already complete —
+  // nothing to do"), the web wizard's stage derivation lands in the network.
+  assert.deepEqual(Object.entries(body.steps).map(([step, row]) => [step, row.status]), [["account", "complete"], ["network", "complete"]]);
+  assert.equal(body.resumable, false, "nothing to resume when every step is complete");
+  assert.equal(body.lastError, null);
+});
+
 test("identity adoption flows through the API and records the ledger", async (t) => {
   const homeHub = testHub();
   const adoptingHub = testHub();
