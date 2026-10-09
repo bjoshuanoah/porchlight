@@ -74,6 +74,18 @@ test("normalizeConfig: schemaVersion mismatch fails loudly, not silently default
   assert.throws(() => normalizeConfig(config), /schemaVersion/);
 });
 
+test("normalizeConfig: identity.adoptionEnabled defaults false — and one flip restores the adoption flows (PORCH-026)", () => {
+  assert.equal(DEFAULT_CONFIG.identity.adoptionEnabled, false);
+  // A config written before the field existed (no identity section at all)
+  // normalizes to the hidden V1 posture, never an accidental re-entry.
+  const legacy = normalizeConfig({ schemaVersion: CONFIG_SCHEMA_VERSION, hub: {} });
+  assert.equal(legacy.identity.adoptionEnabled, false);
+  // Flag flip = the single re-enable; the rest of the config is untouched.
+  const enabled = normalizeConfig({ ...freshConfig(), identity: { adoptionEnabled: true } });
+  assert.equal(enabled.identity.adoptionEnabled, true);
+  assert.equal(enabled.hub.httpPort, 8710);
+});
+
 test("config round-trips through disk and re-normalizes on load (runtime config is the single source of truth)", () => {
   const root = mkdtempSync(join(tmpdir(), "porchlight-config-"));
   try {

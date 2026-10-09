@@ -55,6 +55,16 @@ export const DEFAULT_CONFIG = Object.freeze({
       url: null,
     },
   },
+  /**
+   * Identity-plane feature switches. Second-hub identity adoption (Oct 14,
+   * 2026 ruling, PORCH-026): flag-hidden in the current build — no adoption
+   * entry point is visible anywhere and the capability refuses when hidden.
+   * The adoption architecture is unchanged; setting adoptionEnabled re-enters
+   * it exactly as before (a flag flip, never a rebuild).
+   */
+  identity: {
+    adoptionEnabled: false,
+  },
   /** Installer-managed daemon bindings (local-only, not the app surface). */
   daemons: {
     mongoPort: 27217,
@@ -83,6 +93,7 @@ export function normalizeConfig(raw) {
   merged.daemons = { ...merged.daemons, ...src.daemons };
   merged.quota = { ...merged.quota, ...src.quota };
   merged.hub = { ...merged.hub, ...src.hub, tunnel: { ...merged.hub.tunnel, ...src.hub?.tunnel } };
+  merged.identity = { ...merged.identity, ...src.identity };
   // An incoming schemaVersion is honored, never silently defaulted: a file
   // written by a newer reader must fail loudly at read time (bootstrap
   // diagnostics contract).

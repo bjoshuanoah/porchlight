@@ -31,10 +31,10 @@ export class AccountController {
     return identity;
   }
 
-  /** GET /account — bootstrap state for first-account/adoption offer. */
+  /** GET /account — bootstrap state for the first-account offer (adoption is flag-hidden, PORCH-026). */
   get = async (_req, res) => {
-    const account = await this.accountService.get();
-    res.json({ exists: account !== null, account, adoptionAvailable: account === null });
+    const { account, adoptionAvailable } = await this.accountService.bootstrapOffer();
+    res.json({ exists: account !== null, account, adoptionAvailable });
   };
 
   /**
@@ -79,6 +79,7 @@ export class AccountController {
     } catch (error) {
       const statusByCode = {
         E_OWNER_ACCOUNT_EXISTS: 409,
+        E_ADOPTION_HIDDEN: 403,
         E_ADOPTION_FIELDS_REQUIRED: 400,
         E_DEVICE_KEY_REQUIRED: 400,
         E_PRIVATE_KEY_REJECTED: 400,
