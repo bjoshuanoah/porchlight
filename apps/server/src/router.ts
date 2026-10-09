@@ -9,6 +9,7 @@ import { assembleIdentityModule } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
 import { loadConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
+import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
 import type { BootstrapService, BootstrapStep } from "./services/bootstrap.service.js";
 import type { Probe } from "./dependencies.js";
@@ -22,6 +23,17 @@ export interface ServerOptions {
   hubUrl?: () => string | null;
   /** Running hub release version; defaults to the server package's own. */
   version?: string | null;
+  /**
+   * Hub home root (PORCH-040 update surface). The machine-local ops token
+   * for `porchlight update` lives under <homeRoot>/state (0600).
+   */
+  homeRoot?: string | null;
+  /**
+   * Graceful self-restart after a successful update apply (PORCH-040) —
+   * the hub's own shutdown; the supervisor respawns the new release.
+   * Defaults to exiting the process.
+   */
+  restart?: (() => void) | null;
   /** Built SPA directory; defaults to the files copied into the published server package. */
   webRoot?: string;
   /**
@@ -91,11 +103,23 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
   const hub = new HealthService(options.readiness ?? DOWN_PROBES, options.config.mode, hubUrl);
   router.use("/", createSystemRouter(hub, options.bootstrap));
   // Owner-console release/launch surface (PORCH-011 ac-4): the running
-  // release identity plus the bootstrap ledger's diagnostics. Owner-run
-  // updates (Brian, Oct 13, 2026): this is a static read — no registry
-  // polling, no update check, no background machinery anywhere.
+  // release identity plus the bootstrap ledger's diagnostics. Update surface
+  // (PORCH-040, Brian Oct 14, 2026): the same `system` injection carries the
+  // ONE shared npm-backed update service behind both owner-initiated surfaces
+  // (the console's update action and `porchlight update`). Still no registry
+  // polling, no background update check, no background machinery anywhere:
+  // the service fetches and applies ONLY inside an owner-initiated request.
+  const update = new UpdateService({
+    version: options.version ?? SERVER_PACKAGE_VERSION,
+    registry: npmRegistry(),
+    installer: npmInstaller(),
+    opsTokenFile: options.homeRoot ? join(options.homeRoot, "state", "ops-token.json") : null,
+    restart: options.restart ?? (() => process.exit(0)),
+    log: options.log ?? null,
+  });
   const system = {
     release: { service: "porchlight-server", version: options.version ?? SERVER_PACKAGE_VERSION },
+    update,
     launch: async () => {
       const status = await options.bootstrap.status();
       return {

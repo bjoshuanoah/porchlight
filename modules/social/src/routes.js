@@ -104,6 +104,11 @@ export function createSocialRouter(controllers) {
   router.put("/console/limits", ownerConsole.setLimits);
   router.get("/console/audit", ownerConsole.listAudit);
   router.get("/console/system", ownerConsole.systemStatus);
+  // Update surface (PORCH-040): owner-initiated release check (GET) and the
+  // single apply-and-restart action (POST). Both owner surfaces — this one
+  // and `porchlight update` — ride the hub's ONE shared update service.
+  router.get("/console/update", ownerConsole.updateStatus);
+  router.post("/console/update", ownerConsole.applyUpdate);
   router.post("/console/retention/sweep", ownerConsole.sweepRetention);
   router.post("/console/groups", ownerConsole.createGroup);
   router.get("/console/groups", ownerConsole.listGroups);

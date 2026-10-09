@@ -30,7 +30,10 @@ export async function bootServer(): Promise<BootResult> {
   const deps = await connectDependencies(config);
   const store = mongoStore(deps.db);
   const bootstrap = new BootstrapService(store, config, home.root);
-  const app = createServer({ store, readiness: deps.readiness, config, bootstrap });
+  // The update surface's restart hook is late-bound in start(): the hub owns
+  // the graceful shutdown the supervisor respawns after an owner-applied
+  // update (PORCH-040).
+  const app = createServer({ store, readiness: deps.readiness, config, bootstrap, homeRoot: home.root });
   const httpPort = config.hub.httpPort;
   // Operator bind address (hub.host; PORCH-025). "0.0.0.0" adds LAN
   // reachability beside the tunnel; one app pipeline serves every interface,
@@ -64,15 +67,24 @@ export async function start(): Promise<void> {
     process.stderr.write(`porchlight hub listen failed: ${(error as Error).message}\n`);
     process.exit(1);
   }
+  // Late-bound graceful shutdown. The update surface (PORCH-040) triggers
+  // the SAME shutdown for its post-apply restart: the hub exits cleanly and
+  // the supervisor restarts the freshly installed release automatically.
+  const restartRef: { current: (() => void) | null } = { current: null };
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     server.close();
     // The redis client can already be closed/reconnecting — quitting must
     // never turn a clean shutdown into a crash report.
     await deps.redis.quit().catch(() => {});
     process.exit(0);
   };
-  process.on("SIGTERM", () => void shutdown());
-  process.on("SIGINT", () => void shutdown());
+  const shutdownOnce = () => void shutdown();
+  restartRef.current = shutdownOnce;
+  process.on("SIGTERM", shutdownOnce);
+  process.on("SIGINT", shutdownOnce);
   process.stdout.write("porchlight-server listening\n");
 }
 

@@ -15,6 +15,7 @@ import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConne
 import { createCustody } from "./session-sync.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
+import { waitUntilHubHealthy } from "./update.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
@@ -53,7 +54,7 @@ function App() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [identity, setIdentity] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? initialConnections[0].identity || null : null);
   const [groups, setGroups] = useState([]);
-  const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, availability: {} });
+  const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, update: null, availability: {} });
   const [network, setNetwork] = useState(null);
   const [networkLoaded, setNetworkLoaded] = useState(false);
   const [newDevices, setNewDevices] = useState([]);
@@ -192,13 +193,16 @@ function App() {
       saveTimeline(stored, `${origin}:${identity.id}`, result.posts);
     } else setNotice("Your family server is unreachable. Showing saved moments where available.");
     setRanked(result.ranked);
-    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult] = await Promise.allSettled([
+    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult] = await Promise.allSettled([
       request(liveActive, "social/console/groups"), request(liveActive, "social/console/members"),
       request(liveActive, "social/console/invites"), request(liveActive, "social/console/limits"),
       request(liveActive, "social/console/disk"), request(liveActive, "social/console/audit"),
       request({ ...liveActive, token: liveActive.identityToken }, "identity/devices"),
       request(liveActive, "social/console/devices"),
       request(liveActive, "social/console/device-links"),
+      // Owner-initiated release check (PORCH-040): the registry is consulted
+      // server-side ONLY because the owner opened the console's update card.
+      request(liveActive, "social/console/update"),
     ]);
     const value = (result, fallback) => result.status === "fulfilled" ? result.value : fallback;
     setGroups(value(groupResult, {}).groups || []);
@@ -208,12 +212,14 @@ function App() {
       audit: value(auditResult, {}).events || [], devices: value(deviceResult, {}).registrations || [],
       allDevices: value(allDevicesResult, {}).devices || null,
       deviceLinks: value(linksResult, {}).deviceLinks || null,
+      update: value(updateResult, null)?.release || null,
       availability: {
         groups: groupResult.status === "fulfilled", members: memberResult.status === "fulfilled",
         invites: inviteResult.status === "fulfilled", settings: limitResult.status === "fulfilled",
         disk: diskResult.status === "fulfilled", audit: auditResult.status === "fulfilled",
         devices: deviceResult.status === "fulfilled",
         allDevices: allDevicesResult.status === "fulfilled", deviceLinks: linksResult.status === "fulfilled",
+        update: updateResult.status === "fulfilled",
       },
     });
     if (deviceResult.status === "fulfilled") observeDevices(deviceResult.value.registrations || [], liveActive);
@@ -396,6 +402,16 @@ function App() {
     },
     issueInvite: async () => { const result = await request(active, "social/console/invites", { method: "POST", body: JSON.stringify({ role: "member", maxUses: 1 }) }); await reload(); return result; },
     revokeInvite: async (id) => { const result = await request(active, "social/console/invites/revoke", { method: "POST", body: JSON.stringify({ inviteId: id }) }); await reload(); return result; },
+    // Shared update path (PORCH-040): the apply POST returns once npm has
+    // installed the release and the hub is restarting; after the restarted
+    // release answers, the console refresh shows the new version at the
+    // same address.
+    applyUpdate: async () => {
+      const result = await request(active, "social/console/update", { method: "POST", body: JSON.stringify({}) });
+      if (result?.status === "applied") await waitUntilHubHealthy(active?.url || origin);
+      await reload();
+      return result;
+    },
     updateSettings: async (settings) => { const result = await request(active, "social/console/limits", { method: "PUT", body: JSON.stringify(settings) }); await reload(); return result; },
     revokeMember: async (member) => {
       const result = await request(active, "social/console/members/revoke", {
@@ -530,7 +546,7 @@ function App() {
     posts, ranked, groups, albums: [], connections, network: { name: active?.name || network?.name || null, id: active?.networkId || network?._id },
     identity, members: owner.members, devices: owner.devices, settings: owner.settings,
     invites: owner.invites, audit: owner.audit, disk: owner.disk, availability: owner.availability,
-    allDevices: owner.allDevices, deviceLinks: owner.deviceLinks,
+    allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline,
   };
   const props = { data, actions, navigate };
