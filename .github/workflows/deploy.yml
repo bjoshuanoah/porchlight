@@ -214,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$MODE" = "dry-run" ]; then
-            gh release download "$TAG" --pattern "porchlight-*.tgz" --dir "$RUNNER_TEMP/install"
+            gh release download "$TAG" --pattern "porchlight-*.tgz" --dir "$RUNNER_TEMP/install" --repo "$GITHUB_REPOSITORY"
             npm install -g "$RUNNER_TEMP"/install/porchlight-*.tgz
           else
             npm install -g porchlight
