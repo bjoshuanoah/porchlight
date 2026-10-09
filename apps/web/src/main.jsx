@@ -86,6 +86,23 @@ function App() {
         next.token = membership.accessToken;
         next.refreshToken = membership.refreshToken ?? next.refreshToken;
       }
+      // Founder binding rides restore (PORCH-018): a connection without a
+      // membership token yet — a fresh owner connection, or any hub where
+      // the owner was bootstrapped before binding existed — re-credentials
+      // silently with the device key and comes back holding network tokens.
+      if (!next.token && next.deviceId) {
+        try {
+          const restored = await request({ url: next.url }, "social/session/restore", {
+            method: "POST", body: JSON.stringify({ identityAccessToken: next.identityToken, deviceId: next.deviceId }),
+          });
+          const first = restored?.sessions?.[0];
+          if (first) {
+            next.token = first.accessToken;
+            next.refreshToken = first.refreshToken;
+            next.networkId = first.networkId;
+          }
+        } catch { /* no membership row yet: the plain notice below names it */ }
+      }
       const revised = connections.map((item) => item === active ? next : item);
       saveConnections(stored, origin, revised);
       setConnections(revised);
@@ -376,15 +393,35 @@ function App() {
     adoptOwnerIdentity: ({ sourceHubUrl, memberId }) =>
       request({ url: origin }, "identity/bootstrap/adopt", { method: "POST", body: JSON.stringify({ sourceHubUrl, did: memberId }) }),
     startNetwork: async ({ name, ownerDid }) => {
-      const result = await request({ url: origin }, "social/bootstrap/network", {
+      const hub = { url: origin };
+      const result = await request(hub, "social/bootstrap/network", {
         method: "POST", body: JSON.stringify({ name, ownerDid }),
       });
       setNetwork(result.network || null);
+      // Founder binding (PORCH-018): network creation binds the owner's
+      // membership server-side (role: owner, no invite consumed); this
+      // device re-credentials silently right after so the owner lands in
+      // setup already holding network tokens — no manual binding step.
+      const ownerConnection = connections.find((item) => item.identity?.id === ownerDid);
+      if (ownerDid && ownerConnection?.deviceId) {
+        try {
+          const registration = { did: ownerDid, deviceId: ownerConnection.deviceId };
+          const session = await openDeviceSession(hub, registration, request);
+          const restored = await request(hub, "social/session/restore", {
+            method: "POST", body: JSON.stringify({ identityAccessToken: session.accessToken, deviceId: registration.deviceId }),
+          });
+          const first = restored?.sessions?.[0];
+          if (first) {
+            const revised = connections.map((item) => item === ownerConnection
+              ? { ...item, identityToken: session.accessToken, identityRefreshToken: session.refreshToken, token: first.accessToken, refreshToken: first.refreshToken, networkId: first.networkId, name: result.network?.name || item.name }
+              : item);
+            saveConnections(stored, origin, revised);
+            setConnections(revised);
+          }
+        } catch { /* binding stays server-side; the next silent re-credential binds */ }
+      }
       return result;
     },
-    issueBootstrapInvite: () => request({ url: origin }, "social/bootstrap/invite", {
-      method: "POST", body: JSON.stringify({ role: "member", maxUses: 1 }),
-    }),
     setBootstrapQuotas: async (quota) => {
       const result = await request({ url: origin }, "bootstrap/quotas", {
         method: "POST", body: JSON.stringify(quota),

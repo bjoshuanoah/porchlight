@@ -93,11 +93,20 @@ async function runStep(step, base, args, out, config, ctx = {}) {
       const name = args.network ?? (await ask("Network name: "));
       const body = { name };
       // Founder rule: the owner identity recorded at the account step is the
-      // network's owner.
+      // network's owner. On resume the account step is already complete and
+      // its response is gone, so the owner DID re-resolves from the hub
+      // account surface — the network step still binds the founder.
+      if (!ctx.ownerDid) {
+        const { body: accountState } = await hubJson(config, "/api/identity/account");
+        ctx.ownerDid = accountState?.account?.did ?? null;
+      }
       if (ctx.ownerDid) body.ownerDid = ctx.ownerDid;
       const response = await postJson(config, "/api/social/bootstrap/network", body);
       if (response.status >= 400) throw new Error(response.body.error ?? `HTTP ${response.status}`);
       out(`[done] network — "${response.body.network.name}" created (or already present)`);
+      // Founder-root binding (PORCH-018): the owner who created the network
+      // is already a member of it — the hub account is the proof, never an invite.
+      if (response.body.membership) out(`  owner bound to this network (role: ${response.body.membership.role})`);
       return;
     }
     case "invite": {

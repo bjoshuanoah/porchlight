@@ -43,6 +43,7 @@ import { createSocialRouter } from "./routes.js";
  *     launch: () => Promise<{ resumable: boolean, lastError: string | null, steps: Record<string, { status: string }>, diagnostics: Array<{ at: string, source: string, message: string }> }>,
  *   },
  *   verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>,
+ *   registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null>,
  *   rankingConfig?: object,
  *   media?: {
  *     mediaRoot?: string,
@@ -87,6 +88,7 @@ export function assembleSocialModule(store, options = {}) {
     deviceKeys,
     invites: inviteService,
     verifyMemberIdToken: options.verifyMemberIdToken ?? (async () => null),
+    registeredDeviceKey: options.registeredDeviceKey ?? null,
     networks,
     audit,
   });
@@ -170,7 +172,7 @@ export function assembleSocialModule(store, options = {}) {
   });
 
   const controllers = {
-    bootstrap: new SocialBootstrapController(networkService, inviteService, bootstrapLedger),
+    bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger),
     content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService }),
     feed: new FeedController({ feed: feedService }),
     membership: new MembershipController(membershipService, networkService),

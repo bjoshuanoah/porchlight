@@ -97,7 +97,10 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
   let wellKnown: Router | null = null;
   let frontDoor: Router | null = null;
   let identityModule: ReturnType<typeof assembleIdentityModule> | null = null;
-  let identityAuth: { verifyAccessToken: (token: string) => Promise<{ did: string; sessionId: unknown } | null> } | null = null;
+  let identityAuth: {
+    verifyAccessToken: (token: string) => Promise<{ did: string; sessionId: unknown } | null>;
+    activeDeviceRegistration: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown>; [key: string]: unknown } | null>;
+  } | null = null;
   let socialModule: ReturnType<typeof assembleSocialModule> | null = null;
   if (options.store && options.config.mode.identityServingEnabled) {
     // The identity module assembles its own route → controller → service →
@@ -110,7 +113,12 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     identityModule = identity;
     router.use("/identity", identity.api);
     wellKnown = identity.wellKnown;
-    identityAuth = { verifyAccessToken: (token: string) => identity.authService.verifyAccessToken(token) };
+    identityAuth = {
+      verifyAccessToken: (token: string) => identity.authService.verifyAccessToken(token),
+      // The possession-proven device key (identity plane) — the social
+      // founder binding copies it for write verification (PORCH-018).
+      activeDeviceRegistration: (did: string, deviceId: string) => identity.authService.activeDeviceRegistration(did, deviceId),
+    };
   }
   if (options.store && options.config.mode.socialServingEnabled) {
     // The social module assembles the full membership perimeter; identity is
@@ -123,6 +131,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       ledger,
       system,
       verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
+      registeredDeviceKey: identityAuth ? (did: string, deviceId: string) => identityAuth!.activeDeviceRegistration(did, deviceId) : undefined,
       media: { mediaRoot: join(options.bootstrap.configDir, "media") },
     });
     router.use("/social", socialModule.api);

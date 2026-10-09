@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createMemoryStore } from "@porchlight/shared";
 import { NetworkService } from "../src/services/network.service.js";
 import { InviteService } from "../src/services/invite.service.js";
+import { MembershipService } from "../src/services/membership.service.js";
 import { SocialBootstrapController } from "../src/controllers/social-bootstrap.controller.js";
 import { assembleSocialModule } from "../src/assemble.js";
 
@@ -27,9 +28,19 @@ function mockRes() {
 /** Controller on a fresh in-memory store with the given ledger. */
 function controller(ledger) {
   const db = createMemoryStore();
+  const invites = new InviteService(db.collection("invites"));
+  const membership = new MembershipService({
+    memberships: db.collection("memberships"),
+    membershipSessions: db.collection("membership_sessions"),
+    deviceKeys: db.collection("device_keys"),
+    invites,
+    networks: db.collection("networks"),
+    audit: async () => {},
+  });
   return new SocialBootstrapController(
     new NetworkService(db.collection("networks")),
-    new InviteService(db.collection("invites")),
+    invites,
+    membership,
     ledger,
   );
 }

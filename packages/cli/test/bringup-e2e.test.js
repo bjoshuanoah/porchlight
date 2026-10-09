@@ -201,6 +201,9 @@ test("porchlight bring-up, supervision, resumable bootstrap, and setup completio
     );
     assert.match(driver.stdout, /\[skip\] account — already complete/);
     assert.match(driver.stdout, /\[done\] network — "Family"/);
+    // Founder-root binding (PORCH-018): the resumed bootstrap still binds
+    // the owner — the membership row exists the moment the network does.
+    assert.match(driver.stdout, /owner bound to this network \(role: owner\)/);
     assert.match(driver.stdout, /\[done\] invite/);
     assert.match(driver.stdout, /\[done\] quota/);
 

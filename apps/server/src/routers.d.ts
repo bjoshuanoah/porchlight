@@ -16,6 +16,8 @@ declare module "@porchlight/identity" {
     authService: {
       /** Opaque-token session verification (identity plane, DID resolution). */
       verifyAccessToken(token: string): Promise<{ did: string; sessionId: unknown } | null>;
+      /** Active device registration row for (did, deviceId) — the possession-proven public key. */
+      activeDeviceRegistration(did: string, deviceId: string): Promise<{ deviceId: string; did: string; publicKeyJwk: Record<string, unknown>; [key: string]: unknown } | null>;
     };
     deviceService: import("./routes/frontdoor.routes.js").FrontDoorDeviceService;
     webfingerService: unknown;
@@ -74,6 +76,7 @@ declare module "@porchlight/social" {
         }>;
       };
       verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>;
+      registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown> } | null>;
       media?: {
         mediaRoot?: string;
         store?: {
@@ -135,8 +138,10 @@ declare module "@porchlight/social" {
       verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>;
       networks?: unknown;
       audit?: (action: string, detail?: object) => void;
+      registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown> } | null> | null;
     });
     verifyJoinLink(code: string): Promise<{ valid: boolean; code?: string; message?: string; invite?: Record<string, unknown> }>;
+    bindFounder(options?: { network?: unknown; did?: string | null }): Promise<Record<string, unknown> | null>;
     admit(options: { code: string; identityAccessToken: string; deviceId: string; devicePublicKeyJwk: Record<string, unknown>; signature: string }): Promise<{
       membership: Record<string, unknown>;
       networkId: string;
