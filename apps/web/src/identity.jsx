@@ -6,9 +6,18 @@ import {
 } from '@mui/material';
 import { hubOrigin, parseDeviceGrant, parseJoinCode, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { fullName, resumedDetail, setupStage } from './setup-state.js';
+import { tokens } from './theme.js';
 
 const section = { mb: 3 };
 const rows = { display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' };
+// Front-door panels (design tokens): white surface on the warm page, warm
+// border, 14px radius, sparse card shadow — the approved join/setup look.
+const frontPanel = { // sx object
+  border: `1px solid ${tokens.border}`,
+  borderRadius: '14px',
+  boxShadow: '0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)',
+  p: { xs: 2, sm: 3 },
+};
 const pinPrefix = 'porchlight:local-pin:';
 
 // Error codes, not server wording, determine member-facing copy.
@@ -62,8 +71,8 @@ function Feedback({ operation }) {
 
 function Heading({ title, subtitle }) {
   return <Box sx={section}>
-    <Typography variant="h4" component="h1" gutterBottom>{title}</Typography>
-    {subtitle && <Typography color="text.secondary">{subtitle}</Typography>}
+    <Typography variant="h1" component="h1" gutterBottom>{title}</Typography>
+    {subtitle && <Typography variant="body1" color="text.secondary">{subtitle}</Typography>}
   </Box>;
 }
 
@@ -179,20 +188,23 @@ export function Join({ data, actions, navigate }) {
     }
   }
   return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
+    <Box component="header" sx={{ mb: 3, textAlign: 'center' }}>
+      <Typography variant="h6" sx={{ fontWeight: 650, color: 'primary.main' }}>☀ Porchlight</Typography>
+    </Box>
     <Heading title={stage === 'done' ? "You're home." : 'Join your family'}
       subtitle={stage === 'done' ? `Your place on ${network?.name || 'your family network'} is ready.` :
         `The network address and the invitation ${network ? '' : 'code'}${network ? ' were checked' : ''} — connect to your family's Porchlight.`} />
-    {stage === 'done' ? <Paper sx={{ p: 3 }}><Stack spacing={2}>
+    {stage === 'done' ? <Paper elevation={0} sx={frontPanel}><Stack spacing={2}>
       <Typography>Your family can see you now. Nothing to import, nothing to set up twice.</Typography>
-      <Button variant="contained" onClick={() => navigate?.('/timeline')}>Open Timeline</Button>
+      <Button variant="contained" sx={{ height: 48 }} onClick={() => navigate?.('/timeline')}>Open Timeline</Button>
     </Stack></Paper>
-      : stage === 'confirm' || stage === 'naming' || stage === 'busy' ? <Paper sx={{ p: 3 }}><Stack spacing={2}>
+      : stage === 'confirm' || stage === 'naming' || stage === 'busy' ? <Paper elevation={0} sx={frontPanel}><Stack spacing={2}>
         <Alert severity="success" icon={false}>
           {stage === 'busy' ? 'Checking this hub…' : `You're joining ${network?.name || 'your family'}. Connect once and this device stays yours.`}
         </Alert>
         {stage === 'naming' && <>
           <TextField label="What should your family call you?" value={name} onChange={(event) => setName(event.target.value)} autoFocus fullWidth />
-          <Button variant="contained" fullWidth disabled={operation.busy} onClick={() => proceed(null)}>Join Porchlight</Button>
+          <Button variant="contained" fullWidth sx={{ height: 48 }} disabled={operation.busy} onClick={() => proceed(null)}>Join Porchlight</Button>
           {local.length > 0 && <Typography variant="body2" color="text.secondary">Someone is already connected on this device — pick them instead:</Typography>}
         </>}
         {stage !== 'naming' && local.map((item) => (
@@ -201,18 +213,18 @@ export function Join({ data, actions, navigate }) {
             Continue as {item.identity?.name || 'a family member'}
           </Button>
         ))}
-        {stage === 'confirm' && <Button variant="contained" fullWidth disabled={operation.busy} onClick={() => proceed(chosen || local[0])}>
+        {stage === 'confirm' && <Button variant="contained" fullWidth sx={{ height: 48 }} disabled={operation.busy} onClick={() => proceed(chosen || local[0])}>
           {local.length ? 'Connect' : 'Next'}
         </Button>}
         <Feedback operation={operation} />
       </Stack></Paper>
-        : <Paper sx={{ p: { xs: 2, sm: 3 } }}><form onSubmit={connect}><Stack spacing={2}>
+        : <Paper elevation={0} sx={frontPanel}><form onSubmit={connect}><Stack spacing={2}>
           <TextField label="Server URL" type="url" value={url} onChange={(event) => setUrl(event.target.value)} required fullWidth
             helperText="The address where your family's Porchlight runs." autoComplete="url" />
           <TextField label="Invite code" value={code} onChange={(event) => setCode(event.target.value)} required fullWidth
             helperText="The code in the link your family's owner sent you." autoComplete="off" />
           <Feedback operation={operation} />
-          <Button type="submit" variant="contained" disabled={operation.busy}>Connect</Button>
+          <Button type="submit" variant="contained" fullWidth sx={{ height: 48 }} disabled={operation.busy}>Connect</Button>
         </Stack></form></Paper>}
     {stage !== 'done' && <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: 'wrap' }}>
       <Button onClick={() => navigate?.('/pair')}>Connect with a code from another device</Button>
@@ -246,25 +258,35 @@ function SetupProgress({ stageIndex }) {
 }
 
 function SetupShell({ children }) {
-  return <Box sx={{ maxWidth: 720, mx: "auto" }}>
-    <Heading title="Set up your porch" subtitle="Two quick questions and you are home: the network's name, and who you are. Everything else waits until you are inside." />
-    {children}
+  // Owner bootstrap panel (tokens): centered 960px white panel, 18px radius,
+  // warm border, sparse shadow; the optional photo slot rides the warm
+  // gradient side panel (no external asset — the porch-lamp glow is CSS).
+  return <Box sx={{ maxWidth: 960, mx: "auto" }}>
+    <Paper elevation={0} sx={{ borderRadius: "18px", border: `1px solid ${tokens.border}`, boxShadow: "0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)", overflow: "hidden" }}>
+      <Box sx={{ display: "grid", gridTemplateColumns: { md: "58% 42%" } }}>
+        <Box sx={{ p: { xs: 2.5, sm: 4, md: 5 } }}>
+          <Heading title="Set up your porch" subtitle="Two quick questions and you are home: the network's name, and who you are. Everything else waits until you are inside." />
+          {children}
+        </Box>
+        <Box aria-hidden="true" sx={{ display: { xs: "none", md: "block" }, minHeight: 480, background: `radial-gradient(circle at 50% 115%, rgba(255,190,87,.35), transparent 60%), linear-gradient(180deg, ${tokens.warm}, ${tokens.amberSoft})` }} />
+      </Box>
+    </Paper>
   </Box>;
 }
 
 function NetworkNameStep({ name, onChange, onNext, busy }) {
-  return <Card sx={section}><CardContent>
+  return <Box sx={section}>
     <SetupProgress stageIndex={0} />
     <Box component="form" onSubmit={onNext}><Stack spacing={2}>
       <Typography color="text.secondary">What is your family's Porchlight called? You can change it later in the owner console.</Typography>
       <TextField label="Network name" value={name} onChange={(event) => onChange(event.target.value)} required autoFocus fullWidth placeholder="The Noah Family" />
-      <Button type="submit" variant="contained" disabled={busy}>Continue</Button>
+      <Button type="submit" variant="contained" sx={{ height: 48 }} disabled={busy}>Continue</Button>
     </Stack></Box>
-  </CardContent></Card>;
+  </Box>;
 }
 
 function AccountStep({ stageIndex, network, fields, onField, photo, onPhoto, onSubmit, busy, existing }) {
-  return <Card sx={section}><CardContent>
+  return <Box sx={section}>
     <SetupProgress stageIndex={stageIndex} />
     <Box component="form" onSubmit={onSubmit}><Stack spacing={2}>
       <Typography color="text.secondary">
@@ -279,9 +301,9 @@ function AccountStep({ stageIndex, network, fields, onField, photo, onPhoto, onS
       <Button variant="text" component="label" sx={{ alignSelf: "flex-start" }}>{photo ? "Photo chosen — change it" : "Add a photo (optional)"}
         <input type="file" accept="image/*" hidden onChange={onPhoto} />
       </Button>
-      <Button type="submit" variant="contained" disabled={busy}>{existing ? "Open the network" : "Finish setup"}</Button>
+      <Button type="submit" variant="contained" sx={{ height: 48 }} disabled={busy}>{existing ? "Open the network" : "Finish setup"}</Button>
     </Stack></Box>
-  </CardContent></Card>;
+  </Box>;
 }
 
 function downscalePhoto(file) {

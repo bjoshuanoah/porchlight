@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, FormControl, InputLabel, MenuItem, Select,
+  Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
+  DialogContent, DialogTitle, Divider, FormControl, InputLabel, MenuItem, Paper, Select,
   Stack, TextField, Typography,
 } from '@mui/material';
+import { tokens } from './theme.js';
 
 const rows = (value) => Array.isArray(value) ? value : Array.isArray(value?.posts) ? value.posts : [];
 const identityOf = (row) => String(row?._id ?? row?.id ?? '');
@@ -126,21 +127,24 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
   const operation = useOperation();
   if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
   const openPost = () => navigate?.(`/posts/${encodeURIComponent(identityOf(post))}`);
-  return <Card variant="outlined" sx={{ borderRadius: 3 }}>
-    <CardContent>
+  return <Card>
+    <CardContent sx={{ p: "20px", "&:last-child": { pb: "20px" } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
-        <Box>
-          <Typography variant="subtitle1" fontWeight={700}>{post.author?.name ?? post.authorName ?? memberName(post.authorId, data)}</Typography>
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-            <Chip label={`From ${originName(post, data)}`} size="small" color="primary" variant="outlined" />
-            {post.groupName && <Chip label={post.groupName} size="small" variant="outlined" />}
-            <Typography variant="caption" color="text.secondary">{dateOf(post.createdAt)}</Typography>
-          </Stack>
-        </Box>
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <Avatar sx={{ width: 36, height: 36, fontSize: 15 }}>{(post.author?.name ?? post.authorName ?? memberName(post.authorId, data)).trim().charAt(0).toUpperCase()}</Avatar>
+          <Box>
+            <Typography variant="body2" fontWeight={600} color="text.primary">{post.author?.name ?? post.authorName ?? memberName(post.authorId, data)}</Typography>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <Chip label={`From ${originName(post, data)}`} size="small" variant="outlined" />
+              {post.groupName && <Chip label={post.groupName} size="small" sx={{ bgcolor: 'porchlight.amberSoft', color: 'primary.main', fontSize: '0.6875rem' }} />}
+              <Typography variant="caption" color="porchlight.muted">{dateOf(post.createdAt)}</Typography>
+            </Stack>
+          </Box>
+        </Stack>
         <Button size="small" disabled={operation.busy} onClick={() => operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); })}>Hide</Button>
       </Stack>
-      {post.body && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{post.body}</Typography>}
-      {post.caption && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{post.caption}</Typography>}
+      {post.body && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 16, lineHeight: '25px' }}>{post.body}</Typography>}
+      {post.caption && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 16, lineHeight: '25px' }}>{post.caption}</Typography>}
       <Media post={post} actions={actions} />
       <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2 }}>
         <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'up'))}>Lift</Button>
@@ -162,7 +166,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
 }
 
 function Heading({ title, subtitle }) {
-  return <Box sx={{ mb: 3 }}><Typography variant="h4" component="h1" fontWeight={700}>{title}</Typography>{subtitle && <Typography color="text.secondary">{subtitle}</Typography>}</Box>;
+  return <Box sx={{ mb: 3 }}><Typography variant="h1" component="h1" fontWeight={650}>{title}</Typography>{subtitle && <Typography variant="body1" color="text.secondary">{subtitle}</Typography>}</Box>;
 }
 
 function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
@@ -170,19 +174,32 @@ function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
   return visible.length ? <Stack spacing={2}>{visible.map((post, index) => <PostCard key={postKey(post) || index} post={post} data={data} actions={actions} navigate={navigate} onHide={onHide} />)}</Stack> : <Alert severity="info">{empty}</Alert>;
 }
 
+// Empty timeline (tokens): encouraging, never marketing — the porch-at-dusk
+// glow is CSS, and the CTA opens compose without navigating away.
+function EmptyTimeline({ navigate }) {
+  return <Paper elevation={0} sx={{ textAlign: 'center', py: 8, px: 3, borderRadius: '14px', border: `1px solid ${tokens.border}`, background: 'transparent' }}>
+    <Box aria-hidden="true" sx={{ mx: 'auto', mb: 3, width: 64, height: 64, borderRadius: '50%', background: `radial-gradient(circle at 50% 30%, ${tokens.amberGlow}, ${tokens.amberSoft})` }} />
+    <Typography variant="h3" component="p" sx={{ mb: 1 }}>It's quiet here.</Typography>
+    <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>Share the first moment with your family.</Typography>
+    <Button variant="contained" sx={{ height: 48 }} onClick={() => navigate?.('/compose')}>Create a post</Button>
+  </Paper>;
+}
+
 export function Timeline({ data = {}, actions = {}, navigate }) {
   const posts = rows(data.posts);
   const ranked = rows(data.ranked);
   const [hidden, setHidden] = useState(() => new Set());
   const onHide = (post) => setHidden((current) => new Set(current).add(postKey(post)));
-  return <Box>
-    <Heading title="Timeline" subtitle="The latest moments from your connected families" />
+  // Timeline shell (tokens): 760–820px river inside the shell, H1 heading,
+  // single chronological feed, honest ranked section below.
+  return <Box sx={{ maxWidth: 780 }}>
+    <Heading title="Shared moments" subtitle="The latest moments from your connected families" />
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Saved moments may be out of date; new activity is not available until you reconnect.</Alert>}
     <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 3 }}><Button variant="contained" onClick={() => navigate?.('/compose')}>Create a post</Button><Button variant="outlined" onClick={() => navigate?.('/search')}>Search moments</Button><Button variant="outlined" onClick={() => navigate?.('/albums')}>Albums</Button></Stack>
     <Typography variant="h6" sx={{ mb: 1 }}>Latest activity</Typography>
-    <Feed posts={posts} data={data} actions={actions} navigate={navigate} hidden={hidden} onHide={onHide} empty={data.offline ? 'No saved moments are available.' : 'Nothing here yet. Start the conversation.'} />
+    {!data.offline && !posts.length ? <EmptyTimeline navigate={navigate} /> : <Feed posts={posts} data={data} actions={actions} navigate={navigate} hidden={hidden} onHide={onHide} empty={data.offline ? 'No saved moments are available.' : 'Nothing here yet. Start the conversation.'} />}
     <Divider sx={{ my: 4 }} />
-    <Typography variant="h6" sx={{ mb: 1 }}>Worth a look</Typography>
+    <Typography variant="h6" sx={{ mb: 1 }}>Family highlights</Typography>
     <Feed posts={ranked} data={data} actions={actions} navigate={navigate} hidden={hidden} onHide={onHide} empty={data.offline ? 'Highlights are unavailable while a family server is unreachable.' : 'No highlighted posts yet.'} />
   </Box>;
 }
