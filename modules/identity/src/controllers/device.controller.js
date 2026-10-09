@@ -106,6 +106,7 @@ export class DeviceController {
         E_DEVICE_LINK_UNKNOWN: 404,
         E_DEVICE_LINK_EXPIRED: 410,
         E_DEVICE_LINK_CONSUMED: 409,
+        E_DEVICE_LINK_REVOKED: 403,
       };
       this.registrationError(error, res, statusByCode);
     }

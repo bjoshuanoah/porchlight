@@ -14,6 +14,8 @@ export async function request(connection, path, init = {}) {
   if (!response.ok) {
     const error = new Error(result.error || `The hub returned ${response.status}.`);
     error.code = result.code;
+    error.status = response.status;
+    error.body = result;
     throw error;
   }
   return result;

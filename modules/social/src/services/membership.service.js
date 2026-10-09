@@ -214,6 +214,31 @@ export class MembershipService {
     return membership && membership.state === "active" ? membership : null;
   }
 
+  /**
+   * Re-establish membership sessions on a re-opened or re-bound device
+   * (PORCH-010 device-link/pair landing): the identity plane proves the DID
+   * through the same injected verifier admission uses; the session rides
+   * ONLY live membership rows — it never creates membership and never
+   * widens the perimeter. Every network the member belongs to gets its own
+   * network-scoped token, exactly as admission would have issued.
+   */
+  async restoreSession({ identityAccessToken, deviceId = null } = {}) {
+    const identity = await this.verifyMemberIdToken(identityAccessToken);
+    if (!identity?.did) {
+      throw typedError("E_MUST_SIGN_IN", "Open your identity on this device first, then continue.");
+    }
+    const rows = (await this.memberships.find({ did: identity.did })).filter(row => row.state === "active");
+    if (!rows.length) {
+      throw typedError("E_NOT_A_MEMBER", "You are not currently a member of a network on this hub.");
+    }
+    const sessions = [];
+    for (const membership of rows) {
+      const tokens = await this.issueSession({ membership, deviceId });
+      sessions.push({ networkId: membership.networkId, role: membership.role, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+    }
+    return { did: identity.did, sessions };
+  }
+
   /** Owner console list of the network's members. */
   async listMembers({ networkId } = {}) {
     return this.memberships.find(networkId ? { networkId: String(networkId) } : {});

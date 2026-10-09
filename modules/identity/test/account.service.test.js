@@ -200,3 +200,47 @@ test("no stored row — identity, document, or registration — ever carries pri
     assert.equal(/"private_key"/.test(serialized), false);
   }
 });
+test("member identity birth at the front door mints kind member and binds the device key (PORCH-010)", async () => {
+  const { accountService } = fixture();
+  const device = okpDevice({ deviceId: "member-tablet", label: "Kitchen tablet" });
+  const result = await accountService.createMemberAccount({ displayName: "Sophie", device });
+
+  assert.equal(result.created, true);
+  assert.equal(result.account.kind, "member");
+  assert.equal(result.account.actorType, "human");
+  assert.match(result.account.did, /^did:porch:[0-9a-f]{40}$/);
+  assert.equal(result.account.displayName, "Sophie");
+  assert.equal(result.registration.createdBy, "join");
+  assert.equal(result.registration.deviceId, "member-tablet");
+  assert.equal(result.registration.publicKeyJwk, device.publicKeyJwk);
+});
+
+test("member identity birth is not owner-gated and fails loud on bad input", async () => {
+  const { accountService } = fixture();
+  // Member birth before and after an owner account exists: the single-owner
+  // gate never applies to members.
+  const owner = await accountService.createFirstAccount({
+    displayName: "Brian",
+    device: okpDevice({ deviceId: "owner-phone" }),
+  });
+  assert.equal(owner.created, true);
+  const member = await accountService.createMemberAccount({
+    displayName: "Jake",
+    device: okpDevice({ deviceId: "jake-phone" }),
+  });
+  assert.equal(member.created, true);
+
+  await assert.rejects(
+    () => accountService.createMemberAccount({ displayName: "", device: okpDevice() }),
+    (error) => error.code === "E_DISPLAY_NAME_REQUIRED",
+  );
+  await assert.rejects(
+    () => accountService.createMemberAccount({ displayName: "No Device" }),
+    (error) => error.code === "E_DEVICE_KEY_REQUIRED",
+  );
+  const { publicKeyJwk } = newEd25519Jwks();
+  await assert.rejects(
+    () => accountService.createMemberAccount({ displayName: "Leak", device: { deviceId: "dev", publicKeyJwk: { ...publicKeyJwk, d: "x" } } }),
+    (error) => error.code === "E_PRIVATE_KEY_REJECTED",
+  );
+});

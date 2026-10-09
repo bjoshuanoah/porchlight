@@ -29,6 +29,7 @@ export function createSocialRouter(controllers) {
   router.get("/join/verify", membership.verify);
   router.post("/join/admit", membership.admit);
   router.post("/session/refresh", membership.refresh);
+  router.post("/session/restore", membership.restore);
 
   // Content engine (PORCH-006): every surface token-scoped to exactly one
   // origin network; writes are actor-signed. No route carries the origin,

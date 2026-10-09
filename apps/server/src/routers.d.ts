@@ -1,16 +1,23 @@
 declare module "@porchlight/identity" {
-  interface IdentityModule {
+  export interface IdentityModule {
     api: import("express").Router;
     wellKnown: import("express").Router;
     controllers: unknown;
     signing: unknown;
     didService: unknown;
-    accountService: unknown;
+    accountService: {
+      /** Member identity birth at the front door (PORCH-010): DID + device binding. */
+      createMemberAccount(options: { displayName?: string; device: { deviceId: string; label?: string | null; publicKeyJwk: Record<string, unknown> } | null }): Promise<{
+        account: { _id: string; did: string; displayName: string };
+        didDocument: unknown;
+        registration: Record<string, unknown>;
+      }>;
+    };
     authService: {
       /** Opaque-token session verification (identity plane, DID resolution). */
       verifyAccessToken(token: string): Promise<{ did: string; sessionId: unknown } | null>;
     };
-    deviceService: unknown;
+    deviceService: import("./routes/frontdoor.routes.js").FrontDoorDeviceService;
     webfingerService: unknown;
     trustService: unknown;
     migrationService: unknown;
@@ -31,6 +38,19 @@ declare module "@porchlight/identity" {
 }
 
 declare module "@porchlight/social" {
+  export interface SocialModule {
+    networkService: NetworkService;
+    inviteService: InviteService;
+    membershipService: MembershipService;
+    quotaService: QuotaService;
+    auditService: AuditService;
+    groupService: GroupService;
+    postService: PostService;
+    interactionService: InteractionService;
+    notificationService: NotificationService;
+    controllers: unknown;
+    api: import("express").Router;
+  }
   export function createSocialRouter(controllers: {
     bootstrap: unknown;
     content: unknown;
@@ -58,19 +78,7 @@ declare module "@porchlight/social" {
         chunkSize?: number;
       };
     },
-  ): {
-    networkService: NetworkService;
-    inviteService: InviteService;
-    membershipService: MembershipService;
-    quotaService: QuotaService;
-    auditService: AuditService;
-    groupService: GroupService;
-    postService: PostService;
-    interactionService: InteractionService;
-    notificationService: NotificationService;
-    controllers: unknown;
-    api: import("express").Router;
-  };
+  ): SocialModule;
   export class PostService {
     create(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ post: Record<string, unknown> }>;
     get(options?: { accessToken?: string | null; postId?: string }): Promise<{ post: Record<string, unknown> }>;
@@ -129,6 +137,8 @@ declare module "@porchlight/social" {
     refresh(options?: { refreshToken?: string; now?: () => Date }): Promise<{ accessToken: string; networkId: string; did: string }>;
     verifyAccessToken(token: string, options?: { networkId?: string; now?: () => Date }): Promise<{ membership: Record<string, unknown>; session: Record<string, unknown> } | null>;
     verifyMemberWrite(options: { networkId: string; did: string; deviceId: string; payload: unknown; signature: string }): Promise<{ verified: boolean }>;
+    activeMembership(options: { networkId: string; did: string }): Promise<Record<string, unknown> | null>;
+    restoreSession(options: { identityAccessToken: string; deviceId?: string | null }): Promise<{ did: string; sessions: Array<{ networkId: string; role: string; accessToken: string; refreshToken: string }> }>;
     revokeMember(options?: { networkId?: string; did?: string; memberId?: string }): Promise<{ revoked: boolean; membership: Record<string, unknown> }>;
     listMembers(options?: { networkId?: string }): Promise<Array<Record<string, unknown>>>;
   }
