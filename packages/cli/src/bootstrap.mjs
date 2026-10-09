@@ -89,12 +89,23 @@ async function runStep(step, base, args, out, config, ctx = {}) {
 }
 
 async function createAccount(config, args, out, ctx = {}) {
-  const name = args.name ?? (await ask("Your name (who you are on this network): ")) ?? "Owner";
+  // Required names (PORCH-024): first and last, both non-empty. The hub
+  // validates them server-side regardless of client state; the display
+  // name is composed there from the two.
+  const firstName = args.firstName ?? (await ask("First name: "));
+  const lastName = args.lastName ?? (await ask("Last name: "));
+  if (!firstName?.trim() || !lastName?.trim()) {
+    throw new Error("First name and last name are both required to create the owner account.");
+  }
   // Keys on device: the CLI machine is the owner's control-plane device; the
   // identity core requires the binding at first-account creation, so the
   // owner's local key pairs it before the request (public JWK only).
   const device = ensureOwnerDevice(ctx.paths?.root);
-  const response = await postJson(config, "/api/identity/bootstrap/account", { displayName: name, device });
+  const response = await postJson(config, "/api/identity/bootstrap/account", {
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    device,
+  });
   if (response.status >= 400) throw new Error(response.body.error ?? `HTTP ${response.status}`);
   const did = response.body?.account?.did ?? null;
   if (did) ctx.ownerDid = did;

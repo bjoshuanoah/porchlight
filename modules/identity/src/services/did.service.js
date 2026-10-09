@@ -38,7 +38,7 @@ export class DidService {
    * homes here (`homingStatus "home"`) until a migration handoff marks it
    * moved; the presentation-plane handle starts empty unless given.
    */
-  async createIdentity({ actorType, displayName, email = null, handle = null, profile = {} }) {
+  async createIdentity({ actorType, displayName, firstName = null, lastName = null, email = null, handle = null, profile = {} }) {
     if (!ACTOR_TYPES.has(actorType)) {
       const error = new Error(`actorType must be "human" or "agent"`);
       error.code = "E_ACTOR_TYPE_INVALID";
@@ -53,6 +53,10 @@ export class DidService {
       _id: `ident_${randomUUID()}`,
       did: this.mintDid(),
       actorType,
+      // Required names live as distinct fields (PORCH-024); agents and
+      // adopted/migrated rows carry nulls — no first/last exists there.
+      firstName,
+      lastName,
       displayName,
       email,
       handle,

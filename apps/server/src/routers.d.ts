@@ -6,9 +6,9 @@ declare module "@porchlight/identity" {
     signing: unknown;
     didService: unknown;
     accountService: {
-      /** Member identity birth at the front door (PORCH-010): DID + device binding. */
-      createMemberAccount(options: { displayName?: string; device: { deviceId: string; label?: string | null; publicKeyJwk: Record<string, unknown> } | null }): Promise<{
-        account: { _id: string; did: string; displayName: string };
+      /** Member identity birth at the front door (PORCH-010): DID + device binding. Required names (PORCH-024). */
+      createMemberAccount(options: { firstName?: string; lastName?: string; device: { deviceId: string; label?: string | null; publicKeyJwk: Record<string, unknown> } | null }): Promise<{
+        account: { _id: string; did: string; firstName: string | null; lastName: string | null; displayName: string };
         didDocument: unknown;
         registration: Record<string, unknown>;
       }>;

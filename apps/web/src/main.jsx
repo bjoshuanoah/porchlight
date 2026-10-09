@@ -9,6 +9,7 @@ import PersonOutline from "@mui/icons-material/PersonOutline";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import { theme } from "./theme.js";
 import { readJoinQuery } from "./frontdoor.js";
+import { fullName } from "./setup-state.js";
 import { request, loadFeeds } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
@@ -287,12 +288,14 @@ function App() {
     // invited member's identity birth or a connect for an identity already
     // registered on this device. Membership rides social/join/admit with the
     // device signature — verification alone never grants anything.
-    joinNew: async ({ url, code, displayName }) => {
+    // Required names (PORCH-024): first and last ride every creation; the
+    // display name is composed from them.
+    joinNew: async ({ url, code, firstName, lastName }) => {
       const hub = { url };
       const registration = await createDeviceRegistration(url, (device) =>
-        request(hub, "bootstrap/join-member", { method: "POST", body: JSON.stringify({ code, displayName, device }) }));
+        request(hub, "bootstrap/join-member", { method: "POST", body: JSON.stringify({ code, firstName, lastName, device }) }));
       const session = await openDeviceSession(hub, registration, request);
-      return finishJoin({ url, code, did: registration.did, deviceId: registration.deviceId, identityName: displayName });
+      return finishJoin({ url, code, did: registration.did, deviceId: registration.deviceId, identityName: fullName(firstName, lastName) });
     },
     joinDevice: async ({ url, code, did, deviceId, name }) => {
       return finishJoin({ url, code, did, deviceId, identityName: name });
@@ -373,30 +376,24 @@ function App() {
     // re-readable, so a closed browser resumes exactly where setup paused.
     setupState: () => request({ url: origin }, "bootstrap/state"),
     accountState: () => request({ url: origin }, "identity/account").catch(() => null),
-    createOwnerAccount: async ({ displayName, avatar, firstName, lastName }) => {
+    createOwnerAccount: async ({ firstName, lastName, avatar }) => {
       const hub = { url: origin };
       const registration = await createDeviceRegistration(origin, (device) =>
-        request(hub, "identity/bootstrap/account", { method: "POST", body: JSON.stringify({ displayName, device }) }));
+        request(hub, "identity/bootstrap/account", { method: "POST", body: JSON.stringify({ firstName, lastName, device }) }));
       const session = await openDeviceSession(hub, registration, request);
       const next = {
         url: origin, name: "Your family",
-        identity: { id: registration.did, name: displayName },
+        identity: { id: registration.did, name: fullName(firstName, lastName) },
         identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
         deviceId: registration.deviceId, token: null, refreshToken: null, networkId: null,
       };
-      // Names are required at every identity-creation surface (Brian, Oct 14):
-      // the composed display name is the presentation layer; the first/last
-      // parts ride the free-form profile fields on the account row. The photo
-      // is optional and misses nothing if the profile write fails.
-      const profile = {
-        ...(firstName ? { firstName } : {}),
-        ...(lastName ? { lastName } : {}),
-        ...(avatar ? { avatar } : {}),
-      };
-      if (Object.keys(profile).length > 0) {
+      // Required names persist as first/last fields on the account row at
+      // creation (PORCH-024); the display name is composed from them. The
+      // photo is optional and misses nothing if the profile write fails.
+      if (avatar) {
         try {
           await request({ url: origin, token: session.accessToken }, "identity/account/profile", {
-            method: "POST", body: JSON.stringify({ did: registration.did, profile }),
+            method: "POST", body: JSON.stringify({ did: registration.did, profile: { avatar } }),
           });
         } catch { /* the photo is optional; the account itself is complete */ }
       }

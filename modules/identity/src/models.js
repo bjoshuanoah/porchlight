@@ -19,6 +19,10 @@ export const identityModel = {
     did: { type: "string" },
     /** First-class actors: humans and agents share the same account records. */
     actorType: { type: "string", enum: ["human", "agent"] },
+    /** Family-facing names (PORCH-024): first and last are required at every human identity-creation surface; agents carry nulls. */
+    firstName: { type: ["string", "null"] },
+    lastName: { type: ["string", "null"] },
+    /** The presentation layer over the required names, composed at birth. */
     displayName: { type: "string" },
     email: { type: ["string", "null"] },
     /** Presentation-plane handle: changeable, resolves to the DID. No global registry. */

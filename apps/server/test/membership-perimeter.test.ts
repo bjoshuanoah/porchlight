@@ -52,7 +52,7 @@ test("membership perimeter: join link verifies, admission issues a network-scope
   const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Susan", device: { deviceId: "dev_phone", publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Susan", lastName: "Bell", device: { deviceId: "dev_phone", publicKeyJwk } }),
   });
   assert.equal(account.status, 201);
   const did = (account.body.account as Json).did as string;
@@ -262,7 +262,7 @@ test("revoked join link fails member entry instantly with plain language (contra
   const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_phone", publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_phone", publicKeyJwk } }),
   });
   assert.equal(account.status, 201);
   const did = (account.body.account as Json).did as string;

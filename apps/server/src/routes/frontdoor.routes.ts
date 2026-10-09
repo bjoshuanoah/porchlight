@@ -28,7 +28,8 @@ const INVITE_STATUS: Record<string, number> = {
 };
 
 const IDENTITY_STATUS: Record<string, number> = {
-  E_DISPLAY_NAME_REQUIRED: 400,
+  E_FIRST_NAME_REQUIRED: 400,
+  E_LAST_NAME_REQUIRED: 400,
   E_DEVICE_KEY_REQUIRED: 400,
   E_PRIVATE_KEY_REJECTED: 403,
   E_KEY_TYPE_REJECTED: 403,
@@ -41,8 +42,8 @@ const IDENTITY_STATUS: Record<string, number> = {
 };
 
 export interface FrontDoorAccountService {
-  createMemberAccount(options: { displayName?: string; device: { deviceId: string; label?: string | null; publicKeyJwk: Record<string, unknown> } | null }): Promise<{
-    account: { _id: string; did: string; displayName: string };
+  createMemberAccount(options: { firstName?: string; lastName?: string; device: { deviceId: string; label?: string | null; publicKeyJwk: Record<string, unknown> } | null }): Promise<{
+    account: { _id: string; did: string; firstName: string | null; lastName: string | null; displayName: string };
     didDocument: unknown;
     registration: Record<string, unknown>;
   }>;
@@ -103,20 +104,22 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
   }
 
   /**
-   * POST /bootstrap/join-member {code, displayName?, device{deviceId, label?, publicKeyJwk}}
+   * POST /bootstrap/join-member {code, firstName, lastName, device{deviceId, label?, publicKeyJwk}}
    * Invited member identity birth: verify the invite FIRST (plain-language
    * failure, nothing stored), then mint the identity bound to the device key.
+   * Required names (PORCH-024): a missing first or last name is rejected
+   * here, regardless of client state.
    */
   router.post("/bootstrap/join-member", (req, res) => {
     void (async () => {
-      const { code, displayName, device } = req.body ?? {};
+      const { code, firstName, lastName, device } = req.body ?? {};
       try {
         const verification = await invites.verify(code ?? null);
         if (!verification?.valid) {
           const status = INVITE_STATUS[verification?.code ?? ""] ?? 400;
           return res.status(status).json({ error: verification?.message ?? "This link is not a valid join link.", code: verification?.code ?? "E_INVITE_REQUIRED" });
         }
-        const minted = await accountService.createMemberAccount({ displayName, device });
+        const minted = await accountService.createMemberAccount({ firstName, lastName, device });
         const network = await networkOf();
         return res.status(201).json({
           created: true,

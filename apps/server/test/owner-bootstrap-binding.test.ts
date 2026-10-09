@@ -125,7 +125,7 @@ test("ac-1/ac-3: fresh bootstrap binds the owner to the network they created", a
     const account = await call(port, "/api/identity/bootstrap/account", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ displayName: "Brian", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
+      body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
     });
     assert.equal(account.status, 201);
     const did = (account.body.account as Json).did as string;
@@ -208,7 +208,7 @@ test("ac-2: a founder whose hub predates the binding is repaired at restore", as
     const account = await call(port, "/api/identity/bootstrap/account", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ displayName: "Brian", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
+      body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
     });
     assert.equal(account.status, 201);
     const did = (account.body.account as Json).did as string;
@@ -267,7 +267,7 @@ test("perimeter: restore binds nothing for a non-founder and never resurrects a 
     const account = await call(port, "/api/identity/bootstrap/account", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ displayName: "Brian", device: { deviceId: ownerPair.deviceId, publicKeyJwk: ownerPair.publicKeyJwk } }),
+      body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: ownerPair.deviceId, publicKeyJwk: ownerPair.publicKeyJwk } }),
     });
     assert.equal(account.status, 201);
     const ownerDid = (account.body.account as Json).did as string;

@@ -45,6 +45,10 @@ const flags = (argv) => {
     else if (arg === "--no-tunnel") out.tunnel = false;
     else if (arg === "--name" || arg === "--network" || arg === "--hub" || arg === "--hostname") {
       out[arg.slice(2)] = argv[++i];
+    } else if (arg === "--firstName" || arg === "--lastName") {
+      // Required owner names at bootstrap (PORCH-024): first and last, both
+      // non-empty; the hub composes the display name from them.
+      out[arg.slice(2)] = argv[++i];
     } else if (arg === "--host") out.host = argv[++i];
     else if (arg === "--install" || arg === "--uninstall") out.action = arg.slice(2);
     else out._.push(arg);

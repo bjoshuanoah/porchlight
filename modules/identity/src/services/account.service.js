@@ -56,6 +56,24 @@ function validateDeviceKey(publicKeyJwk) {
   return publicKeyJwk;
 }
 
+/**
+ * Required human names (PORCH-024, Brian Oct 14, 2026): first and last are
+ * required at every identity-creation surface, validated server-side
+ * regardless of client state; the family-facing display name is the
+ * presentation layer composed from them.
+ */
+function requireNames(firstName, lastName) {
+  const first = typeof firstName === "string" ? firstName.trim() : "";
+  const last = typeof lastName === "string" ? lastName.trim() : "";
+  if (!first) {
+    throw typed("E_FIRST_NAME_REQUIRED", "First name is required — every member joins with a first and last name.");
+  }
+  if (!last) {
+    throw typed("E_LAST_NAME_REQUIRED", "Last name is required — every member joins with a first and last name.");
+  }
+  return { firstName: first, lastName: last, displayName: `${first} ${last}` };
+}
+
 export class AccountService {
   /**
    * @param {object} deps
@@ -111,15 +129,16 @@ export class AccountService {
 
   /**
    * Owner bootstrap (ac-1): mint the identity + DID document and bind the
-   * device's own key. The bootstrap gate is one `kind:"owner"` account max —
+   * device's own key. Required names (PORCH-024): a missing first or last
+   * name → E_FIRST_NAME_REQUIRED / E_LAST_NAME_REQUIRED, before any other
+   * check; the display name is composed from the two. The bootstrap gate is
+   * one `kind:"owner"` account max —
    * an existing owner is returned with `created:false`. The device key (and
    * only the public half) binds at setup: a missing or incomplete device →
    * E_DEVICE_KEY_REQUIRED; any private (`d`) field → E_PRIVATE_KEY_REJECTED.
    */
-  async createFirstAccount({ displayName, email = null, device = null } = {}) {
-    if (!displayName) {
-      throw typed("E_DISPLAY_NAME_REQUIRED", "displayName is required");
-    }
+  async createFirstAccount({ firstName, lastName, email = null, device = null } = {}) {
+    const names = requireNames(firstName, lastName);
     const ownerGate = await this.identities.findOne({ kind: "owner" });
     if (ownerGate) return { created: false, account: { ...ownerGate } };
 
@@ -133,7 +152,9 @@ export class AccountService {
 
     const identity = await this.didService.createIdentity({
       actorType: "human",
-      displayName,
+      displayName: names.displayName,
+      firstName: names.firstName,
+      lastName: names.lastName,
       email,
     });
     await this.identities.updateOne(
@@ -185,12 +206,12 @@ export class AccountService {
    * owner's is at bootstrap. The invite is the trust root — its verification
    * and consumption live in the social perimeter (admit), never here; this
    * birth only mints the DID + DID document and binds the device-held public
-   * key. No single-owner gate: members are not owners.
+   * key. No single-owner gate: members are not owners. Required names
+   * (PORCH-024): a missing first or last name → E_FIRST_NAME_REQUIRED /
+   * E_LAST_NAME_REQUIRED; the display name is composed from the two.
    */
-  async createMemberAccount({ displayName, device = null } = {}) {
-    if (!displayName) {
-      throw typed("E_DISPLAY_NAME_REQUIRED", "displayName is required");
-    }
+  async createMemberAccount({ firstName, lastName, device = null } = {}) {
+    const names = requireNames(firstName, lastName);
     if (!device || !device.deviceId || !device.publicKeyJwk) {
       throw typed(
         "E_DEVICE_KEY_REQUIRED",
@@ -198,7 +219,12 @@ export class AccountService {
       );
     }
     validateDeviceKey(device.publicKeyJwk);
-    const identity = await this.didService.createIdentity({ actorType: "human", displayName });
+    const identity = await this.didService.createIdentity({
+      actorType: "human",
+      displayName: names.displayName,
+      firstName: names.firstName,
+      lastName: names.lastName,
+    });
     await this.identities.updateOne({ _id: identity._id }, { $set: { kind: "member" } });
     const account = await this.identities.findOne({ _id: identity._id });
     const didDocument = await this.putDocument(identity.did);

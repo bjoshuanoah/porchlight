@@ -87,7 +87,7 @@ test("front door: member identity birth, admission, device link, session restore
   const owner = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_home", publicKeyJwk: ownerJwk } }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_home", publicKeyJwk: ownerJwk } }),
   });
   assert.equal(owner.status, 201);
   const ownerDid = (owner.body.account as Json).did as string;
@@ -141,7 +141,7 @@ test("front door: member identity birth, admission, device link, session restore
   const birth = await call(port, "/api/bootstrap/join-member", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: sophieCode, displayName: "Sophie", device: { deviceId: "dev_tablet", label: "Kitchen tablet", publicKeyJwk: sophieJwk } }),
+    body: JSON.stringify({ code: sophieCode, firstName: "Sophie", lastName: "Marten", device: { deviceId: "dev_tablet", label: "Kitchen tablet", publicKeyJwk: sophieJwk } }),
   });
   assert.equal(birth.status, 201);
   assert.equal(birth.body.created, true);
@@ -250,7 +250,7 @@ test("front door: member identity birth, admission, device link, session restore
   const jakeBirth = await call(port, "/api/bootstrap/join-member", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: jakeCode, displayName: "Jake", device: { deviceId: "dev_desk", publicKeyJwk: jakeJwk } }),
+    body: JSON.stringify({ code: jakeCode, firstName: "Jake", lastName: "River", device: { deviceId: "dev_desk", publicKeyJwk: jakeJwk } }),
   });
   assert.equal(jakeBirth.status, 201);
   const jakeDid = (jakeBirth.body.account as Json).did as string;
@@ -295,7 +295,7 @@ test("front door: member identity birth, admission, device link, session restore
   const unknownCode = await call(port, "/api/bootstrap/join-member", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: "no-such-code", displayName: "X", device: { deviceId: "dev_y", publicKeyJwk: jakeJwk } }),
+    body: JSON.stringify({ code: "no-such-code", firstName: "X", lastName: "Guard", device: { deviceId: "dev_y", publicKeyJwk: jakeJwk } }),
   });
   assert.equal(unknownCode.status, 404);
   assert.equal(unknownCode.body.code, "E_INVITE_NOT_FOUND");
@@ -314,7 +314,7 @@ test("front door: member identity birth, admission, device link, session restore
   const revokedCode = await call(port, "/api/bootstrap/join-member", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: spareCode, displayName: "X", device: { deviceId: "dev_y", publicKeyJwk: jakeJwk } }),
+    body: JSON.stringify({ code: spareCode, firstName: "X", lastName: "Guard", device: { deviceId: "dev_y", publicKeyJwk: jakeJwk } }),
   });
   assert.equal(revokedCode.status, 403);
   assert.equal(revokedCode.body.code, "E_INVITE_REVOKED");
@@ -329,11 +329,103 @@ test("front door: member identity birth, admission, device link, session restore
   const privateJwk = await call(port, "/api/bootstrap/join-member", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: guardCode, displayName: "X", device: { deviceId: "dev_y", publicKeyJwk: withD } }),
+    body: JSON.stringify({ code: guardCode, firstName: "X", lastName: "Guard", device: { deviceId: "dev_y", publicKeyJwk: withD } }),
   });
   assert.equal(privateJwk.status, 403);
   assert.equal(privateJwk.body.code, "E_PRIVATE_KEY_REJECTED");
 
   const identityCount = ((await hub.db.collection("identities").find({})) as unknown as Json[]).length;
   assert.equal(identityCount, 3, "failed births never store an identity row");
+});
+test("required names (PORCH-024): the hub rejects a join request omitting first or last name", async (t) => {
+  const hub = testHub(() => "https://hub.test");
+  t.after(hub.close);
+  const port = await hub.port;
+
+  // Owner + network + one live invite: the invite is valid, so the request
+  // reaches the name validation and is refused there — regardless of client
+  // state ("no client-side-only guard").
+  const ownerDevice = keyPair();
+  const owner = await call(port, "/api/identity/bootstrap/account", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_home", publicKeyJwk: ownerDevice.publicKey.export({ format: "jwk" }) } }),
+  });
+  assert.equal(owner.status, 201);
+  const ownerDid = (owner.body.account as Json).did as string;
+  await call(port, "/api/social/bootstrap/network", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "The Noah Family", ownerDid }),
+  });
+  const ownerIdentityToken = await memberIdentitySession(port, { did: ownerDid, device: ownerDevice, deviceId: "dev_home", jwk: ownerDevice.publicKey.export({ format: "jwk" }) as Json });
+  // Founder-root admission is issued first: /console/invites sits behind the
+  // membership perimeter, so the invite comes from the owner's membership.
+  const firstInvite = await call(port, "/api/social/bootstrap/invite", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ role: "member", maxUses: 1 }),
+  });
+  assert.equal(firstInvite.status, 201);
+  const ownerCode = ((firstInvite.body.invite as Json).token as string);
+  const ownerAdmit = await call(port, "/api/social/join/admit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      code: ownerCode,
+      identityAccessToken: ownerIdentityToken,
+      deviceId: "dev_home",
+      devicePublicKeyJwk: ownerDevice.publicKey.export({ format: "jwk" }),
+      signature: sign(null, Buffer.from(`porchlight-join:${ownerCode}`, "utf8"), ownerDevice.privateKey).toString("base64url"),
+    }),
+  });
+  assert.equal(ownerAdmit.status, 201);
+  const ownerAuth = {
+    "content-type": "application/json",
+    authorization: `Bearer ${(ownerAdmit.body as Json).accessToken as string}`,
+  };
+  const invite = await call(port, "/api/social/console/invites", {
+    method: "POST",
+    headers: ownerAuth,
+    body: JSON.stringify({ role: "member", maxUses: 1 }),
+  });
+  assert.equal(invite.status, 201);
+  const code = (invite.body.invite as Json).token as string;
+
+  // Crafted bodies: last name omitted, first name omitted, whitespace-only —
+  // every one is rejected at the hub and stores nothing.
+  async function attempt(body: Json): Promise<{ status: number; body: Json }> {
+    return call(port, "/api/bootstrap/join-member", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+  const missingFirst = await attempt({ code, lastName: "Guard", device: { deviceId: "dev_y", publicKeyJwk: ownerDevice.publicKey.export({ format: "jwk" }) } });
+  assert.equal(missingFirst.status, 400);
+  assert.equal(missingFirst.body.code, "E_FIRST_NAME_REQUIRED");
+
+  const missingLast = await attempt({ code, firstName: "Guard", device: { deviceId: "dev_y", publicKeyJwk: ownerDevice.publicKey.export({ format: "jwk" }) } });
+  assert.equal(missingLast.status, 400);
+  assert.equal(missingLast.body.code, "E_LAST_NAME_REQUIRED");
+
+  const whitespace = await attempt({ code, firstName: "   ", lastName: "\t", device: { deviceId: "dev_y", publicKeyJwk: ownerDevice.publicKey.export({ format: "jwk" }) } });
+  assert.equal(whitespace.status, 400);
+  assert.equal(whitespace.body.code, "E_FIRST_NAME_REQUIRED");
+
+  const identityCount = ((await hub.db.collection("identities").find({})) as unknown as Json[]).length;
+  assert.equal(identityCount, 1, "rejected joins never store an identity row");
+
+  // A valid join with both names still mints — and stores the names as
+  // distinct fields with the display name composed from them.
+  const memberDevice = keyPair();
+  const full = await attempt({
+    code,
+    firstName: "  Sophie  ",
+    lastName: "Marten",
+    device: { deviceId: "dev_s", publicKeyJwk: memberDevice.publicKey.export({ format: "jwk" }) },
+  });
+  assert.equal(full.status, 201);
+  const account = full.body.account as Json;
+  assert.equal(account.firstName, "Sophie");
+  assert.equal(account.lastName, "Marten");
+  assert.equal(account.displayName, "Sophie Marten");
 });

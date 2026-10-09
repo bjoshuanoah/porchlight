@@ -146,7 +146,7 @@ async function bootOwner(port: number): Promise<BootedOwner> {
   const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: pair.deviceId, publicKeyJwk: pair.publicKeyJwk } }),
   });
   if (account.status !== 201) {
     throw new Error(`account bootstrap failed: ${account.status} ${JSON.stringify(account.body)}`);

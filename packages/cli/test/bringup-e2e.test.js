@@ -143,7 +143,7 @@ test("porchlight bring-up, supervision, resumable bootstrap, and setup completio
     const deviceless = await fetch(`${base}/api/identity/bootstrap/account`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ displayName: "Brian" }),
+      body: JSON.stringify({ firstName: "Brian", lastName: "Noah" }),
     });
     assert.ok(deviceless.status >= 400, "a device-less first account must be rejected");
     assert.equal((await deviceless.json()).code, "E_DEVICE_KEY_REQUIRED");
@@ -153,7 +153,7 @@ test("porchlight bring-up, supervision, resumable bootstrap, and setup completio
     const response = await fetch(`${base}/api/identity/bootstrap/account`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_e2e", label: "Owner CLI", publicKeyJwk } }),
+      body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_e2e", label: "Owner CLI", publicKeyJwk } }),
     });
     assert.ok([200, 201].includes(response.status));
     const preKill = await getState(base);

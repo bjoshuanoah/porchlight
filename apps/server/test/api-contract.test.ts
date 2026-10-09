@@ -82,7 +82,7 @@ test("identity module owns the device-key account + auth flow (contract)", async
   const created = await fetch(`${base}/bootstrap/account`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_1", publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_1", publicKeyJwk } }),
   });
   assert.equal(created.status, 201);
   interface CreatedAccountBody { account: { did: string; actorType: string } }
@@ -151,7 +151,7 @@ test("content engine: membership-gated signed post creation ends to end (contrac
   const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_1", publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_1", publicKeyJwk } }),
   });
   assert.equal(account.status, 201);
   const did = (account.body.account as Json).did as string;
@@ -325,7 +325,7 @@ test("notifications: content-free transport, origin-only mention autocomplete (c
   const ownerAccount = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Susan", device: { deviceId: ownerPair.deviceId, publicKeyJwk: ownerPair.publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Susan", lastName: "Bell", device: { deviceId: ownerPair.deviceId, publicKeyJwk: ownerPair.publicKeyJwk } }),
   });
   assert.equal(ownerAccount.status, 201);
   const ownerDid = (ownerAccount.body.account as NotificationAccountBody).did as string;
@@ -440,7 +440,7 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
   const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Susan", device: { deviceId: "dev_1", publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Susan", lastName: "Bell", device: { deviceId: "dev_1", publicKeyJwk } }),
   });
   assert.equal(account.status, 201);
   const did = (account.body as FeedAccountBody).account.did;
@@ -612,13 +612,13 @@ test("first account creation records into the bootstrap ledger", async (t) => {
   const res = await fetch(`http://127.0.0.1:${port}/api/identity/bootstrap/account`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", email: "b@example.com", device: devicePayload }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", email: "b@example.com", device: devicePayload }),
   });
   assert.equal(res.status, 201);
   const again = await fetch(`http://127.0.0.1:${port}/api/identity/bootstrap/account`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Other", device: devicePayload }),
+    body: JSON.stringify({ firstName: "Other", lastName: "Person", device: devicePayload }),
   });
   assert.equal(again.status, 200);
 
@@ -643,7 +643,7 @@ test("the served ledger reads already-bootstrapped once both steps complete (POR
   const account = await call(port, "/api/identity/bootstrap/account", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_1", publicKeyJwk: device.publicKey.export({ format: "jwk" }) } }),
+    body: JSON.stringify({ firstName: "Brian", lastName: "Noah", device: { deviceId: "dev_1", publicKeyJwk: device.publicKey.export({ format: "jwk" }) } }),
   });
   assert.equal(account.status, 201);
   assert.ok(account.body.account, "first-account creation returns the account row");
@@ -679,7 +679,7 @@ test("identity adoption flows through the API and records the ledger", async (t)
   const created = await fetch(`http://127.0.0.1:${homePort}/api/identity/bootstrap/account`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Susan", device: { deviceId: "dev_s1", publicKeyJwk } }),
+    body: JSON.stringify({ firstName: "Susan", lastName: "Bell", device: { deviceId: "dev_s1", publicKeyJwk } }),
   });
   const createdBody = (await created.json()) as { account: { did: string; displayName: string } };
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SETUP_STEPS, fullName, resumedDetail, setupStage } from "../src/setup-state.js";
+import { SETUP_STEPS, fullName, joinNameErrors, resumedDetail, setupStage } from "../src/setup-state.js";
 
 const ledger = (statuses) => ({
   steps: Object.fromEntries(Object.entries(statuses).map(([step, status]) => [step, { status, at: null, detail: null }])),
@@ -49,6 +49,23 @@ test("first and last names compose the family-facing name", () => {
   assert.equal(fullName("Brian", "Noah"), "Brian Noah");
   assert.equal(fullName("  Brian ", ""), "Brian");
   assert.equal(fullName(), "");
+});
+
+test("a submit missing a name shows the error on that empty field (PORCH-024)", () => {
+  const both = joinNameErrors("", "");
+  assert.equal(both.first, "Add your first name — this is who your family sees.");
+  assert.equal(both.last, "Add your last name — this is who your family sees.");
+
+  const firstOnly = joinNameErrors("Brian", "   ");
+  assert.equal(firstOnly.first, "");
+  assert.equal(firstOnly.last, "Add your last name — this is who your family sees.");
+
+  const lastOnly = joinNameErrors("  ", "Noah");
+  assert.equal(lastOnly.first, "Add your first name — this is who your family sees.");
+  assert.equal(lastOnly.last, "");
+
+  const complete = joinNameErrors("Brian", "Noah");
+  assert.deepEqual(complete, { first: "", last: "" }, "a complete form carries no field errors");
 });
 
 test("resumed-setup copy never renders a data dump", () => {
