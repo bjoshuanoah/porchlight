@@ -127,6 +127,56 @@ test("ac-4: reactions accept any emoji the member prefers (open vocabulary)", as
   assert.equal(juneReaction.emoji, "😂");
 });
 
+test("ac-3: the member can clear or swap a reaction, others render untouched", async () => {
+  const { interactions, collections, dev, juneDev, familyToken, juneToken, post } = await contentFixture();
+
+  const starPayload = { postId: post._id, emoji: "🌟" };
+  const laughedPayload = { postId: post._id, emoji: "😂" };
+  await interactions.react({ accessToken: familyToken, payload: starPayload, signature: dev.signPayload(starPayload) });
+  const juneLaugh = { postId: post._id, emoji: "😂" };
+  const juneRow = (await interactions.react({ accessToken: juneToken, payload: juneLaugh, signature: juneDev.signPayload(juneLaugh) })).reaction;
+
+  // Clear: the member's own emoji goes; the other member's row stays.
+  const cleared = await interactions.unreact({ accessToken: familyToken, payload: starPayload, signature: dev.signPayload(starPayload) });
+  assert.equal(cleared.removed, true);
+  const afterClear = await interactions.reactionsFor({ accessToken: familyToken, postId: post._id });
+  assert.deepEqual(afterClear.reactions, [
+    { _id: juneRow._id, memberDid: JUNE, emoji: "😂", createdAt: juneRow.createdAt },
+  ]);
+
+  // Swap = remove one, add another: a distinct emoji is a fresh reaction.
+  const swapOut = { ...laughedPayload };
+  await interactions.react({ accessToken: familyToken, payload: swapOut, signature: dev.signPayload(swapOut) });
+  const sunPayload = { postId: post._id, emoji: "☀️" };
+  await interactions.react({ accessToken: familyToken, payload: sunPayload, signature: dev.signPayload(sunPayload) });
+  const clearedLaugh = await interactions.unreact({ accessToken: familyToken, payload: swapOut, signature: dev.signPayload(swapOut) });
+  assert.equal(clearedLaugh.removed, true);
+  const afterSwap = (await interactions.reactionsFor({ accessToken: familyToken, postId: post._id })).reactions;
+  assert.ok(afterSwap.some((row) => row.memberDid === SUSAN && row.emoji === "☀️"));
+  assert.ok(!afterSwap.some((row) => row.memberDid === SUSAN && row.emoji === "😂"));
+
+  // Clearing an emoji the member never reacted is a no-op, never an error.
+  const absentPayload = { postId: post._id, emoji: "🦊" };
+  const absent = await interactions.unreact({ accessToken: familyToken, payload: absentPayload, signature: dev.signPayload(absentPayload) });
+  assert.deepEqual(absent, { removed: false, reaction: null });
+
+  // The write is actor-signed and contained to the origin like every other.
+  const forged = { postId: post._id, emoji: "🌻" };
+  await assert.rejects(
+    () => interactions.unreact({ accessToken: familyToken, payload: forged, signature: dev.signPayload(juneLaugh) }),
+    (error) => error.code === "E_SIGNATURE_INVALID",
+  );
+  const otherPayload = { postId: "post_missing", emoji: "🌟" };
+  await assert.rejects(
+    () => interactions.unreact({ accessToken: familyToken, payload: otherPayload, signature: dev.signPayload(otherPayload) }),
+    (error) => error.code === "E_POST_NOT_FOUND",
+  );
+
+  // Counters recount after removal: SUSAN's sun and JUNE's laugh remain.
+  const stored = await collections.posts.findOne({ _id: post._id });
+  assert.equal(stored.interactionCounters.reactionCount, 2);
+});
+
 test("ac-4: votes are one effective signed vote per member per post, changeable", async () => {
   const { interactions, collections, dev, juneDev, familyToken, juneToken, post } = await contentFixture();
 

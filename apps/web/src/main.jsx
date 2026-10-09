@@ -14,7 +14,7 @@ import { request, loadFeeds, setUnauthorizedHandler } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
-import { publishPost, publishReply, publishReaction, publishVote, uploadOriginals, exportOriginals } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals } from "./member-actions.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
 
@@ -324,8 +324,10 @@ function App() {
     loadReactions: async (post) => {
       const result = await request(connectionForPost(post), `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`);
       // The client renders only emoji values. Per-member reaction rows do
-      // cross the wire (memberDid per row) — never claim otherwise here.
-      return [...new Set((result.reactions || []).map((row) => row.emoji).filter(Boolean))];
+      // cross the wire (memberDid per row); memberDid is used exclusively to
+      // mark the member's own reaction for the warm highlight — never
+      // rendered as a who-reacted inspection surface (PORCH-036).
+      return (result.reactions || []).filter((row) => row.emoji);
     },
     getMedia: async (mediaId, kind = "feed-thumb", postOrigin = active?.url) => {
       const connection = identityConnections.find((item) => new URL(item.url).origin === postOrigin);
@@ -500,6 +502,7 @@ function App() {
     confirmDevice: unsupported,
     vote: async (post, value) => { const result = await publishVote(connectionForPost(post), post, value); await reload(); return result; },
     react: async (post, emoji) => { const result = await publishReaction(connectionForPost(post), post, emoji); await reload(); return result; },
+    unreact: async (post, emoji) => { const result = await unpublishReaction(connectionForPost(post), post, emoji); await reload(); return result; },
     submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
     submitReply: async (post, body, parentId, mentions = []) => { const result = await publishReply(connectionForPost(post), post, body, parentId, mentions); await reload(); return result; },
     upload: (files) => uploadOriginals(active, files),

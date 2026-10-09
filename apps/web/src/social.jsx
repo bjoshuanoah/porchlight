@@ -1,10 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, FormControl, InputLabel, MenuItem, Paper, Select,
+  DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, MenuItem, Paper, Select,
   Stack, TextField, Typography,
 } from '@mui/material';
+import { AddReactionOutlined } from '@mui/icons-material';
 import { tokens } from './theme.js';
+
+// The emoji picker is code-split: its Unicode catalog loads only when a
+// member first opens a reaction picker (PORCH-036).
+const EmojiPicker = lazy(() => import('./emoji-picker.jsx'));
 
 const rows = (value) => Array.isArray(value) ? value : Array.isArray(value?.posts) ? value.posts : [];
 const identityOf = (row) => String(row?._id ?? row?.id ?? '');
@@ -109,26 +114,94 @@ function Media({ post, actions }) {
   </Stack>;
 }
 
-function PresentReactions({ post, actions }) {
-  const [emojis, setEmojis] = useState(null);
+// Reaction bar (PORCH-036): a visual emoji picker opens from the small
+// add-reaction smile control — no step ever asks the member to type, paste,
+// or know an emoji string. Only the emoji actually present render, with no
+// counts and no who-reacted inspection surface; per-member rows identify
+// the member's own reaction for the warm highlight exclusively. Tapping an
+// emoji the member already reacted with clears it and tapping any other
+// adds it: change or clear, never an error (ac-2, ac-3).
+function PresentReactions({ post, data, actions }) {
+  const [rows, setRows] = useState(null);
+  const [anchor, setAnchor] = useState(null);
+  const operation = useOperation();
+  const ownDid = data.identity ? String(data.identity.id) : '';
   useEffect(() => {
     let current = true;
-    setEmojis(null);
+    setRows(null);
     Promise.resolve().then(() => invoke(actions, 'loadReactions', post))
-      .then((values) => { if (current && Array.isArray(values)) setEmojis(values); })
-      .catch(() => { if (current) setEmojis([]); });
+      .then((value) => { if (current && Array.isArray(value)) setRows(value.filter((row) => row?.emoji)); })
+      .catch(() => { if (current) setRows([]); });
     return () => { current = false; };
   }, [identityOf(post), actions.loadReactions]);
-  // Only the emoji actually present render. No counts, no who-reacted view.
-  if (!emojis || !emojis.length) return null;
-  return <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2 }} aria-label="Reactions from your family">
-    {emojis.map((emoji) => <Chip key={emoji} label={emoji} size="small" sx={{ minHeight: 40, minWidth: 40, fontSize: 20 }} />)}
+  const own = new Set((rows ?? [])
+    .filter((row) => String(row.memberDid ?? '') === ownDid)
+    .map((row) => row.emoji));
+  const toggle = (emoji, isOwn) => {
+    setAnchor(null);
+    if (!ownDid || operation.busy) return;
+    operation.run(() => invoke(actions, isOwn ? 'unreact' : 'react', post, emoji), (result) => {
+      setRows((current) => {
+        const base = current ?? [];
+        if (isOwn) return base.filter((row) => !(row.emoji === emoji && String(row.memberDid ?? '') === ownDid));
+        if (base.some((row) => row.emoji === emoji && String(row.memberDid ?? '') === ownDid)) return base;
+        return [...base, {
+          emoji,
+          memberDid: ownDid,
+          _id: result?.reaction?._id ?? `local:${emoji}`,
+          createdAt: result?.reaction?.createdAt ?? new Date().toISOString(),
+        }];
+      });
+    });
+  };
+  return <Stack
+    direction="row"
+    spacing={1}
+    alignItems="center"
+    flexWrap="wrap"
+    sx={{ mt: 2 }}
+    aria-label="Reactions from your family"
+  >
+    {[...new Set((rows ?? []).map((row) => row.emoji))].map((emoji) => {
+      const ownEmoji = own.has(emoji);
+      return <Chip
+        key={emoji}
+        label={emoji}
+        size="small"
+        aria-pressed={ownEmoji}
+        aria-label={ownEmoji ? `Your reaction ${emoji}` : `Reaction ${emoji}`}
+        sx={{
+          minHeight: 40,
+          minWidth: 40,
+          fontSize: 20,
+          ...(ownEmoji ? {
+            bgcolor: 'porchlight.amberSoft',
+            border: '1px solid',
+            borderColor: 'porchlight.amber',
+            color: 'text.primary',
+          } : {}),
+        }}
+      />;
+    })}
+    <IconButton
+      size="medium"
+      aria-label="Add a reaction"
+      aria-haspopup="dialog"
+      disabled={operation.busy || Boolean(data?.offline)}
+      onClick={(event) => setAnchor(event.currentTarget)}
+      sx={{ width: 40, height: 40, border: `1px dashed ${tokens.borderStrong}` }}
+    >
+      <AddReactionOutlined fontSize="small" />
+    </IconButton>
+    {anchor && <Suspense fallback={<CircularProgress size={20} />}>
+      <EmojiPicker open anchorEl={anchor} onClose={() => setAnchor(null)} own={own} onToggle={toggle} busy={operation.busy} />
+    </Suspense>}
+    {operation.error && <Typography variant="caption" color="error" sx={{ width: '100%' }}>{operation.error}</Typography>}
   </Stack>;
 }
 
 function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
   const [localHidden, setLocalHidden] = useState(false);
-  const [emoji, setEmoji] = useState('');
   const operation = useOperation();
   if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
   const openPost = () => navigate?.(`/posts/${encodeURIComponent(identityOf(post))}`);
@@ -156,15 +229,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
         <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'down'))}>Lower</Button>
         {!detail && <Button size="small" onClick={openPost}>Open conversation</Button>}
       </Stack>
-      {detail && <PresentReactions post={post} actions={actions} />}
-
-      {detail && <Stack component="form" direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 2 }} onSubmit={(event) => {
-        event.preventDefault();
-        if (emoji.trim()) operation.run(() => invoke(actions, 'react', post, emoji.trim()), () => setEmoji(''));
-      }}>
-        <TextField size="small" label="Your emoji" value={emoji} onChange={(event) => setEmoji(event.target.value)} inputProps={{ 'aria-label': 'Your emoji' }} helperText="Type any emoji." />
-        <Button type="submit" variant="outlined" disabled={!emoji.trim() || operation.busy || data.offline}>React</Button>
-      </Stack>}
+      {detail && <PresentReactions post={post} data={data} actions={actions} />}
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
     </CardContent>
   </Card>;

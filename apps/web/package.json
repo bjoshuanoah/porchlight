@@ -22,7 +22,8 @@
     "@mui/icons-material": "^7.3.0",
     "@mui/material": "^7.3.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "unicode-emoji-json": "^0.9.0"
   },
   "devDependencies": {
     "vite": "^7.1.0"

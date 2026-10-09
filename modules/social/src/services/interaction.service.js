@@ -138,6 +138,41 @@ export class InteractionService {
   }
 
   /**
+   * Clear one of the member's own reactions (PORCH-036 ac-3: reactions
+   * stay changeable — the member can remove an emoji they reacted with
+   * and the change renders everywhere the reaction renders). Only the
+   * member's own row at this origin is ever touched; clearing an emoji
+   * not currently reacted is a no-op result, never an error.
+   */
+  async unreact({ accessToken, payload, signature } = {}) {
+    interactionPayload(payload);
+    const session = await this.#requireSession({ accessToken, postId: payload?.postId });
+    await this.#verifyWrite({ session, payload, signature });
+    const emoji = typeof payload.emoji === "string" ? payload.emoji.trim() : "";
+    if (emoji.length === 0 || emoji.length > EMOJI_MAX_LENGTH) {
+      throw typedError("E_EMOJI_REQUIRED", "React with the emoji you want — any emoji works.");
+    }
+    const networkId = session.networkId;
+    const existing = await this.reactions.findOne({
+      postId: payload.postId,
+      networkId,
+      memberDid: session.did,
+      emoji,
+    });
+    if (!existing) {
+      return { removed: false, reaction: null };
+    }
+    await this.reactions.deleteOne({ _id: existing._id });
+    await this.#recount({ postId: payload.postId });
+    await this.audit("reaction_remove", {
+      networkId,
+      did: session.did,
+      detail: { postId: payload.postId, reactionId: existing._id },
+    });
+    return { removed: true, reaction: InteractionService.reactionView(existing) };
+  }
+
+  /**
    * Cast or change the member's vote (ac-4, vote privacy contract): one
    * effective vote per member per post; changing re-signs the doc. Vote
    * records are consumed only by the ranking formula — nothing here or in
