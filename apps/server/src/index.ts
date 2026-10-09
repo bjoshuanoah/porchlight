@@ -32,6 +32,9 @@ export async function bootServer(): Promise<BootResult> {
   const bootstrap = new BootstrapService(store, config, home.root);
   const app = createServer({ store, readiness: deps.readiness, config, bootstrap });
   const httpPort = config.hub.httpPort;
+  // Operator bind address (hub.host; PORCH-025). "0.0.0.0" adds LAN
+  // reachability beside the tunnel; one app pipeline serves every interface,
+  // so membership-token enforcement is unchanged on the LAN boundary.
   const host = config.hub.host;
   return {
     app,

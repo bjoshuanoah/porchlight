@@ -200,6 +200,27 @@ test("named-token mode: dashboard token stored at rest re-binds with its own id 
   assert.equal(binding.tunnelId, TUNNEL_ID);
 });
 
+test("LAN bind decoupling (PORCH-025): the tunnel target stays loopback for any bind address", async (t) => {
+  const dir = await tempHome(t);
+  const paths = tempPaths(dir);
+  mkdir(paths);
+  const tokenPayload = JSON.stringify({ account_tag: "acct", tunnel_secret: "c2VjcmV0", tunnel_id: TUNNEL_ID });
+  writeFileSync(join(paths.root, "tunnel", "token"), Buffer.from(tokenPayload).toString("base64") + "\n", { mode: 0o600 });
+  process.env.FAKE_TUNNEL_ID = TUNNEL_ID;
+  const config = spawnConfig(dir);
+  // The operator's LAN-facing bind (0.0.0.0) must never leak into the
+  // cloudflared origin URL: a bind address is not connectable, and loopback
+  // is always covered by the wider bind.
+  config.hub.host = "0.0.0.0";
+  for (const identity of [
+    { mode: "token", tunnelId: TUNNEL_ID, hostname: HOSTNAME },
+    { mode: "credentials", tunnelId: TUNNEL_ID, hostname: HOSTNAME },
+  ]) {
+    const args = boundTunnelArgs(paths, config, identity);
+    assert.equal(args[3], "http://127.0.0.1:8710");
+  }
+});
+
 test("pre-provision boots mint an ephemeral quick tunnel and persist no identity (fallback truthfulness)", async (t) => {
   const dir = await tempHome(t);
   const paths = tempPaths(dir);
