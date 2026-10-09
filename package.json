@@ -1,0 +1,29 @@
+{
+  "name": "porchlight",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Porchlight public monorepo — one codebase, two separable domains (identity, social).",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "packageManager": "npm@10.9.8",
+  "workspaces": [
+    "apps/*",
+    "modules/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test && node scripts/boundary-check.mjs",
+    "boundary": "node scripts/boundary-check.mjs",
+    "dev": "turbo run dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.7"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@porchlight/social",
+  "version": "0.1.0",
+  "description": "Porchlight social domain — routes → controllers → services → models. Owns all social models; shares zero models with identity.",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./models": "./src/models.js"
+  },
+  "scripts": {
+    "build": "echo 'social ships plain JS (no build) — use tsx for type-aware development'",
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

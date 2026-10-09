@@ -1,0 +1,26 @@
+{
+  "name": "@porchlight/identity",
+  "version": "0.1.0",
+  "description": "Porchlight identity domain — routes → controllers → services → models. Owns all identity models; shares zero models with social.",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./models": "./src/models.js"
+  },
+  "scripts": {
+    "build": "echo 'identity ships plain JS (no build) — use tsx for type-aware development'",
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
