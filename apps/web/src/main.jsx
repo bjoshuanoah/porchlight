@@ -14,7 +14,7 @@ import { request, loadFeeds, setUnauthorizedHandler } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
 
@@ -505,6 +505,9 @@ function App() {
     unreact: async (post, emoji) => { const result = await unpublishReaction(connectionForPost(post), post, emoji); await reload(); return result; },
     submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
     submitReply: async (post, body, parentId, mentions = []) => { const result = await publishReply(connectionForPost(post), post, body, parentId, mentions); await reload(); return result; },
+    // Mention roster (PORCH-037): same-origin members by name, fetched at
+    // the post's own origin so candidates never ride another connection.
+    mentionCandidates: (post, q = "") => fetchMentionCandidates(connectionForPost(post), q),
     upload: (files) => uploadOriginals(active, files),
     loadPost: async (id) => {
       const cached = posts.find((item) => (item._id || item.id) === id);

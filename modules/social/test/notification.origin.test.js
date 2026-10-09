@@ -11,8 +11,11 @@ const OTHER = "net_other";
 /** The exact content-free row contract: event + origin + ids, nothing else. */
 const CONTENT_FREE_KEYS = ["_id", "networkId", "memberId", "type", "postId", "commentId", "actorDid", "createdAt"].sort();
 
+const NAMES = { [SUSAN]: "Susan Bell", [JUNE]: "June Bell", [MEG]: "Meg Rivers" };
+const nameResolver = async (dids) => dids.map((did) => ({ did, displayName: NAMES[did] ?? null }));
+
 async function notificationFixture() {
-  const fx = fixture({ networkIds: [FAMILY, OTHER] });
+  const fx = fixture({ networkIds: [FAMILY, OTHER], memberNames: nameResolver });
   const dev = device("dev_s");
   const juneDev = device("dev_j");
   const megDev = device("dev_m");
@@ -99,24 +102,33 @@ test("ac-2: cross-origin reply triggers are refused at composition", async () =>
   assert.equal((await collections.notifications.find({})).length, 0);
 });
 
-test("ac-2: mention autocomplete lists same-origin members, never other networks", async () => {
+test("ac-2: mention autocomplete lists same-origin members by name, never other networks", async () => {
   const { membership, notifications, collections, familyToken, juneOtherToken } = await notificationFixture();
 
   const familyCandidates = (await notifications.mentionCandidates({ accessToken: familyToken })).candidates;
-  assert.deepEqual(familyCandidates.map((row) => row.did), [JUNE]); // MEG is other-origin only; SUSAN is the queryer
+  // MEG is other-origin only; SUSAN is the queryer. The roster carries the
+  // family-facing name (PORCH-037) — no handle, no email, no identity row.
+  assert.deepEqual(familyCandidates.map((row) => ({ did: row.did, name: row.name })), [{ did: JUNE, name: "June Bell" }]);
+  for (const row of familyCandidates) {
+    assert.equal("handle" in row, false);
+    assert.equal("email" in row, false);
+  }
 
   const otherCandidates = (await notifications.mentionCandidates({ accessToken: juneOtherToken })).candidates;
-  assert.deepEqual(otherCandidates.map((row) => row.did), [MEG]);
+  assert.deepEqual(otherCandidates.map((row) => ({ did: row.did, name: row.name })), [{ did: MEG, name: "Meg Rivers" }]);
 
-  // Query filter narrows the origin roster, still origin-only.
-  const filtered = (await notifications.mentionCandidates({ accessToken: familyToken, q: "jun" })).candidates;
-  assert.deepEqual(filtered.map((row) => row.did), [JUNE]);
+  // Query filter keys on the NAME the family knows each other by: first
+  // name, last name, or both — still origin-only.
+  const byFirstName = (await notifications.mentionCandidates({ accessToken: familyToken, q: "june" })).candidates;
+  assert.deepEqual(byFirstName.map((row) => row.did), [JUNE]);
+  const byLastName = (await notifications.mentionCandidates({ accessToken: familyToken, q: "Bell" })).candidates;
+  assert.deepEqual(byLastName.map((row) => row.did), [JUNE]);
 
   // Revoked origin membership drops out of the roster.
   const juneRow = await collections.memberships.findOne({ networkId: FAMILY, did: JUNE });
   await membership.revokeMember({ memberId: juneRow._id });
   const afterRevoke = (await notifications.mentionCandidates({ accessToken: familyToken })).candidates;
-  assert.deepEqual(afterRevoke.map((row) => row.did), []);
+  assert.deepEqual(afterRevoke.map((row) => ({ did: row.did, name: row.name })), []);
 
   // Tokenless and cross-perimeter calls are refused outright.
   await assert.rejects(

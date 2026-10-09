@@ -407,10 +407,14 @@ test("notifications: content-free transport, origin-only mention autocomplete (c
   assert.equal(serialized.includes("family-photo-caption-original"), false);
 
   // Mention autocomplete resolves against origin membership only: the owner
-  // sees June (same origin) under a DID query and nobody else.
-  const matched = await call(port, `/api/social/mentions/candidates?q=${encodeURIComponent(juneDid.slice(-6))}`, { headers: bearerAuth(ownerToken) });
+  // sees June (same origin) under a NAME query and nobody else. PORCH-037:
+  // autocomplete keys on the family-facing name — identity ids are write
+  // payloads, never what a member types to find someone.
+  const matched = await call(port, `/api/social/mentions/candidates?q=${encodeURIComponent("june")}`, { headers: bearerAuth(ownerToken) });
   assert.equal(matched.status, 200);
-  assert.deepEqual(((matched.body.candidates as Json[]) ?? []).map((row) => row.did), [juneDid]);
+  const candidateRows = ((matched.body.candidates as Json[]) ?? []);
+  assert.deepEqual(candidateRows.map((row) => row.did), [juneDid]);
+  assert.deepEqual(candidateRows.map((row) => row.name), ["June"]);
 
   // A query matching no member of the origin — including members of other
   // networks, if any existed — resolves to nothing; roster is origin-scoped.

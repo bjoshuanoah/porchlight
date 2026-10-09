@@ -24,6 +24,15 @@ export async function publishReply(connection, post, body, parentId = null, ment
   });
 }
 
+// Mention autocomplete (PORCH-037): the member types a NAME. The hub answers
+// with same-origin members only — the origin is the post's own connection, so
+// candidates never cross networks. DIDs returned here ride the write payload;
+// they are never rendered on any mention surface.
+export async function mentionCandidates(connection, q = "") {
+  const member = device(connection);
+  return request(member, `social/mentions/candidates?q=${encodeURIComponent(q)}`);
+}
+
 export async function publishReaction(connection, post, emoji) {
   return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`, {
     postId: post._id || post.id, emoji,

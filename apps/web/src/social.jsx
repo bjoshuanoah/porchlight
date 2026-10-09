@@ -1,11 +1,12 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, MenuItem, Paper, Select,
-  Stack, TextField, Typography,
+  DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
+  ListItemText, MenuItem, Paper, Popover, Select, Stack, TextField, Typography,
 } from '@mui/material';
 import { AddReactionOutlined } from '@mui/icons-material';
 import { tokens } from './theme.js';
+import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
@@ -19,7 +20,6 @@ const originName = (post, data) => post?.origin?.name ?? post?.network ?? (Strin
 const visibleAtOrigin = (post, data) => !originOf(post) || !networkId(data) || String(originOf(post)) === String(networkId(data)) || data.connections?.some((connection) => String(connection.networkId) === String(originOf(post)) || (post.origin && String(connection.url).replace(/\/$/, '') === String(post.origin).replace(/\/$/, '')));
 const groupAtOrigin = (group, data) => !group?.networkId || !networkId(data) || String(group.networkId) === String(networkId(data));
 const postKey = (post) => `${post?.origin ?? originOf(post) ?? ''}:${identityOf(post)}`;
-const mentionsOf = (value) => [...new Set(value.split(',').map((entry) => entry.trim()).filter(Boolean))];
 const atCurrentOrigin = (post, data) => post.origin ? post : { ...post, origin: data.server?.url, network: data.network?.name };
 // Attribution (PORCH-034): the hub resolves each author's family-facing
 // name at read time (post.authorName / reply.authorName). This fallback
@@ -313,28 +313,124 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
   </Box>;
 }
 
-function ReplyForm({ label, onSubmit, offline }) {
+// Mention rendering (PORCH-037): a reply body carries @Name tokens that the
+// hub resolved to family-facing names at read time (reply.mentionNames).
+// A mention renders in navy on the amber-soft emphasis; a member whose name
+// no longer resolves renders as plain body text. No id ever takes part in
+// rendering — an identity id lives in the write payload and nowhere on screen.
+const mentionSegmentsOf = (reply) => mentionSegments(reply.body, reply.mentionNames);
+// Members' surfaces: the family roster (/members) is the network's profile
+// directory for the owner; members without the owner gate get emphasis
+// without a navigation dead end. V1 has no per-member profile page.
+const canSeeDirectory = (data) => Boolean(data?.identity?.id) && (data?.members ?? []).some((entry) => entry?.did === data?.identity?.id && entry?.role === 'owner');
+
+function Mention({ text, data, navigate }) {
+  const emphasis = { color: 'primary.main', fontWeight: 650, bgcolor: 'porchlight.amberSoft', borderRadius: '4px', px: 0.4 };
+  if (canSeeDirectory(data) && typeof navigate === 'function') {
+    return <Typography component="span" onClick={() => navigate('/members')} title="View the family" sx={{ ...emphasis, cursor: 'pointer' }}>{text}</Typography>;
+  }
+  return <Typography component="span" sx={emphasis}>{text}</Typography>;
+}
+
+function renderReplyBody(reply, data, navigate) {
+  return mentionSegmentsOf(reply).map((segment, index) => segment.mention
+    ? <Mention key={index} text={segment.text} data={data} navigate={navigate} />
+    : <React.Fragment key={index}>{segment.text}</React.Fragment>);
+}
+
+// Reply composer with mention autocomplete (PORCH-037): typing @ (after
+// whitespace or at the start) opens the origin network's roster, listed by
+// family-facing name only. The picked name enters the text; the member's id
+// stays in memory for the write and never renders. The same composer rides
+// the post-detail conversation and card-level replies when they exist.
+function ReplyForm({ label, onSubmit, offline, post, actions }) {
   const [text, setText] = useState('');
-  const [mentions, setMentions] = useState('');
+  const [mention, setMention] = useState(null); // { anchor } under the caret
+  const [candidates, setCandidates] = useState([]);
+  const [pickedNames, setPickedNames] = useState([]); // autocomplete closure
+  const [pickedDids, setPickedDids] = useState([]); // the write payload only
+  const inputRef = useRef(null);
+  const fieldRef = useRef(null);
+  const requestRef = useRef(0);
   const operation = useOperation();
+  const queryCandidates = (value, caret) => {
+    const anchor = mentionDraft(mentionAnchor(value, caret), pickedNames);
+    setMention(anchor ? { anchor } : null);
+    const token = ++requestRef.current;
+    if (!anchor || typeof actions?.mentionCandidates !== 'function') { setCandidates([]); return; }
+    Promise.resolve()
+      .then(() => actions.mentionCandidates(post, anchor.query))
+      .then((result) => { if (requestRef.current === token) setCandidates((result?.candidates ?? []).filter((row) => row?.name)); })
+      .catch(() => { if (requestRef.current === token) setCandidates([]); });
+  };
+  const onTextChange = (event) => {
+    const value = event.target.value;
+    setText(value);
+    queryCandidates(value, event.target.selectionStart ?? value.length);
+  };
+  const pick = (candidate) => {
+    if (!mention) return;
+    const applied = applyMention(text, mention.anchor, candidate.name);
+    setText(applied.text);
+    if (applied.caret !== null && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(applied.caret, applied.caret);
+    }
+    setPickedNames((current) => [...current, candidate.name]);
+    setPickedDids((current) => current.includes(candidate.did) ? current : [...current, candidate.did]);
+    setMention(null);
+    setCandidates([]);
+  };
+  const closeMention = () => { setMention(null); setCandidates([]); };
   return <Stack component="form" spacing={1} sx={{ my: 1 }} onSubmit={(event) => {
     event.preventDefault();
-    if (text.trim()) operation.run(() => onSubmit(text.trim(), mentionsOf(mentions)), () => { setText(''); setMentions(''); });
+    if (text.trim()) operation.run(() => onSubmit(text.trim(), [...pickedDids]), () => {
+      setText(''); setMention(null); setCandidates([]); setPickedNames([]); setPickedDids([]);
+    });
   }}>
-    <TextField label={label} value={text} onChange={(event) => setText(event.target.value)} multiline minRows={2} />
-    <TextField size="small" label="Mention member IDs (optional)" value={mentions} onChange={(event) => setMentions(event.target.value)} helperText="Separate IDs with commas. Only members at this post's origin can be mentioned." />
+    <Box ref={fieldRef} sx={{ position: 'relative' }}>
+      <TextField
+        inputRef={(element) => { inputRef.current = element; }}
+        label={label}
+        value={text}
+        onChange={onTextChange}
+        onKeyDown={(event) => { if (event.key === 'Escape' && mention) { event.stopPropagation(); closeMention(); } }}
+        multiline minRows={2}
+        helperText={offline ? undefined : 'Type @ to mention someone by name.'}
+      />
+      {mention && candidates.length > 0 && <Popover
+        open
+        anchorEl={fieldRef.current}
+        onClose={closeMention}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        // The roster rides the typing: focus stays in the composer while
+        // the list is open (the name being typed is the query).
+        disableAutoFocus
+        disableEnforceFocus
+        slotProps={{ paper: { sx: { maxHeight: 280, minWidth: 220 }, elevation: 3 } }}
+      >
+        <List dense disablePadding>
+          {candidates.map((candidate) => (
+            <ListItemButton key={candidate.did} onClick={() => pick(candidate)} sx={{ minHeight: 44 }}>
+              <ListItemText primary={candidate.name} />
+            </ListItemButton>
+          ))}
+        </List>
+      </Popover>}
+    </Box>
     <Button type="submit" variant="contained" disabled={offline || operation.busy || !text.trim()} sx={{ alignSelf: 'flex-start' }}>{operation.busy ? 'Sending…' : 'Send reply'}</Button>
     {operation.error && <Alert severity="error">{operation.error}</Alert>}
   </Stack>;
 }
 
-function Reply({ reply, depth, children, onReply, offline, data }) {
+function Reply({ reply, depth, children, onReply, offline, data, post, actions, navigate }) {
   const [editing, setEditing] = useState(false);
   return <Box sx={{ ml: { xs: Math.min(depth, 3) * 1.5, sm: Math.min(depth, 4) * 3 }, pl: 2, py: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}>
     <Typography variant="subtitle2">{reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)} <Typography component="span" variant="caption" color="text.secondary">{dateOf(reply.createdAt)}</Typography></Typography>
-    <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{reply.body}</Typography>
+    <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
     {depth < 8 && <Button size="small" onClick={() => setEditing(!editing)}>Reply</Button>}
-    {editing && <ReplyForm label="Your reply" offline={offline} onSubmit={(body, mentions) => onReply(body, identityOf(reply), mentions)} />}
+    {editing && <ReplyForm label="Your reply" offline={offline} post={post} actions={actions} onSubmit={(body, mentions) => onReply(body, identityOf(reply), mentions)} />}
     {children}
   </Box>;
 }
@@ -380,7 +476,7 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const renderReplies = (parentId = '', depth = 0, seen = new Set()) => (byParent.get(parentId) || []).filter((reply) => !seen.has(identityOf(reply))).map((reply, index) => {
     const nextSeen = new Set(seen);
     nextSeen.add(identityOf(reply));
-    return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} offline={data.offline} data={data} onReply={submit}>{renderReplies(identityOf(reply), depth + 1, nextSeen)}</Reply>;
+    return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} offline={data.offline} data={data} post={post} actions={actions} navigate={navigate} onReply={submit}>{renderReplies(identityOf(reply), depth + 1, nextSeen)}</Reply>;
   });
   return <Box>
     <Button onClick={() => navigate?.('/timeline')} sx={{ mb: 2 }}>Back to timeline</Button>
@@ -393,7 +489,7 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
       <PostCard post={post} data={data} actions={actions} navigate={navigate} detail onHide={() => navigate?.('/timeline')} />
       <Typography variant="h6">Replies</Typography>
       {!data.offline && (replies.length ? renderReplies() : <Typography color="text.secondary">Be the first to reply.</Typography>)}
-      {!data.offline && <ReplyForm label="Write a reply" onSubmit={(body, mentions) => submit(body, null, mentions)} />}
+      {!data.offline && <ReplyForm label="Write a reply" post={post} actions={actions} onSubmit={(body, mentions) => submit(body, null, mentions)} />}
     </Stack>}
   </Box>;
 }
