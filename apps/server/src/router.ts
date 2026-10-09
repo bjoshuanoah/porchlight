@@ -7,7 +7,6 @@ import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
-import { bootstrapPage } from "./bootstrap.page.js";
 import { loadConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
@@ -66,14 +65,21 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       invite?: { status: string };
       quota?: { status: string };
     }> => {
+      // PORCH-020 narrowed the flow to account + network; legacy hubs may
+      // still carry invite/quota rows recorded by the older flow, so every
+      // row is passed through when present and omitted when absent — the
+      // module-side era gate treats an absent row as an open era.
       const doc = await options.bootstrap.load();
-      const { account, network, invite, quota } = doc.steps;
-      return {
-        account: { status: account.status },
-        network: { status: network.status },
-        invite: { status: invite.status },
-        quota: { status: quota.status },
-      };
+      const rows: {
+        account?: { status: string };
+        network?: { status: string };
+        invite?: { status: string };
+        quota?: { status: string };
+      } = {};
+      for (const [step, record] of Object.entries(doc.steps) as [BootstrapStep, { status: string }][]) {
+        rows[step] = { status: record.status };
+      }
+      return rows;
     },
   };
   const hub = new HealthService(options.readiness ?? DOWN_PROBES, options.config.mode, hubUrl);
@@ -186,8 +192,11 @@ export function createServer(options: ServerOptions) {
     app.use("/", routers.wellKnown);
   }
   app.use("/api", routers.api);
+  // Legacy bring-up URL (PORCH-020): the old server-rendered bootstrap page
+  // is gone; every owner surfaces lands in the SPA's setup wizard. Keeping
+  // the redirect preserves pre-printed instructions and old tunnel copy.
   app.get("/bootstrap", (_req, res) => {
-    res.type("html").send(bootstrapPage());
+    res.redirect("/setup");
   });
 
   // The build copies the private web workspace's output next to dist/router.js.

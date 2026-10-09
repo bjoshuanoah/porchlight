@@ -46,9 +46,9 @@ test("hub serves its bundled SPA and client routes without claiming API, discove
   assert.equal(health.status, 200);
   assert.equal((await health.json() as { service: string }).service, "porchlight-server");
 
-  const bootstrap = await fetch(`${base}/bootstrap`);
-  assert.equal(bootstrap.status, 200);
-  assert.notEqual(await bootstrap.text(), html);
+  const legacy = await fetch(`${base}/bootstrap`, { redirect: "manual" });
+  assert.equal(legacy.status, 302, "the legacy bootstrap URL must land in the SPA's setup wizard (PORCH-020)");
+  assert.equal(legacy.headers.get("location"), "/setup");
 
   for (const path of ["/api/no-such-route", "/.well-known/no-such-route", "/bootstrap/no-such-route", "/assets/no-such-file.js", "/favicon.ico"]) {
     const response = await fetch(base + path);

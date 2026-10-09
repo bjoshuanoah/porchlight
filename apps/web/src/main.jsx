@@ -366,7 +366,7 @@ function App() {
     // re-readable, so a closed browser resumes exactly where setup paused.
     setupState: () => request({ url: origin }, "bootstrap/state"),
     accountState: () => request({ url: origin }, "identity/account").catch(() => null),
-    createOwnerAccount: async ({ displayName, avatar }) => {
+    createOwnerAccount: async ({ displayName, avatar, firstName, lastName }) => {
       const hub = { url: origin };
       const registration = await createDeviceRegistration(origin, (device) =>
         request(hub, "identity/bootstrap/account", { method: "POST", body: JSON.stringify({ displayName, device }) }));
@@ -377,10 +377,19 @@ function App() {
         identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
         deviceId: registration.deviceId, token: null, refreshToken: null, networkId: null,
       };
-      if (avatar) {
+      // Names are required at every identity-creation surface (Brian, Oct 14):
+      // the composed display name is the presentation layer; the first/last
+      // parts ride the free-form profile fields on the account row. The photo
+      // is optional and misses nothing if the profile write fails.
+      const profile = {
+        ...(firstName ? { firstName } : {}),
+        ...(lastName ? { lastName } : {}),
+        ...(avatar ? { avatar } : {}),
+      };
+      if (Object.keys(profile).length > 0) {
         try {
           await request({ url: origin, token: session.accessToken }, "identity/account/profile", {
-            method: "POST", body: JSON.stringify({ did: registration.did, profile: { avatar } }),
+            method: "POST", body: JSON.stringify({ did: registration.did, profile }),
           });
         } catch { /* the photo is optional; the account itself is complete */ }
       }
@@ -390,8 +399,6 @@ function App() {
       setIdentity(next.identity);
       return { registration, session };
     },
-    adoptOwnerIdentity: ({ sourceHubUrl, memberId }) =>
-      request({ url: origin }, "identity/bootstrap/adopt", { method: "POST", body: JSON.stringify({ sourceHubUrl, did: memberId }) }),
     startNetwork: async ({ name, ownerDid }) => {
       const hub = { url: origin };
       const result = await request(hub, "social/bootstrap/network", {
@@ -420,12 +427,6 @@ function App() {
           }
         } catch { /* binding stays server-side; the next silent re-credential binds */ }
       }
-      return result;
-    },
-    setBootstrapQuotas: async (quota) => {
-      const result = await request({ url: origin }, "bootstrap/quotas", {
-        method: "POST", body: JSON.stringify(quota),
-      });
       return result;
     },
     exportData: async () => {

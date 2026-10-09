@@ -5,6 +5,7 @@ import {
   Paper, Stack, TextField, Typography,
 } from '@mui/material';
 import { hubOrigin, parseDeviceGrant, parseJoinCode, splitJoinLink, verifyFailure } from './frontdoor.js';
+import { fullName, resumedDetail, setupStage } from './setup-state.js';
 
 const section = { mb: 3 };
 const rows = { display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' };
@@ -220,7 +221,7 @@ export function Join({ data, actions, navigate }) {
   </Box>;
 }
 
-const setupSteps = ["account", "network", "invite", "quota"];
+const setupSteps = ["network", "account"]; // exactly two prompts (PORCH-020)
 
 function StepCircle({ number, state }) {
   const sx = state === 'complete'
@@ -229,6 +230,58 @@ function StepCircle({ number, state }) {
   return <Box sx={{ width: 24, height: 24, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 13, flexShrink: 0, ...sx }}>
     {state === 'complete' ? "✓" : number}
   </Box>;
+}
+
+/** Human progress only (PORCH-020): two named steps, never a state dump. */
+function SetupProgress({ stageIndex }) {
+  return <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap" }}>
+    {setupSteps.map((step, index) => {
+      const state = index < stageIndex ? 'complete' : index === stageIndex ? 'current' : 'future';
+      return <Box key={step} sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <StepCircle number={index + 1} state={state} />
+        <Typography variant="body2">{step === "network" ? "Name the network" : "Who you are"}</Typography>
+      </Box>;
+    })}
+  </Box>;
+}
+
+function SetupShell({ children }) {
+  return <Box sx={{ maxWidth: 720, mx: "auto" }}>
+    <Heading title="Set up your porch" subtitle="Two quick questions and you are home: the network's name, and who you are. Everything else waits until you are inside." />
+    {children}
+  </Box>;
+}
+
+function NetworkNameStep({ name, onChange, onNext, busy }) {
+  return <Card sx={section}><CardContent>
+    <SetupProgress stageIndex={0} />
+    <Box component="form" onSubmit={onNext}><Stack spacing={2}>
+      <Typography color="text.secondary">What is your family's Porchlight called? You can change it later in the owner console.</Typography>
+      <TextField label="Network name" value={name} onChange={(event) => onChange(event.target.value)} required autoFocus fullWidth placeholder="The Noah Family" />
+      <Button type="submit" variant="contained" disabled={busy}>Continue</Button>
+    </Stack></Box>
+  </CardContent></Card>;
+}
+
+function AccountStep({ stageIndex, network, fields, onField, photo, onPhoto, onSubmit, busy, existing }) {
+  return <Card sx={section}><CardContent>
+    <SetupProgress stageIndex={stageIndex} />
+    <Box component="form" onSubmit={onSubmit}><Stack spacing={2}>
+      <Typography color="text.secondary">
+        {existing
+          ? `Your place already exists on this hub. Now it joins ${network}.`
+          : `Say who you are on ${network}. First and last names, and — only if you like — a photo.`}
+      </Typography>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+        <TextField label="First name" value={fields.first} onChange={(event) => onField("first", event.target.value)} required autoFocus fullWidth autoComplete="given-name" />
+        <TextField label="Last name" value={fields.last} onChange={(event) => onField("last", event.target.value)} required fullWidth autoComplete="family-name" />
+      </Stack>
+      <Button variant="text" component="label" sx={{ alignSelf: "flex-start" }}>{photo ? "Photo chosen — change it" : "Add a photo (optional)"}
+        <input type="file" accept="image/*" hidden onChange={onPhoto} />
+      </Button>
+      <Button type="submit" variant="contained" disabled={busy}>{existing ? "Open the network" : "Finish setup"}</Button>
+    </Stack></Box>
+  </CardContent></Card>;
 }
 
 function downscalePhoto(file) {
@@ -253,171 +306,95 @@ function downscalePhoto(file) {
 }
 
 /**
- * Owner bootstrap (PORCH-010): create the first account or adopt an identity
- * from an existing hub — the choice appears once, plainly, and is never
- * forced; then hub setup over the tunnel: network, join links, quotas.
- * Every step rides the hub's public setup ledger, so a closed browser
- * resumes exactly where setup paused — never a silent half-configured hub.
+ * Owner bootstrap (PORCH-020): a two-prompt wizard — the network's name,
+ * then who you are (first and last names plus an optional photo) — and the
+ * bound owner lands straight in the network's timeline. Invites and network
+ * settings never appear here: joining others and tuning the network are
+ * owner-console actions taken from inside. Every step rides the hub's
+ * public setup ledger, so a closed browser resumes exactly where setup
+ * paused — never a silent half-configured hub.
  */
 export function Setup({ data, actions, navigate }) {
   const operation = useOperation(actions);
-  const [steps, setSteps] = useState(null);
   const [account, setAccount] = useState(null);
-  const [stage, setStage] = useState('choice');
-  const [name, setName] = useState('');
-  const [photo, setPhoto] = useState('');
-  const [adoptUrl, setAdoptUrl] = useState('');
-  const [adoptId, setAdoptId] = useState('');
+  const [stage, setStage] = useState('network');
   const [networkName, setNetworkName] = useState('');
-  const [familyLinks, setFamilyLinks] = useState([]);
-  const [quota, setQuota] = useState({ storageCeilingMb: '', retentionDays: '' });
-  const adoptedNote = account?.account?.kind === "adopted";
+  const [fields, setFields] = useState({ first: '', last: '' });
+  const [photo, setPhoto] = useState('');
+  const network = networkName;
 
-  async function refreshStates() {
-    const [hubState, hubAccount] = await Promise.all([actions.setupState(), actions.accountState()]);
-    setSteps(hubState?.steps || {});
-    setAccount(hubAccount);
-    return hubState;
-  }
-  const stageOf = (hubState) => {
-    const done = (step) => hubState?.steps?.[step]?.status === "complete";
-    if (done("quota")) return "done";
-    if (done("invite")) return "invites";
-    if (done("network")) return "invites";
-    if (done("account")) return "network";
-    return "choice";
-  };
+  // A ledger that already finished both steps never shows a screen: the
+  // owner lands directly in the network (or, with no identity open on this
+  // device, on the front door the app already routes to).
   useEffect(() => {
     void (async () => {
       try {
         const hubState = await actions.setupState();
-        setSteps(hubState?.steps || {});
         setAccount(await actions.accountState());
-        setStage(stageOf(hubState));
-        if (hubState?.lastError) operation.setError(`Setup paused here earlier: ${hubState.lastError}. Continue below — nothing was lost.`);
+        const initial = setupStage(hubState);
+        setStage(initial === "landed" ? "done" : initial);
+        if (initial === "landed") { navigate?.("/timeline"); return; }
+        if (hubState?.lastError) operation.setError(resumedDetail(hubState.lastError));
       } catch {
-        setSteps({}); setStage("choice");
+        setStage("network");
         operation.setError("The hub could not be reached just now. It may still be starting — try again in a moment.");
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function createAccount(event) {
+  // Who the network will belong to: an owner identity this device or the
+  // hub already holds (resumed setup), else the account created on finish.
+  const ownerDid = data?.identity?.id || account?.account?.did || null;
+  const existingOwner = Boolean(ownerDid || account?.exists);
+
+  async function continueNetwork(event) {
     event.preventDefault();
-    if (!name.trim()) { operation.setError("Add a name before continuing."); return; }
-    const result = await operation.run("createOwnerAccount", [{ displayName: name.trim(), avatar: photo || undefined }]);
-    if (!result) return;
-    await refreshStates();
-    setStage("network");
-  }
-  async function adoptAccount(event) {
-    event.preventDefault();
-    if (!adoptUrl.trim() || !adoptId.trim()) { operation.setError("Add the other hub's address and your member id there."); return; }
-    const result = await operation.run("adoptOwnerIdentity", [{ sourceHubUrl: adoptUrl.trim(), memberId: adoptId.trim() }]);
-    if (!result) return;
-    await refreshStates();
-    setStage("network");
-  }
-  async function createNetwork(event) {
-    event.preventDefault();
-    if (!networkName.trim()) { operation.setError("Name your network before continuing."); return; }
-    const ownerDid = data?.identity?.id || account?.account?.did;
-    const result = await operation.run("startNetwork", [{ name: networkName.trim(), ownerDid }]);
-    if (!result) return;
-    await refreshStates();
-    setStage("invites");
-  }
-  async function inviteFamily() {
-    const result = await operation.run("issueInvite");
-    if (!result) return;
-    const link = invitationUrl(result.invite, data);
-    if (!link) { operation.setError("The hub returned no shareable invitation."); return; }
-    setFamilyLinks((rows) => [...rows, link]);
-    await refreshStates();
-  }
-  async function saveQuota(event) {
-    event.preventDefault();
-    const payload = {
-      storageCeilingMb: quota.storageCeilingMb === "" ? null : Number(quota.storageCeilingMb),
-      retentionDays: quota.retentionDays === "" ? null : Number(quota.retentionDays),
-    };
-    if (payload.storageCeilingMb !== null && (!Number.isFinite(payload.storageCeilingMb) || payload.storageCeilingMb <= 0)) {
-      operation.setError("Storage ceiling is a number of megabytes, or empty for none."); return;
+    if (!networkName.trim()) { operation.setError("Every network needs a name — even just your family's."); return; }
+    if (existingOwner) {
+      // Resumed setup: the who-you-are step is already done; creating the
+      // network binds the existing owner, then the owner lands directly.
+      if (await operation.run("startNetwork", [{ name: networkName.trim(), ownerDid }])) navigate?.("/timeline");
+      return;
     }
-    if (await operation.run("setBootstrapQuotas", [payload], "Hub space settings saved.")) {
-      setStage("done");
-    }
+    operation.setError("");
+    setStage("account");
   }
 
-  const stepState = (step) => steps?.[step]?.status === "complete" ? "complete"
-    : (stage === 'choice' && step === "account") || (stage === "network" && step === "network") || (stage === "invites" && step === "invite") || (stage === "quotas" && step === "quota") ? "current" : "future";
-  return <Box sx={{ maxWidth: 720, mx: 'auto' }}>
-    <Heading title="Set up your porch" subtitle="Your family's Porchlight lives on this hub. Finish the short setup once — every step is saved as you go, and you can come back to it." />
-    <Card sx={section}><CardContent>
-      <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap" }}>
-        {setupSteps.map((step, index) => <Box key={step} sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <StepCircle number={index + 1} state={stepState(step)} />
-          <Typography variant="body2">{step === "account" ? "First account" : step === "network" ? "The family network" : step === "invite" ? "Join links" : "Space limits"}</Typography>
-        </Box>)}
-      </Box>
+  async function finishSetup(event) {
+    event.preventDefault();
+    const name = fullName(fields.first, fields.last);
+    if (!fields.first.trim() || !fields.last.trim()) { operation.setError("Add your first and last name — this is who your family sees."); return; }
+    const owner = await operation.run("createOwnerAccount", [{
+      displayName: name, firstName: fields.first.trim(), lastName: fields.last.trim(), avatar: photo || undefined,
+    }]);
+    if (!owner) return;
+    const founded = await operation.run("startNetwork", [{ name: networkName.trim(), ownerDid: owner.registration.did }]);
+    if (!founded) return;
+    // Landing: the bound owner goes into the network, never a detached
+    // administration state.
+    navigate?.("/timeline");
+  }
+
+  return <SetupShell>
+    {stage === "network" && <Box>
       <Feedback operation={operation} />
-      {stage === "choice" && <>
-        <Typography gutterBottom>Do you already keep a Porchlight hub elsewhere?</Typography>
-        <Stack spacing={1} sx={{ mb: 3 }}>
-          <Button variant="outlined" onClick={() => setStage("create")}>No — create the first account here</Button>
-          <Button variant="text" onClick={() => setStage("adopt")}>Yes — adopt the identity from my other hub</Button>
-        </Stack>
-        {account?.exists && <Typography variant="body2" color="text.secondary">An account exists on this hub already. Continuing below keeps it untouched.</Typography>}
-      </>}
-      {stage === "create" && <Box component="form" onSubmit={createAccount}><Stack spacing={2}>
-        <Typography color="text.secondary">Only a name and, if you like, a photo. Nothing else is asked and nothing leaves this hub.</Typography>
-        <TextField label="What should your family call you?" value={name} onChange={(event) => setName(event.target.value)} required autoFocus fullWidth />
-        <Button variant="text" component="label" sx={{ alignSelf: "flex-start" }}>{photo ? "Photo chosen — change it" : "Add a photo (optional)"}
-          <input type="file" accept="image/*" hidden onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (!file) return;
-            downscalePhoto(file).then((dataUrl) => { setPhoto(dataUrl); operation.setError(""); }).catch(() => operation.setError("This photo could not be read. Try another one."));
-          }} />
-        </Button>
-        <Button type="submit" variant="contained" disabled={operation.busy}>Create account</Button>
-      </Stack></Box>}
-      {stage === "adopt" && <Box component="form" onSubmit={adoptAccount}><Stack spacing={2}>
-        <Typography color="text.secondary">Your identity stays home on your other hub — this hub only points at it. Both hubs run your family networks side by side.</Typography>
-        <TextField label="Your other hub's address" value={adoptUrl} onChange={(event) => setAdoptUrl(event.target.value)} placeholder="https://porchlight.home" required fullWidth autoComplete="url" />
-        <TextField label="Your member id on that hub" value={adoptId} onChange={(event) => setAdoptId(event.target.value)} required fullWidth autoComplete="off"
-          helperText="Shown on your profile screen there." />
-        <Button type="submit" variant="contained" disabled={operation.busy}>Adopt this identity</Button>
-      </Stack></Box>}
-      {stage === "network" && <Box component="form" onSubmit={createNetwork}><Stack spacing={2}>
-        <Typography color="text.secondary">{adoptedNote ? "Adoption saved. Now name the family network this hub will host." : "Name the family network this hub will host."}</Typography>
-        <TextField label="Network name" value={networkName} onChange={(event) => setNetworkName(event.target.value)} required autoFocus fullWidth placeholder="The Noah Family" />
-        <Button type="submit" variant="contained" disabled={operation.busy}>Create network</Button>
-      </Stack></Box>}
-      {stage === "invites" && <Stack spacing={2}>
-        <Typography color="text.secondary">You are already a member of the network you created — your place opened with the network itself. Now one join link for each family member. Anyone with the link becomes a member; you can withdraw any link the moment you want.</Typography>
-        <Button variant="contained" disabled={operation.busy} onClick={() => void inviteFamily()}>Make a family join link</Button>
-        {familyLinks.length > 0 && <List dense>{familyLinks.map((link, index) => <ListItem key={link} divider><ListItemText primary={link} secondary={`Link ${index + 1} — share it with your family`} /></ListItem>)}</List>}
-        <Button variant="text" onClick={() => setStage("quotas")}>Continue to space limits</Button>
-      </Stack>}
-      {stage === "quotas" && <Box component="form" onSubmit={saveQuota}><Stack spacing={2}>
-        <Typography color="text.secondary">Quantity-only guardrails for your hub: how much space the family may use and how long moments stay. Empty means no limit for now.</Typography>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-          <TextField label="Storage ceiling (MB)" type="number" inputProps={{ min: 1, step: 1 }} value={quota.storageCeilingMb} onChange={(event) => setQuota((value) => ({ ...value, storageCeilingMb: event.target.value }))} fullWidth />
-          <TextField label="Moments kept for (days)" type="number" inputProps={{ min: 1, step: 1 }} value={quota.retentionDays} onChange={(event) => setQuota((value) => ({ ...value, retentionDays: event.target.value }))} fullWidth />
-        </Stack>
-        <Stack direction="row" spacing={2}>
-          <Button type="submit" variant="contained" disabled={operation.busy}>Save and finish</Button>
-          <Button onClick={() => setStage("done")} disabled={operation.busy}>Skip for now</Button>
-        </Stack>
-      </Stack></Box>}
-      {stage === "done" && <Stack spacing={2}>
-        <Typography>Your porch is ready and welcome.</Typography>
-        <Button variant="contained" onClick={() => navigate?.("/timeline")}>Open the Timeline</Button>
-        <Button variant="text" onClick={() => navigate?.('/owner')}>Open the owner console</Button>
-      </Stack>}
-    </CardContent></Card>
-  </Box>;
+      <NetworkNameStep name={networkName} onChange={setNetworkName} onNext={continueNetwork} busy={operation.busy} />
+      {account?.exists && <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>An account exists on this hub already. Continuing keeps it untouched.</Typography>}
+    </Box>}
+    {stage === "account" && <Box>
+      <Feedback operation={operation} />
+      <AccountStep stageIndex={1} network={networkName || "your network"}
+        fields={fields} onField={(field, value) => setFields((current) => ({ ...current, [field]: value }))}
+        photo={photo} onPhoto={(event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          downscalePhoto(file).then((dataUrl) => { setPhoto(dataUrl); operation.setError(""); }).catch(() => operation.setError("This photo could not be read. Try another one."));
+        }}
+        onSubmit={finishSetup}
+        busy={operation.busy} />
+    </Box>}
+  </SetupShell>;
 }
 
 export function Pair({ data, actions, navigate }) {
@@ -630,6 +607,7 @@ export function OwnerConsole({ data, actions, navigate }) {
   const [linking, setLinking] = useState(null);
   const [issuedDeviceLink, setIssuedDeviceLink] = useState('');
   const [draftLimits, setLimits] = useState(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const members = available(data, 'members') ? data?.members || [] : null;
   const invites = available(data, 'invites') ? data?.invites || [] : null;
   const audit = available(data, 'audit') ? data?.audit || [] : null;
@@ -640,7 +618,7 @@ export function OwnerConsole({ data, actions, navigate }) {
     storageCeilingMb: settings?.quota?.storageCeilingMb ?? '',
     retentionDays: settings?.quota?.retentionDays ?? '',
   };
-  async function invite() {
+  async function makeJoinLink() {
     const result = await operation.run('issueInvite');
     if (!result) return;
     const link = invitationUrl(result.invite, data);
@@ -658,7 +636,7 @@ export function OwnerConsole({ data, actions, navigate }) {
     <Heading title="Owner console" subtitle={`Invitations, members, and trust status for ${networkName(data)}.`} />
     <Feedback operation={operation} />
     <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Invitations</Typography>
-      <Button variant="contained" disabled={operation.busy || typeof actions?.issueInvite !== 'function'} onClick={invite}>Make invitation</Button>
+      <Button variant="contained" disabled={operation.busy || typeof actions?.issueInvite !== 'function'} onClick={() => setInviteOpen(true)}>Make a join link</Button>
       {issued && <Alert severity="info" sx={{ mt: 2 }}>Share this invitation: {issued}</Alert>}
       {invites === null ? <Typography color="text.secondary" sx={{ mt: 2 }}>Invitation status is not available from this hub.</Typography>
         : invites.length ? <List dense>{invites.map(item => <ListItem key={idOf(item)} divider sx={{ gap: 1, flexWrap: 'wrap' }}>
@@ -744,6 +722,20 @@ export function OwnerConsole({ data, actions, navigate }) {
       <DialogActions><Button onClick={() => setRemoving(null)}>Keep member</Button><Button color="error" disabled={operation.busy} onClick={async () => {
         if (await operation.run('revokeMember', [removing], 'Membership removed.')) setRemoving(null);
       }}>Remove access</Button></DialogActions>
+    </Dialog>
+    <Dialog open={inviteOpen} onClose={() => { setInviteOpen(false); setIssued(''); }} fullWidth maxWidth="xs">
+      <DialogTitle>Make a join link</DialogTitle>
+      <DialogContent>{!issued ? <Typography>
+          One link, one new member of {networkName(data)}. You send it to the family member joining — it is never for you: you became a member when you created the network. Anyone holding the link becomes a member; you can withdraw it at any time.
+      </Typography>
+      : <>
+          <Typography gutterBottom>Send this link to the family member joining {networkName(data)}:</Typography>
+          <Typography sx={{ wordBreak: 'break-all' }}>{issued}</Typography>
+      </>}</DialogContent>
+      <DialogActions>
+        <Button onClick={() => { setInviteOpen(false); setIssued(''); }}>{issued ? 'Done' : 'Cancel'}</Button>
+        {!issued && <Button variant="contained" disabled={operation.busy} onClick={makeJoinLink}>Make the link</Button>}
+      </DialogActions>
     </Dialog>
   </Box>;
 }
