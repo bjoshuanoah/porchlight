@@ -11,6 +11,7 @@ import { RankingService, normalizeRankingConfig } from "./services/ranking.servi
 import { FeedService } from "./services/feed.service.js";
 import { MediaService } from "./services/media.service.js";
 import { ExportService } from "./services/export.service.js";
+import { AlbumService } from "./services/album.service.js";
 import { createMemoryMediaStore, createFileMediaStore, nodeDiskProbe } from "./services/media.store.js";
 import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
 import { ContentController } from "./controllers/content.controller.js";
@@ -18,6 +19,7 @@ import { FeedController } from "./controllers/feed.controller.js";
 import { MembershipController } from "./controllers/membership.controller.js";
 import { ConsoleController } from "./controllers/console.controller.js";
 import { MediaController } from "./controllers/media.controller.js";
+import { AlbumController } from "./controllers/album.controller.js";
 import { createSocialRouter } from "./routes.js";
 
 /**
@@ -155,6 +157,17 @@ export function assembleSocialModule(store, options = {}) {
     membership: membershipService,
     audit,
   });
+  // Albums (PORCH-013): derived-artifact-class memberships keyed by original
+  // post id; shares the transactional cascade mechanism and the media
+  // pipeline's serve/quota paths.
+  const albumService = new AlbumService({
+    derivedData,
+    posts,
+    membership: membershipService,
+    media: mediaService,
+    postsService: postService,
+    audit,
+  });
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, bootstrapLedger),
@@ -173,6 +186,7 @@ export function assembleSocialModule(store, options = {}) {
       system: options.system ?? null,
     }),
     media: new MediaController({ media: mediaService, export: exportService }),
+    albums: new AlbumController({ albums: albumService }),
   };
 
   return {
@@ -189,6 +203,7 @@ export function assembleSocialModule(store, options = {}) {
     feedService,
     mediaService,
     exportService,
+    albumService,
     controllers,
     api: createSocialRouter(controllers),
   };
