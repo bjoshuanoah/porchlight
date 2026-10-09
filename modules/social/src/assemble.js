@@ -9,11 +9,15 @@ import { NotificationService } from "./services/notification.service.js";
 import { GroupService } from "./services/group.service.js";
 import { RankingService, normalizeRankingConfig } from "./services/ranking.service.js";
 import { FeedService } from "./services/feed.service.js";
+import { MediaService } from "./services/media.service.js";
+import { ExportService } from "./services/export.service.js";
+import { createMemoryMediaStore, createFileMediaStore, nodeDiskProbe } from "./services/media.store.js";
 import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
 import { ContentController } from "./controllers/content.controller.js";
 import { FeedController } from "./controllers/feed.controller.js";
 import { MembershipController } from "./controllers/membership.controller.js";
 import { ConsoleController } from "./controllers/console.controller.js";
+import { MediaController } from "./controllers/media.controller.js";
 import { createSocialRouter } from "./routes.js";
 
 /**
@@ -30,6 +34,15 @@ import { createSocialRouter } from "./routes.js";
  *   hubUrl?: () => string | null,
  *   ledger?: { record: (step: string, detail?: object) => Promise<void> },
  *   verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>,
+ *   rankingConfig?: object,
+ *   media?: {
+ *     mediaRoot?: string,
+ *     store?: { put: (key: string, bytes: Buffer) => Promise<string>, get: (key: string) => Promise<Buffer | null>, has: (key: string) => Promise<boolean>, delete: (key: string) => Promise<boolean> },
+ *     diskProbe?: () => Promise<{ totalBytes: number, freeBytes: number }>,
+ *     softUsedRatio?: number,
+ *     hardUsedRatio?: number,
+ *     chunkSize?: number,
+ *   },
  * }} [options]
  */
 export function assembleSocialModule(store, options = {}) {
@@ -49,6 +62,8 @@ export function assembleSocialModule(store, options = {}) {
   const notifications = collection("notifications");
   const derivedData = collection("derived_data");
   const groups = collection("groups");
+  const mediaUploads = collection("media_uploads");
+  const mediaAssets = collection("media_assets");
 
   const auditService = new AuditService(auditEvents, ledger);
   const audit = auditService.recorderFor(null);
@@ -95,6 +110,41 @@ export function assembleSocialModule(store, options = {}) {
     membership: membershipService,
     ranking: rankingService,
   });
+  // Media pipeline (PORCH-008): the blob store is content-addressed —
+  // filesystem-backed for the real hub (mediaRoot), memory for tests and
+  // daemon-less runs. The disk probe reads the live filesystem unless a
+  // test injects its own.
+  const mediaConfig = options.media ?? {};
+  const blobs = mediaConfig.store ?? (mediaConfig.mediaRoot ? createFileMediaStore(mediaConfig.mediaRoot) : createMemoryMediaStore());
+  const mediaService = new MediaService(
+    {
+      uploads: mediaUploads,
+      assets: mediaAssets,
+      artifacts,
+      membership: membershipService,
+      quota: quotaService,
+      blobs,
+      diskProbe: mediaConfig.diskProbe ?? (() => {
+        const root = mediaConfig.mediaRoot;
+        return root ? nodeDiskProbe(root) : Promise.resolve({ totalBytes: 0, freeBytes: 0 });
+      }),
+      audit,
+    },
+    {
+      softUsedRatio: mediaConfig.softUsedRatio,
+      hardUsedRatio: mediaConfig.hardUsedRatio,
+      chunkSize: mediaConfig.chunkSize,
+    },
+  );
+  const exportService = new ExportService({
+    posts,
+    comments,
+    reactions,
+    assets: mediaAssets,
+    blobs,
+    membership: membershipService,
+    audit,
+  });
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, ledger),
@@ -109,7 +159,9 @@ export function assembleSocialModule(store, options = {}) {
       audit: auditService,
       groups: groupService,
       ranking: rankingService,
+      media: mediaService,
     }),
+    media: new MediaController({ media: mediaService, export: exportService }),
   };
 
   return {
@@ -124,6 +176,8 @@ export function assembleSocialModule(store, options = {}) {
     notificationService,
     rankingService,
     feedService,
+    mediaService,
+    exportService,
     controllers,
     api: createSocialRouter(controllers),
   };
