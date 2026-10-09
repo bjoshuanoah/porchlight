@@ -36,6 +36,7 @@ declare module "@porchlight/social" {
     content: unknown;
     membership: unknown;
     console: unknown;
+    media: unknown;
   }): import("express").Router;
   export function assembleSocialModule(
     store: { collection(name: string): unknown },
@@ -43,6 +44,19 @@ declare module "@porchlight/social" {
       hubUrl?: () => string | null;
       ledger?: { record: (step: string, detail?: object) => Promise<void> };
       verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>;
+      media?: {
+        mediaRoot?: string;
+        store?: {
+          put: (key: string, bytes: Buffer) => Promise<string>;
+          get: (key: string) => Promise<Buffer | null>;
+          has: (key: string) => Promise<boolean>;
+          delete: (key: string) => Promise<boolean>;
+        };
+        diskProbe?: () => Promise<{ totalBytes: number; freeBytes: number }>;
+        softUsedRatio?: number;
+        hardUsedRatio?: number;
+        chunkSize?: number;
+      };
     },
   ): {
     networkService: NetworkService;

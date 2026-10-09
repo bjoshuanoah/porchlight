@@ -1,9 +1,9 @@
 /**
  * Owner console controller. The server behaviors behind the console screens
  * (Porchlight UI owns the screens; this owns the behaviors): invite
- * lifecycle management, member management, quantity-only limits, retention
- * sweep, and the member-action audit trail. Transport-specific only — all
- * domain logic lives in the services.
+ * lifecycle management, member management, quantity-only limits, disk
+ * guard status, retention sweep, and the member-action audit trail.
+ * Transport-specific only — all domain logic lives in the services.
  */
 export class ConsoleController {
   /**
@@ -15,8 +15,9 @@ export class ConsoleController {
    * @param {import("../services/audit.service.js").AuditService} deps.audit
    * @param {import("../services/group.service.js").GroupService} deps.groups
    * @param {import("../services/ranking.service.js").RankingService} deps.ranking
+   * @param {import("../services/media.service.js").MediaService} [deps.media]
    */
-  constructor({ networks, invites, membership, quota, audit, groups, ranking }) {
+  constructor({ networks, invites, membership, quota, audit, groups, ranking, media }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
@@ -24,6 +25,7 @@ export class ConsoleController {
     this.audit = audit;
     this.groups = groups;
     this.ranking = ranking;
+    this.media = media ?? null;
   }
 
   /** GET /console/invites — owner-visible join-link states (unused/used/revoked). */
@@ -128,14 +130,48 @@ export class ConsoleController {
     res.json({ events: await this.audit.list({ networkId: network._id }) });
   };
 
-  /** POST /console/retention/sweep — owner-run retention enforcement pass. */
+  /**
+   * POST /console/retention/sweep — owner-run retention enforcement pass.
+   * Routes through the media service when it is wired (PORCH-008): the
+   * quota ledger rows sweep first, then each expired artifact's stored
+   * media row (original or rendition) and its blob bytes cascade in the
+   * same pass.
+   */
   sweepRetention = async (_req, res) => {
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
     }
-    const result = await this.quota.sweep({ networkId: network._id });
-    res.json(result);
+    if (this.media) {
+      return res.json(await this.media.sweep({ networkId: network._id }));
+    }
+    res.json(await this.quota.sweep({ networkId: network._id }));
+  };
+
+  /**
+   * GET /console/disk — the disk-guard status surface (PORCH-008 ac-4):
+   * live used/free bytes against the soft and hard thresholds. The soft
+   * warning (`warning: true`) is what the owner console banners; the hard
+   * state (`uploadsHalted: true`) is where the media service rejects new
+   * uploads while reads continue.
+   */
+  diskStatus = async (_req, res) => {
+    if (!this.media) {
+      return res.status(501).json({ error: "The media pipeline is not wired into this deployment" });
+    }
+    res.json(await this.media.diskStatus());
+  };
+
+  /**
+   * POST /console/media/gc — owner-runnable garbage-collection pass over
+   * idle incomplete uploads (the scheduled pass calls the same service
+   * method; the console route makes it observable and re-runnable).
+   */
+  gcUploads = async (_req, res) => {
+    if (!this.media) {
+      return res.status(501).json({ error: "The media pipeline is not wired into this deployment" });
+    }
+    res.json(await this.media.gcIncompleteUploads());
   };
 
   /**

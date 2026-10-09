@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 
 /**
  * Social routes. Thin REST surface that owns no domain logic — the server
@@ -12,11 +12,12 @@ import { Router } from "express";
  *   feed: import("./controllers/feed.controller.js").FeedController,
  *   membership: import("./controllers/membership.controller.js").MembershipController,
  *   console: import("./controllers/console.controller.js").ConsoleController,
+ *   media: import("./controllers/media.controller.js").MediaController,
  * }} controllers
  */
 export function createSocialRouter(controllers) {
   const router = Router();
-  const { bootstrap, content, feed, membership, console: ownerConsole } = controllers;
+  const { bootstrap, content, feed, membership, console: ownerConsole, media } = controllers;
 
   // Bootstrap-era network + invite surface (PORCH-003 contract; unchanged).
   router.get("/network", bootstrap.get);
@@ -54,8 +55,27 @@ export function createSocialRouter(controllers) {
   router.get("/ranked", feed.ranked);
   router.get("/search", feed.search);
 
+  // Media pipeline (PORCH-008): resumable chunked ingest of immutable
+  // originals, hub-generated renditions, rendition-default serving with
+  // explicit original retrieval, and the signed export stream. Every
+  // surface is token-scoped to exactly one origin network; the state-
+  // changing writes (begin, complete, export) are device-signed.
+  router.post("/media/uploads", media.beginUpload);
+  router.get("/media/uploads/:uploadId", media.uploadStatus);
+  router.put(
+    "/media/uploads/:uploadId/chunks/:index",
+    express.raw({ type: () => true, limit: "8mb" }),
+    media.putChunk,
+  );
+  router.post("/media/uploads/:uploadId/complete", media.completeUpload);
+  router.get("/media/:mediaId/renditions/:kind", media.serveRendition);
+  router.get("/media/:mediaId/original", media.serveOriginal);
+  router.get("/media/export", media.exportArchive);
+
   // Owner console server behaviors (PORCH-005 ac-1/3/4) + group containers.
   router.get("/console/ranking", ownerConsole.getRanking);
+  router.get("/console/disk", ownerConsole.diskStatus);
+  router.post("/console/media/gc", ownerConsole.gcUploads);
   router.get("/console/invites", ownerConsole.listInvites);
   router.post("/console/invites", ownerConsole.issueInvite);
   router.post("/console/invites/revoke", ownerConsole.revokeInvite);

@@ -310,6 +310,59 @@ export const socialModels = {
     },
   },
   /**
+   * Media upload session (PORCH-008 ac-1). One resumable chunked upload:
+   * the perimeter-scoped member, the declared bytes, the received chunk
+   * indexes, and the lifecycle state (open → committed | aborted). Chunk
+   * blobs live outside the store in the content-addressed blob layer,
+   * keyed `upl_<uploadId>/<index>`.
+   */
+  mediaUpload: {
+    type: "object",
+    required: ["_id", "networkId", "did", "size", "chunkSize", "state", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      networkId: { type: "string" },
+      did: { type: "string" },
+      deviceId: { type: "string" },
+      size: { type: "integer" },
+      contentType: { type: "string" },
+      chunkSize: { type: "integer" },
+      chunkCount: { type: "integer" },
+      receivedChunks: { type: "array" },
+      state: { type: "string", enum: ["open", "committed", "aborted"] },
+      mediaId: { type: ["string", "null"] },
+      createdAt: { type: "string" },
+      lastActivityAt: { type: "string" },
+    },
+  },
+  /**
+   * Media asset (PORCH-008). Either the immutable original (the archival
+   * record, full original quality) or a hub-generated rendition
+   * (renditionKind: feed-thumb | detail | album) derived from it.
+   * blobKey is the sha256 content address — originals are immutable by
+   * construction and renditions are derived artifacts of their original.
+   */
+  mediaAsset: {
+    type: "object",
+    required: ["_id", "networkId", "did", "kind", "blobKey", "sha256", "bytes", "immutable", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      networkId: { type: "string" },
+      did: { type: "string" },
+      kind: { type: "string", enum: ["original", "rendition"] },
+      renditionKind: { type: ["string", "null"] },
+      originalId: { type: ["string", "null"] },
+      contentType: { type: "string" },
+      blobKey: { type: "string" },
+      sha256: { type: "string" },
+      bytes: { type: "integer" },
+      immutable: { type: "boolean" },
+      deviceSignature: { type: ["string", "null"] },
+      uploadId: { type: ["string", "null"] },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
    * Member action audit (PORCH-005 ac-4). Member actions are auditable
    * events visible in the owner console: logins (admissions), uploads
    * (artifact records), deletions (retention sweep), revocations.

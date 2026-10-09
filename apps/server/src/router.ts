@@ -1,4 +1,5 @@
 import express, { Router } from "express";
+import { join } from "node:path";
 import { createSystemRouter } from "./routes/system.routes.js";
 import { assembleIdentityModule } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
@@ -59,13 +60,16 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
   if (options.store && options.config.mode.socialServingEnabled) {
     // The social module assembles the full membership perimeter; identity is
     // referenced only by DID through the injected verifier callback — the
-    // modules share zero code and the boundary check enforces it.
+    // modules share zero code and the boundary check enforces it. The media
+    // pipeline's content-addressed blob store roots under the hub config
+    // directory (PORCH-008); its disk guard probes the same filesystem.
     router.use(
       "/social",
       assembleSocialModule(options.store, {
         hubUrl,
         ledger,
         verifyMemberIdToken: identityAuth ? (token: string | null) => (token ? identityAuth!.verifyAccessToken(token) : Promise.resolve(null)) : undefined,
+        media: { mediaRoot: join(options.bootstrap.configDir, "media") },
       }).api,
     );
   }
