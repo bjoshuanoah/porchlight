@@ -2,15 +2,27 @@
   "name": "@porchlight/web",
   "version": "0.1.0",
   "private": true,
-  "description": "Porchlight static SPA shell (placeholder).",
+  "description": "Hub-served Porchlight web and mobile-web SPA",
   "license": "MIT",
   "author": "Brian Noah",
-  "engines": {
-    "node": ">= 24"
-  },
+  "engines": { "node": ">=24" },
+  "type": "module",
   "scripts": {
-    "build": "cp -r public/* dist/ 2>/dev/null || true",
-    "dev": "npx http-server public -p 3001 -c-1",
-    "test": "echo 'no tests (SPA shell placeholder)'"
+    "build": "vite build && node scripts/audit.mjs --bundle",
+    "dev": "vite --host 127.0.0.1",
+    "lint": "eslint src test scripts vite.config.js && node scripts/audit.mjs",
+    "test": "node --test test/*.test.js",
+    "typecheck": "node --check vite.config.js && node --check src/store.js && node --check src/api.js && node --check src/member-actions.js && node --check src/device.js && node --check scripts/audit.mjs"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^7.3.0",
+    "@mui/material": "^7.3.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
   }
 }

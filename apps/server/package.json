@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-web.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "dev": "node --import ../../scripts/register.mjs --watch src/index.ts",
@@ -31,6 +31,7 @@
     "redis": "^4.7.0"
   },
   "devDependencies": {
+    "@porchlight/web": "0.1.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.7.4",
     "tsx": "^4.19.1",
