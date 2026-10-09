@@ -7,8 +7,11 @@ import { PostService } from "./services/post.service.js";
 import { InteractionService } from "./services/interaction.service.js";
 import { NotificationService } from "./services/notification.service.js";
 import { GroupService } from "./services/group.service.js";
+import { RankingService, normalizeRankingConfig } from "./services/ranking.service.js";
+import { FeedService } from "./services/feed.service.js";
 import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
 import { ContentController } from "./controllers/content.controller.js";
+import { FeedController } from "./controllers/feed.controller.js";
 import { MembershipController } from "./controllers/membership.controller.js";
 import { ConsoleController } from "./controllers/console.controller.js";
 import { createSocialRouter } from "./routes.js";
@@ -84,10 +87,19 @@ export function assembleSocialModule(store, options = {}) {
     notifications: notificationService,
     audit,
   });
+  const rankingService = new RankingService({ config: options.rankingConfig ? normalizeRankingConfig(options.rankingConfig) : undefined });
+  const feedService = new FeedService({
+    posts,
+    derivedData,
+    groups,
+    membership: membershipService,
+    ranking: rankingService,
+  });
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, ledger),
     content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService }),
+    feed: new FeedController({ feed: feedService }),
     membership: new MembershipController(membershipService, networkService),
     console: new ConsoleController({
       networks: networkService,
@@ -96,6 +108,7 @@ export function assembleSocialModule(store, options = {}) {
       quota: quotaService,
       audit: auditService,
       groups: groupService,
+      ranking: rankingService,
     }),
   };
 
@@ -109,6 +122,8 @@ export function assembleSocialModule(store, options = {}) {
     postService,
     interactionService,
     notificationService,
+    rankingService,
+    feedService,
     controllers,
     api: createSocialRouter(controllers),
   };

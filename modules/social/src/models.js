@@ -49,6 +49,12 @@ export const socialModels = {
         },
       },
       createdAt: { type: "string" },
+      /**
+       * Latest-activity timestamp (PORCH-007 timeline ordering): bumped by
+       * every interaction write; the base timeline's reverse-chron key.
+       * `lastActivityAt ?? createdAt` — null until the first interaction.
+       */
+      lastActivityAt: { type: ["string", "null"] },
     },
   },
   /**
@@ -171,6 +177,12 @@ export const socialModels = {
       postId: { type: "string" },
       /** rendition | tag | album_membership. */
       class: { type: "string" },
+      /**
+       * Member-authored value for manual-organization rows (PORCH-007
+       * search): a people-tag value or an album name. Null for renditions.
+       * Stored verbatim; the plain-text search index reads it.
+       */
+      value: { type: ["string", "null"] },
       createdAt: { type: "string" },
     },
   },

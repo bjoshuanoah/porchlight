@@ -14,14 +14,16 @@ export class ConsoleController {
    * @param {import("../services/quota.service.js").QuotaService} deps.quota
    * @param {import("../services/audit.service.js").AuditService} deps.audit
    * @param {import("../services/group.service.js").GroupService} deps.groups
+   * @param {import("../services/ranking.service.js").RankingService} deps.ranking
    */
-  constructor({ networks, invites, membership, quota, audit, groups }) {
+  constructor({ networks, invites, membership, quota, audit, groups, ranking }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
     this.quota = quota;
     this.audit = audit;
     this.groups = groups;
+    this.ranking = ranking;
   }
 
   /** GET /console/invites — owner-visible join-link states (unused/used/revoked). */
@@ -164,6 +166,16 @@ export class ConsoleController {
       return res.status(409).json({ error: "No network exists yet" });
     }
     res.json({ groups: await this.groups.list({ networkId: network._id }) });
+  };
+
+  /**
+   * GET /console/ranking — the owner-readable ranking parameters (Feed
+   * Ranking Contract: fixed, published formula with every parameter a
+   * named configuration value). Read-only; the vote-privacy surface of
+   * the formula is not affected: parameters only, no vote data.
+   */
+  getRanking = async (_req, res) => {
+    res.json(this.ranking.describe());
   };
 }
 

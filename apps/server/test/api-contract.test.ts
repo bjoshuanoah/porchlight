@@ -246,6 +246,135 @@ test("content engine: membership-gated signed post creation ends to end (contrac
   assert.equal(removedBody.cascadeRows >= 2, true); // post + comment at minimum
 });
 
+type FeedAccountBody = { account: { did: string } };
+type FeedChallengeBody = { nonce: string };
+type FeedSessionBody = { accessToken: string };
+type FeedInviteBody = { joinUrl: string };
+type FeedAdmitBody = { accessToken: string };
+type FeedCreatedPostBody = { post: { _id: string } };
+type FeedGroupBody = { group: { _id: string } };
+type FeedGroupTimelineBody = { group: { _id: string }; posts: { _id: string }[] };
+type FeedListBody = { posts: { _id: string }[] };
+type FeedVoteBody = { vote: { postId: string; effective: string } };
+type FeedRankingBody = { formula: string; parameters: Record<string, Record<string, unknown>> };
+
+test("feed assembly: timeline, group view, ranked order, and search end to end (contract)", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+
+  // Member identity + admission (same perimeter flow as the content test).
+  const device = generateKeyPairSync("ed25519");
+  const publicKeyJwk = device.publicKey.export({ format: "jwk" });
+  const account = await call(port, "/api/identity/bootstrap/account", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Susan", device: { deviceId: "dev_1", publicKeyJwk } }),
+  });
+  assert.equal(account.status, 201);
+  const did = (account.body as FeedAccountBody).account.did;
+  const challenge = await call(port, "/api/identity/session/challenge", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did }),
+  });
+  const session = await call(port, "/api/identity/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      did,
+      deviceId: "dev_1",
+      nonce: (challenge.body as FeedChallengeBody).nonce,
+      signature: sign(null, Buffer.from((challenge.body as FeedChallengeBody).nonce, "utf8"), device.privateKey).toString("base64url"),
+    }),
+  });
+  const identityToken = (session.body as FeedSessionBody).accessToken;
+  await call(port, "/api/social/bootstrap/network", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Family" }) });
+  const invite = await call(port, "/api/social/bootstrap/invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+  const inviteBody = invite.body as FeedInviteBody;
+  const code = inviteBody.joinUrl.split("/join/")[1];
+  const admit = await call(port, "/api/social/join/admit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      code,
+      identityAccessToken: identityToken,
+      deviceId: "dev_1",
+      devicePublicKeyJwk: publicKeyJwk,
+      signature: sign(null, Buffer.from(`porchlight-join:${code}`, "utf8"), device.privateKey).toString("base64url"),
+    }),
+  });
+  const membershipToken = (admit.body as FeedAdmitBody).accessToken;
+  const auth = { "content-type": "application/json", authorization: `Bearer ${membershipToken}` };
+  const signedBody = (payload: object) =>
+    JSON.stringify({ payload, signature: sign(null, Buffer.from(canonicalJson(payload), "utf8"), device.privateKey).toString("base64url") });
+  const createPost = async (payload: object) => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/social/posts`, { method: "POST", headers: auth, body: signedBody(payload) });
+    assert.equal(res.status, 200);
+    return ((await res.json()) as FeedCreatedPostBody).post;
+  };
+
+  const captioned = await createPost({ type: "photo", mediaRefs: ["med_1"], caption: "Picnic at the Lake" });
+  await createPost({ type: "text", body: "plain text post" });
+
+  // Group container: group timeline is the origin-filtered groupId query.
+  const group = await call(port, "/api/social/console/groups", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Picnic", members: [did] }),
+  });
+  assert.equal(group.status, 201);
+  const groupId = (group.body as FeedGroupBody).group._id;
+  const picnic = await createPost({ type: "text", body: "picnic logistics", groupId });
+  const groupTimeline = await fetch(`http://127.0.0.1:${port}/api/social/timeline/groups/${groupId}`, { headers: auth });
+  assert.equal(groupTimeline.status, 200);
+  const groupBody = (await groupTimeline.json()) as FeedGroupTimelineBody;
+  assert.equal(groupBody.group._id, groupId);
+  assert.deepEqual(groupBody.posts.map((post) => post._id), [picnic._id]);
+
+  // Base timeline: the member's origin posts, newest first; no rank inputs.
+  const timeline = await fetch(`http://127.0.0.1:${port}/api/social/timeline`, { headers: auth });
+  assert.equal(timeline.status, 200);
+  const timelineBody = (await timeline.json()) as FeedListBody;
+  assert.equal(timelineBody.posts.length, 3);
+  for (const post of timelineBody.posts) {
+    assert.equal("interactionCounters" in post, false); // vote privacy
+    assert.equal("deviceSignature" in post, false);
+  }
+
+  // Ranked section: prominence order only; a signed vote keeps the vote
+  // record internal; the ranked read exposes no vote arithmetic.
+  const votePayload = { postId: captioned._id, value: "up" };
+  const vote = await fetch(`http://127.0.0.1:${port}/api/social/posts/${captioned._id}/votes`, {
+    method: "POST",
+    headers: auth,
+    body: signedBody(votePayload),
+  });
+  assert.equal(vote.status, 200);
+  assert.deepEqual(Object.keys((await vote.json()) as FeedVoteBody).sort(), ["vote"]);
+  const ranked = await fetch(`http://127.0.0.1:${port}/api/social/ranked`, { headers: auth });
+  assert.equal(ranked.status, 200);
+  const rankedBody = (await ranked.json()) as FeedListBody;
+  assert.equal(rankedBody.posts.length >= 1, true);
+  for (const post of rankedBody.posts) {
+    assert.equal("interactionCounters" in post, false);
+    assert.equal("voteVolume" in post, false);
+  }
+
+  // Plain-text search over captions, scoped to the origin.
+  const search = await fetch(`http://127.0.0.1:${port}/api/social/search?q=${encodeURIComponent("picnic")}`, { headers: auth });
+  assert.equal(search.status, 200);
+  const searchBody = (await search.json()) as FeedListBody;
+  assert.equal(searchBody.posts.some((post) => post._id === captioned._id), true);
+
+  // Owner-readable ranking parameters surface on the console.
+  const ranking = await call(port, "/api/social/console/ranking");
+  assert.equal(ranking.status, 200);
+  const rankingBody = ranking.body as FeedRankingBody;
+  assert.equal(rankingBody.formula.length > 0, true);
+  assert.deepEqual(Object.keys(rankingBody.parameters).sort(), ["ageDecay", "ratio", "weights", "window"]);
+});
+
 function canonicalJson(value: unknown): string {
   return JSON.stringify(sortKeys(value as Record<string, unknown>));
 }

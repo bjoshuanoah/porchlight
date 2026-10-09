@@ -2,6 +2,8 @@ export * from "./services/post.service.js";
 export * from "./services/interaction.service.js";
 export * from "./services/notification.service.js";
 export * from "./services/group.service.js";
+export * from "./services/ranking.service.js";
+export * from "./services/feed.service.js";
 export * from "./services/network.service.js";
 export * from "./services/invite.service.js";
 export * from "./services/membership.service.js";
