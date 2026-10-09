@@ -11,14 +11,15 @@ import express, { Router } from "express";
  *   content: import("./controllers/content.controller.js").ContentController,
  *   feed: import("./controllers/feed.controller.js").FeedController,
  *   membership: import("./controllers/membership.controller.js").MembershipController,
- *   console: import("./controllers/console.controller.js").ConsoleController,
- *   media: import("./controllers/media.controller.js").MediaController,
- *   albums: import("./controllers/album.controller.js").AlbumController,
- * }} controllers
+   *   console: import("./controllers/console.controller.js").ConsoleController,
+   *   groups: import("./controllers/groups.controller.js").GroupsController,
+   *   media: import("./controllers/media.controller.js").MediaController,
+   *   albums: import("./controllers/album.controller.js").AlbumController,
+   * }} controllers
  */
 export function createSocialRouter(controllers) {
   const router = Router();
-  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums } = controllers;
+  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums, groups } = controllers;
 
   // Bootstrap-era network + invite surface (PORCH-003 contract; unchanged).
   router.get("/network", bootstrap.get);
@@ -105,6 +106,18 @@ export function createSocialRouter(controllers) {
   router.post("/console/retention/sweep", ownerConsole.sweepRetention);
   router.post("/console/groups", ownerConsole.createGroup);
   router.get("/console/groups", ownerConsole.listGroups);
+
+  // Group containers, member plane (PORCH-030): the groups index and detail
+  // are readable by every member; creation is open to every network member
+  // (groups amendment Oct 14 2026 — no owner or delegate elevation); the
+  // group's creator (or the network owner) manages its membership from the
+  // group's Members view. Every surface is token-scoped to exactly one
+  // origin network; the subset rule (group membership ⊂ network membership)
+  // is enforced in the group service, so origin containment is unchanged.
+  router.get("/groups", groups.list);
+  router.get("/groups/:groupId", groups.detail);
+  router.post("/groups", groups.create);
+  router.post("/groups/:groupId/members", groups.addMembers);
 
   return router;
 }

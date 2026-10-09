@@ -19,6 +19,7 @@ import { ContentController } from "./controllers/content.controller.js";
 import { FeedController } from "./controllers/feed.controller.js";
 import { MembershipController } from "./controllers/membership.controller.js";
 import { ConsoleController } from "./controllers/console.controller.js";
+import { GroupsController } from "./controllers/groups.controller.js";
 import { MediaController } from "./controllers/media.controller.js";
 import { AlbumController } from "./controllers/album.controller.js";
 import { createSocialRouter } from "./routes.js";
@@ -204,6 +205,12 @@ export function assembleSocialModule(store, options = {}) {
     }),
     media: new MediaController({ media: mediaService, export: exportService }),
     albums: new AlbumController({ albums: albumService }),
+    groups: new GroupsController({
+      groups: groupService,
+      membership: membershipService,
+      audit: auditService,
+      log: options.log ?? null,
+    }),
   };
 
   return {

@@ -52,7 +52,7 @@ export class FeedService {
   async timeline({ accessToken } = {}) {
     const networkId = await this.#originOf(accessToken);
     const rows = await this.posts.find({ originNetworkId: networkId });
-    return { posts: FeedService.order(rows) };
+    return { posts: await this.#ordered(rows, networkId) };
   }
 
   /**
@@ -67,7 +67,7 @@ export class FeedService {
       throw typedError("E_GROUP_UNKNOWN", FEED_MESSAGES.E_GROUP_UNKNOWN);
     }
     const rows = await this.posts.find({ originNetworkId: networkId, groupId });
-    return { group: { _id: group._id, name: group.name }, posts: FeedService.order(rows) };
+    return { group: { _id: group._id, name: group.name }, posts: await this.#ordered(rows, networkId) };
   }
 
   /**
@@ -79,7 +79,8 @@ export class FeedService {
     const networkId = await this.#originOf(accessToken);
     const candidates = await this.posts.find({ originNetworkId: networkId });
     const ranked = this.ranking.rank(candidates);
-    return { posts: ranked.map(({ post }) => postView(post)) };
+    const views = ranked.map(({ post }) => postView(post));
+    return { posts: await this.#withGroupChips(views, networkId) };
   }
 
   /**
@@ -125,7 +126,7 @@ export class FeedService {
       matches.add(postId);
     }
     const hits = [...matches].map((_id) => byId.get(_id));
-    return { query: q, posts: FeedService.order(hits) };
+    return { query: q, posts: await this.#ordered(hits, networkId) };
   }
 
   /**
@@ -141,6 +142,26 @@ export class FeedService {
   /** Reverse-chron by latest activity, then creation time, then id, as member views. */
   static order(rows) {
     return newestFirstByActivity(rows).map((post) => postView(post));
+  }
+
+  /** Reverse-chron member views, each group post carrying its group chip. */
+  async #ordered(rows, networkId) {
+    return this.#withGroupChips(FeedService.order(rows), networkId);
+  }
+
+  /**
+   * Group chip (PORCH-030 ac-4): a group post rides the main feed with its
+   * group's name attached (`groupName`), so the network timeline renders
+   * the chip without a follow-up lookup. Groups stay the same origin-
+   * filtered containers; group posts gain no rank weight and no counters —
+   * this only decorates the member view already carried by postView.
+   */
+  async #withGroupChips(views, networkId) {
+    const groups = await this.groups.find({ networkId: String(networkId) });
+    const names = new Map(groups.map((group) => [group._id, group.name]));
+    return views.map((view) =>
+      view.groupId && names.has(view.groupId) ? { ...view, groupName: names.get(view.groupId) } : view,
+    );
   }
 
   async #originOf(accessToken) {
