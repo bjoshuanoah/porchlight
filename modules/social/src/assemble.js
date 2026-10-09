@@ -32,7 +32,10 @@ import { createSocialRouter } from "./routes.js";
  * @param {import("@porchlight/shared").StoreLike} store
  * @param {{
  *   hubUrl?: () => string | null,
- *   ledger?: { record: (step: string, detail?: object) => Promise<void> },
+ *   ledger?: {
+ *     record: (step: string, detail?: object) => Promise<void>,
+ *     steps?: () => Promise<{ account?: { status: string }, network?: { status: string }, invite?: { status: string }, quota?: { status: string } }>,
+ *   },
  *   verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>,
  *   rankingConfig?: object,
  *   media?: {
@@ -47,6 +50,9 @@ import { createSocialRouter } from "./routes.js";
  */
 export function assembleSocialModule(store, options = {}) {
   const ledger = options.ledger ?? { record: async () => {} };
+  // Bootstrap-era gating rides the ledger: `steps` reports each bootstrap
+  // step's system-ledger status; absent → fail-closed (era shut).
+  const bootstrapLedger = { ...ledger, steps: options.ledger?.steps ?? null };
   const collection = store.collection.bind(store);
   const networks = collection("networks");
   const invites = collection("invites");
@@ -147,7 +153,7 @@ export function assembleSocialModule(store, options = {}) {
   });
 
   const controllers = {
-    bootstrap: new SocialBootstrapController(networkService, inviteService, ledger),
+    bootstrap: new SocialBootstrapController(networkService, inviteService, bootstrapLedger),
     content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService }),
     feed: new FeedController({ feed: feedService }),
     membership: new MembershipController(membershipService, networkService),

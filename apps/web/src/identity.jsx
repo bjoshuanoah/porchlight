@@ -389,7 +389,7 @@ export function OwnerConsole({ data, actions, navigate }) {
           <Button type="submit" variant="contained" disabled={operation.busy || typeof actions?.updateSettings !== 'function'}>Save limits</Button>
         </Box></> : <Typography color="text.secondary">Storage settings are not available from this hub.</Typography>}
       <Box sx={{ mt: 2 }}><Button disabled={!data?.identity || !data?.connections?.some(item => item.identity?.id === data.identity.id && item.token) || operation.busy || typeof actions?.exportData !== 'function'} onClick={() => operation.run('exportData', [], 'Archive download started.')}>Download archive</Button></Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>The archive includes originals available to this membership. Backup status is not exposed by this hub.</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>The archive includes your authored posts, comments, reactions, and original media. Backup status is not exposed by this hub.</Typography>
     </CardContent></Card>
     <Card><CardContent><Typography variant="h6" gutterBottom>Recent activity</Typography>
       {audit === null ? <Typography color="text.secondary">Activity status is not available from this hub.</Typography>

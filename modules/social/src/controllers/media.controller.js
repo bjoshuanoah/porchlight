@@ -98,17 +98,15 @@ export class MediaController {
   exportArchive = async (req, res) => {
     try {
       const accessToken = this.bearer(req);
-      const perimeter = accessToken ? await this.media.membership.verifyAccessToken(accessToken) : null;
-      if (!perimeter) {
-        return res.status(403).json({ error: "Sign in to your membership before exporting." });
-      }
-      const name = this.constructor.archiveName(perimeter.membership.networkId);
-      const generator = this.export.streamMemberExport({
-        accessToken,
-        signature: req.query?.signature ?? req.body?.signature ?? null,
-      });
+      const signature = req.query?.signature ?? req.body?.signature ?? null;
+      // Single enforcement path: the export service owns the token,
+      // membership, and device-signature checks (PORCH-015 — the duplicated
+      // inline perimeter check was removed); the controller only asks for
+      // the verified perimeter to name the attachment.
+      const { networkId } = await this.export.verifyExportRequest({ accessToken, signature });
+      const generator = this.export.streamMemberExport({ accessToken, signature });
       res.set("Content-Type", "application/zip");
-      res.set("Content-Disposition", `attachment; filename="${name}"`);
+      res.set("Content-Disposition", `attachment; filename="${this.constructor.archiveName(networkId)}"`);
       res.set("X-Content-Type-Options", "nosniff");
       for await (const chunk of generator) {
         res.write(chunk);

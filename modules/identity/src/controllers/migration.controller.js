@@ -8,19 +8,39 @@
 export class MigrationController {
   /**
    * @param {import("migrationService").MigrationService} migrationService
+   * @param {import("authService").AuthService} authService
    */
-  constructor(migrationService) {
+  constructor(migrationService, authService) {
     this.migrationService = migrationService;
+    this.authService = authService;
+  }
+
+  /** Resolve the Bearer access token to a session identity or fail closed (401). */
+  async requireSession(req, res) {
+    const header = req.headers.authorization ?? "";
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
+    const identity = token ? await this.authService.verifyAccessToken(token) : null;
+    if (!identity) {
+      res.status(401).json({ error: "active session required", code: "E_SESSION_REQUIRED" });
+      return null;
+    }
+    return identity;
   }
 
   /**
-   * POST /migration/handoff {did, newIssuer} — operator surface (the identity
-   * plane is operator-held hub infrastructure; in phase 1 the hub binds the
-   * loopback interface and the operator surfaces ride it).
+   * POST /migration/handoff {did, newIssuer} — issuing a handoff token moves a
+   * homing pointer; that is an identity write, so it is session-bound to the
+   * did: a member migrates only their own identity. (Receiving stays
+   * token-verified — the signed handoff token is the receiving hub's proof.)
    */
   issueHandoff = async (req, res) => {
+    const session = await this.requireSession(req, res);
+    if (!session) return;
     const { did, newIssuer } = req.body ?? {};
     if (!did || !newIssuer) return res.status(400).json({ error: "did and newIssuer required", code: "E_FIELDS_REQUIRED" });
+    if (did !== session.did) {
+      return res.status(403).json({ error: "handoff tokens are issued only for your own identity", code: "E_FORBIDDEN" });
+    }
     try {
       const result = await this.migrationService.issueHandoff({ did, newIssuer });
       res.status(201).json(result);

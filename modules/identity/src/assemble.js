@@ -66,11 +66,11 @@ export function assembleIdentityModule(store, options = {}) {
 
   const controllers = {
     auth: new AuthController(authService, didService),
-    account: new AccountController(accountService, ledger),
+    account: new AccountController(accountService, authService, ledger),
     device: new DeviceController(deviceService, authService),
     did: new DidController(didService),
-    oidc: new OidcController(trustService),
-    migration: new MigrationController(migrationService),
+    oidc: new OidcController(trustService, authService),
+    migration: new MigrationController(migrationService, authService),
     wellKnown: new WellKnownController({ webfingerService, signing, hubUrlFn }),
   };
 

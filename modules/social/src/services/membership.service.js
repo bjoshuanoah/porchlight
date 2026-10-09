@@ -68,6 +68,12 @@ export class MembershipService {
    * network: create the membership, enroll their device key (possession is
    * proven by the device signature over the invite code), and issue a
    * membership token scoped to that network only.
+   *
+   * Owner-root rule (PORCH-015): the network owner is proven by the hub
+   * account, never by an invite. When the invited network's `ownerDid`
+   * matches the admitting identity's DID, the admitted membership's role is
+   * forced to "owner" regardless of the invite's role; every other DID
+   * takes the invite's normalized role.
    */
   async admit({ code, identityAccessToken, deviceId, devicePublicKeyJwk, signature } = {}) {
     const identity = await this.verifyMemberIdToken(identityAccessToken);
@@ -88,6 +94,13 @@ export class MembershipService {
     const inviteRow = await this.invites.redeem(code);
     const networkId = inviteRow.networkId;
 
+    // Owner-root rule: the founder's hub identity owns the network row, so
+    // their admission is forced to "owner" — the invite's role never demotes
+    // the owner; other DIDs inherit the invite's role as before.
+    const networkRow = this.networks ? await this.networks.findOne({ _id: networkId }) : null;
+    const isFounder = networkRow !== null && networkRow.ownerDid === identity.did;
+    const role = isFounder ? "owner" : normalizeRole(inviteRow.role);
+
     // One active membership per (did, networkId): a repeat admission with an
     // existing membership is idempotent — the invite redemption guard above
     // already ensures no second use is consumed.
@@ -97,7 +110,7 @@ export class MembershipService {
         _id: `mem_${crypto.randomUUID()}`,
         networkId,
         did: identity.did,
-        role: normalizeRole(inviteRow.role),
+        role,
         state: "active",
         admittedViaInviteId: inviteRow._id,
         admittedAt: new Date().toISOString(),

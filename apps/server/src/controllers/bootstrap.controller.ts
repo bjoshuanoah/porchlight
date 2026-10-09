@@ -15,7 +15,27 @@ export const bootstrapController = (service: BootstrapService) => ({
     res.json(await service.status());
   },
 
+  /**
+   * Bootstrap-era write, guarded fail-closed in transport: once the quota
+   * step is complete in the ledger (or the ledger is unreadable), the era
+   * is closed and quota management moves to the owner console. The state
+   * read (`status`) intentionally stays open — the bootstrap page and the
+   * recovery flow need it after the era closes.
+   */
   async setQuotas(req: Request, res: Response) {
+    let open = false;
+    try {
+      const doc = await service.load();
+      const quota = doc?.steps?.quota;
+      open = quota != null && quota.status !== "complete";
+    } catch {
+      open = false;
+    }
+    if (!open) {
+      return res
+        .status(403)
+        .json({ error: "Bootstrap is closed; quotas now live in the owner console.", code: "E_BOOTSTRAP_CLOSED" });
+    }
     try {
       const config = await service.setQuotas(req.body ?? {});
       await service.record("quota", {

@@ -24,7 +24,8 @@ export function createIdentityRouter(controllers) {
   router.post("/bootstrap/account", (req, res) => void controllers.account.createFirstAccount(req, res));
   router.post("/bootstrap/adopt", (req, res) => void controllers.account.adoptIdentity(req, res));
 
-  // Presentation plane: handle reassignment + profile fields
+  // Presentation plane: handle reassignment + profile fields — session-bound
+  // to the did (a member reassigns/writes only their own identity)
   router.post("/handle", (req, res) => void controllers.account.setHandle(req, res));
   router.post("/account/profile", (req, res) => void controllers.account.recordProfile(req, res));
 
@@ -39,11 +40,13 @@ export function createIdentityRouter(controllers) {
   router.post("/device-link/consume", (req, res) => void controllers.device.consumeDeviceLink(req, res));
   router.post("/devices/revoke", (req, res) => void controllers.device.revokeRegistration(req, res));
 
-  // Cross-hub verification (OIDC shape): code path with nonce + PKCE
+  // Cross-hub verification (OIDC shape): code path with nonce + PKCE —
+  // session-bound to the did (a member authorizes only their own identity)
   router.post("/oidc/authorize", (req, res) => void controllers.oidc.authorize(req, res));
   router.post("/oidc/token", (req, res) => void controllers.oidc.token(req, res));
 
-  // Identity mobility: operator handoff, receiving-hub ingest
+  // Identity mobility: session-bound handoff issuance, receiving-hub ingest
+  // (the signed handoff token is the receiving hub's proof)
   router.post("/migration/handoff", (req, res) => void controllers.migration.issueHandoff(req, res));
   router.post("/migration/receive", (req, res) => void controllers.migration.receiveMigration(req, res));
 

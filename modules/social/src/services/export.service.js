@@ -47,11 +47,16 @@ export class ExportService {
   }
 
   /**
-   * The export stream (ac-3): an async generator of ZIP chunks for the
-   * requesting member's authored history at their token's origin. The
-   * request must be device-signed like every other content write.
+   * The export perimeter check — the single enforcement path for the
+   * export surface (ac-3): a live membership access token, and a device
+   * signature (like every other content write) over {scope:"export"}.
+   * The controller calls this once for the attachment naming; the stream
+   * re-enters through it so there is exactly one place these checks live.
+   *
+   * @returns {Promise<{ did: string, networkId: string }>} the verified
+   *   requester perimeter.
    */
-  async *streamMemberExport({ accessToken, signature } = {}) {
+  async verifyExportRequest({ accessToken, signature } = {}) {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", MESSAGES.E_MUST_SIGN_IN);
     }
@@ -71,7 +76,20 @@ export class ExportService {
       payload: { scope: "export", networkId },
       signature,
     });
+    return { did, networkId, signature };
+  }
 
+  /**
+   * The export stream (ac-3): an async generator of ZIP chunks for the
+   * requesting member's authored history at their token's origin.
+   */
+  async *streamMemberExport(request = {}) {
+    const { did, networkId, signature } = await this.verifyExportRequest(request);
+    yield* this.exportEntries({ did, networkId, signature });
+  }
+
+  /** ZIP entry generator for an already-verified export request (verifyExportRequest first). */
+  async *exportEntries({ did, networkId, signature }) {
     const items = [];
 
     const authoredPosts = await this.posts.find({ originNetworkId: networkId, authorId: did });
