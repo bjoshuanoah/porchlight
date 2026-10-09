@@ -1,0 +1,9 @@
+{
+  "_readable": "Feed ranking parameters (Feed Ranking Contract). The formula is fixed and published: rankedScore = interactionVolume * voteRatioFactor * ageFactor. interactionVolume = votes*wVote + comments*wComment + reactions*wReaction. voteRatioFactor = 1 + ratio.weight * (ratio - 0.5) once voteVolume >= ratio.volumeFloor (below the floor the ratio stays neutral so a single vote cannot dominate). ageFactor = 2 ** (-ageHours / ageDecay.halfLifeHours). The ranked section only recomputes over posts whose latest activity falls inside window.days; the base timeline never re-sorts.",
+  "rankedSection": {
+    "window": { "days": 30 },
+    "ageDecay": { "kind": "exponential_half_life", "halfLifeHours": 48 },
+    "ratio": { "volumeFloor": 2, "weight": 0.5 },
+    "weights": { "vote": 1, "comment": 2, "reaction": 1 }
+  }
+}

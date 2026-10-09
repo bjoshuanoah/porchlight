@@ -290,14 +290,24 @@ export class InteractionService {
     return unique;
   }
 
-  /** Rank-input counter refresh on the post (never returned for display). */
+  /**
+   * Rank-input counter refresh + latest-activity bump on the post (ac-1
+   * timeline ordering): an interaction is the post's latest activity, so
+   * every comment/reaction/vote write also moves `lastActivityAt`. Rank
+   * inputs are never returned for display.
+   */
   async #recount({ postId }) {
     const comments = await this.comments.find({ postId });
     const reactions = await this.reactions.find({ postId });
     const votes = await this.votes.find({ postId });
     await this.posts.updateOne(
       { _id: postId },
-      { $set: { interactionCounters: computeCounters({ comments, reactions, votes }) } },
+      {
+        $set: {
+          interactionCounters: computeCounters({ comments, reactions, votes }),
+          lastActivityAt: new Date().toISOString(),
+        },
+      },
     );
   }
 }

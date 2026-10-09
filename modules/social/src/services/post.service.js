@@ -24,6 +24,25 @@ export function typedError(code, message, extra = {}) {
 const POST_TYPES = ["text", "photo", "video", "audio"];
 const MEDIA_TYPES = ["photo", "video", "audio"];
 
+/**
+ * Reverse-chron by latest activity (PORCH-007 timeline ordering): the sort
+ * key is `lastActivityAt ?? createdAt`. Shared by every timeline read (post
+ * list, base timeline, group timelines, search) so ordering lives in one
+ * place; the ranked section has its own produced order in the ranking
+ * module.
+ */
+export function newestFirstByActivity(rows) {
+  const key = (post) => post.lastActivityAt ?? post.createdAt;
+  rows.sort((a, b) => {
+    const ka = new Date(key(a)).getTime();
+    const kb = new Date(key(b)).getTime();
+    if (ka !== kb) return kb - ka;
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+    return a._id < b._id ? -1 : 1;
+  });
+  return rows;
+}
+
 const ZERO_COUNTERS = Object.freeze({
   upVolume: 0,
   downVolume: 0,
@@ -138,7 +157,9 @@ export class PostService {
   async list({ accessToken } = {}) {
     const session = await this.#requireSession(accessToken);
     const rows = await this.posts.find({ originNetworkId: session.networkId });
-    rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    // Base timeline ordering (PORCH-007): newest first by latest activity;
+    // reverse-chron pagination only — this read never re-sorts by rank.
+    newestFirstByActivity(rows);
     return { posts: rows.map((post) => this.view(post)), did: session.did };
   }
 
@@ -310,25 +331,11 @@ export class PostService {
   }
 
   /**
-   * Member view (vote privacy contract): interactionCounters are rank
-   * inputs consumed by the ranking module only; no count, ratio, or
-   * per-member vote record ever reaches a client through this view.
+   * Member post view — delegation to the shared postView (vote privacy
+   * contract: rank inputs never reach a client through this view).
    */
   view(post) {
-    if (!post) return null;
-    return {
-      _id: post._id,
-      originNetworkId: post.originNetworkId,
-      authorId: post.authorId,
-      type: post.type,
-      groupId: post.groupId,
-      mediaRefs: post.mediaRefs,
-      caption: post.caption,
-      body: post.body,
-      visibility: post.visibility,
-      displayHint: post.displayHint,
-      createdAt: post.createdAt,
-    };
+    return postView(post);
   }
 
   #requireSession(accessToken) {
@@ -411,3 +418,25 @@ export class PostService {
 }
 
 export default PostService;
+
+/**
+ * Member view (vote privacy contract) shared with the feed assembly: rank
+ * inputs (interactionCounters) and actor signatures are internal; no count,
+ * ratio, or per-member vote record ever reaches a client through this view.
+ */
+export function postView(post) {
+  if (!post) return null;
+  return {
+    _id: post._id,
+    originNetworkId: post.originNetworkId,
+    authorId: post.authorId,
+    type: post.type,
+    groupId: post.groupId,
+    mediaRefs: post.mediaRefs,
+    caption: post.caption,
+    body: post.body,
+    visibility: post.visibility,
+    displayHint: post.displayHint,
+    createdAt: post.createdAt,
+  };
+}
