@@ -6,9 +6,6 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(__dirname, "..");
-
 export async function resolve(specifier, context, nextResolve) {
   if (specifier.startsWith(".") && specifier.endsWith(".js")) {
     const base = specifier.slice(0, -3);
