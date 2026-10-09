@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseJoinCode, parseDeviceGrant, splitJoinLink, hubOrigin, verifyFailure, FAILURE_STATES } from "../src/frontdoor.js";
+import { parseJoinCode, parseDeviceGrant, readJoinQuery, splitJoinLink, hubOrigin, joinLinkMismatch, verifyFailure, FAILURE_STATES } from "../src/frontdoor.js";
 
 test("join and device links parse their embedded one-time values", () => {
   assert.equal(parseJoinCode("/join/inv-code_123"), "inv-code_123");
@@ -9,6 +9,34 @@ test("join and device links parse their embedded one-time values", () => {
   assert.equal(parseDeviceGrant("/device-link/dl-grant-token"), "dl-grant-token");
   assert.equal(parseDeviceGrant("/device-link"), "");
   assert.equal(parseDeviceGrant("/join/x"), "");
+});
+
+test("the invite id rides the query string too (PORCH-023)", () => {
+  assert.equal(readJoinQuery("?invite=inv-code_123"), "inv-code_123");
+  assert.equal(readJoinQuery("?code=fallback_123"), "fallback_123");
+  assert.equal(readJoinQuery("?invite=primary&code=other"), "primary");
+  assert.equal(readJoinQuery(""), "");
+  assert.equal(readJoinQuery("?unrelated=x"), "");
+  // The qs shape skips entry: pasted or landed, it splits into both fields.
+  assert.deepEqual(splitJoinLink("https://porchlight.home/join?invite=inv-code_123"), { url: "https://porchlight.home", code: "inv-code_123" });
+  assert.deepEqual(splitJoinLink("https://porchlight.home?invite=inv-code_123"), { url: "https://porchlight.home", code: "inv-code_123" });
+  assert.equal(splitJoinLink("https://example.com/other/x?invite=inv-code_123"), null);
+});
+
+test("a landing invite names its hub mismatch only across origins (PORCH-023)", () => {
+  const visited = "https://visited.example";
+  assert.deepEqual(
+    joinLinkMismatch("https://noahfamily.example/join/inv_1", visited),
+    { named: "https://noahfamily.example", visited, joinUrl: "https://noahfamily.example/join/inv_1" },
+  );
+  assert.equal(joinLinkMismatch("https://visited.example/join/inv_1", visited), null);
+  // A relative joinUrl names no hub — the invite recorded no URL.
+  assert.equal(joinLinkMismatch("/join/inv_1", visited), null);
+  assert.equal(joinLinkMismatch("", visited), null);
+  assert.equal(joinLinkMismatch(undefined, visited), null);
+  // A wrong path on the same host still compares as that host (pathname is
+  // not part of a hub's identity) — only the origin is the network.
+  assert.equal(joinLinkMismatch("https://visited.example/other", visited), null);
 });
 
 test("a pasted join link fills both front-door fields", () => {

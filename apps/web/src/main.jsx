@@ -8,6 +8,7 @@ import AddOutlined from "@mui/icons-material/AddOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutline";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import { theme } from "./theme.js";
+import { readJoinQuery } from "./frontdoor.js";
 import { request, loadFeeds } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
@@ -23,7 +24,13 @@ const primary = ["/timeline", "/groups", "/compose", "/profile"];
 const labels = ["Timeline", "Groups", "Compose", "Profile"];
 const icons = [<HomeOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />];
 
-function routeOf() { return window.location.pathname === "/" ? (localIdentities.length > 1 || initialConnections.some(hasLocalPin) ? "/who-is-here" : localIdentities.length ? "/timeline" : "/join") : window.location.pathname; }
+function routeOf() {
+  if (window.location.pathname !== "/") return window.location.pathname;
+  // An invite riding the query string at the served root is the front door,
+  // never the timeline: keep the search alive so Join reads it (PORCH-023).
+  if (localIdentities.length === 0 && readJoinQuery(window.location.search)) return "/join";
+  return localIdentities.length > 1 || initialConnections.some(hasLocalPin) ? "/who-is-here" : localIdentities.length ? "/timeline" : "/join";
+}
 function App() {
   const [route, setRoute] = useState(routeOf);
   const [connections, setConnections] = useState(initialConnections);

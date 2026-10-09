@@ -20,8 +20,12 @@ export class ConsoleController {
    *   Hub-global release identity + launch diagnostics ledger, injected by
    *   apps/server (the system vertical owns the ledger; the social module
    *   imports no system source).
+   * @param {() => string | null} [deps.hubUrl]
+   *   The hub's current public URL provider (read per call — never a stale
+   *   copy, PORCH-017). Recorded on join links so a landing invite names the
+   *   hub it was made for (PORCH-023).
    */
-  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system }) {
+  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system, hubUrl }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
@@ -31,6 +35,7 @@ export class ConsoleController {
     this.ranking = ranking;
     this.media = media ?? null;
     this.system = system ?? null;
+    this.hubUrl = typeof hubUrl === "function" ? hubUrl : null;
   }
 
   /**
@@ -81,7 +86,10 @@ export class ConsoleController {
       return res.status(409).json({ error: "Create the hub network before issuing invites" });
     }
     const { role, maxUses } = req.body ?? {};
-    const invite = await this.invites.issue({ networkId: network._id, role, maxUses });
+    // The join link names the hub it was made for: with the URL recorded,
+    // verify's joinUrl is absolute and the member's front door can tell a
+    // mismatched host apart (PORCH-023).
+    const invite = await this.invites.issue({ networkId: network._id, role, maxUses, hubUrl: this.hubUrl ? this.hubUrl() : null });
     await this.audit.record({ networkId: network._id, did: null, action: "invite_issue", detail: { inviteId: invite._id } });
     res.status(201).json({ invite });
   };
