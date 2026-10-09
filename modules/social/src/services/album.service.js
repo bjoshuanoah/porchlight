@@ -112,9 +112,20 @@ export class AlbumService {
     newestFirstByActivity(items);
     return {
       album: { name: normalized, itemCount: items.length },
-      posts: items.map((post) => postView(post)),
+      posts: await this.#withAttribution(items.map((post) => postView(post)), session.networkId),
       did: session.did,
     };
+  }
+
+  /**
+   * Attribution (PORCH-034): album item views carry the author's
+   * family-facing name, resolved at READ time against the origin's active
+   * membership — the same member-view plane as the timeline; nothing is
+   * frozen on the post document.
+   */
+  async #withAttribution(views, networkId) {
+    const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorId) });
+    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId)) ?? null }));
   }
 
   /**

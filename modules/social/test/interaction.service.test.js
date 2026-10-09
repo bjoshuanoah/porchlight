@@ -202,7 +202,7 @@ test("ac-4: interaction views carry no vote material", async () => {
 
   const commentPayload = { postId: post._id, body: "nice" };
   const commentView = (await interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
-  assert.deepEqual(Object.keys(commentView).sort(), ["_id", "authorDid", "body", "createdAt", "mentions", "parentId", "postId"]);
+  assert.deepEqual(Object.keys(commentView).sort(), ["_id", "authorDid", "authorName", "body", "createdAt", "mentions", "parentId", "postId"]);
 
   const starPayload = { postId: post._id, emoji: "🌟" };
   const reacted = (await interactions.react({ accessToken: familyToken, payload: starPayload, signature: dev.signPayload(starPayload) })).reaction;

@@ -80,7 +80,7 @@ export class FeedService {
     const candidates = await this.posts.find({ originNetworkId: networkId });
     const ranked = this.ranking.rank(candidates);
     const views = ranked.map(({ post }) => postView(post));
-    return { posts: await this.#withGroupChips(views, networkId) };
+    return { posts: await this.#decorate(views, networkId) };
   }
 
   /**
@@ -146,7 +146,24 @@ export class FeedService {
 
   /** Reverse-chron member views, each group post carrying its group chip. */
   async #ordered(rows, networkId) {
-    return this.#withGroupChips(FeedService.order(rows), networkId);
+    return this.#decorate(FeedService.order(rows), networkId);
+  }
+
+  /** Member views plus read-time member attribution (PORCH-034). */
+  async #decorate(views, networkId) {
+    return this.#withAttribution(await this.#withGroupChips(views, networkId), networkId);
+  }
+
+  /**
+   * Attribution (PORCH-034): every member post view carries the author's
+   * family-facing name, resolved at READ time against the origin's active
+   * membership — never a frozen copy on the post document. A DID that holds
+   * no active membership at the origin renders the plain nameless fallback
+   * (names render for network members only).
+   */
+  async #withAttribution(views, networkId) {
+    const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorId) });
+    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId)) ?? null }));
   }
 
   /**

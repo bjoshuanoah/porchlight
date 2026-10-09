@@ -16,7 +16,12 @@ const groupAtOrigin = (group, data) => !group?.networkId || !networkId(data) || 
 const postKey = (post) => `${post?.origin ?? originOf(post) ?? ''}:${identityOf(post)}`;
 const mentionsOf = (value) => [...new Set(value.split(',').map((entry) => entry.trim()).filter(Boolean))];
 const atCurrentOrigin = (post, data) => post.origin ? post : { ...post, origin: data.server?.url, network: data.network?.name };
-const memberName = (id, data) => id && id === data.identity?.id ? data.identity.name || 'You' : 'A family member';
+// Attribution (PORCH-034): the hub resolves each author's family-facing
+// name at read time (post.authorName / reply.authorName). This fallback
+// covers only a view the hub could not name — self rides the device-held
+// identity; any other unresolvable member renders the plain directory
+// fallback ("Member"), never a generic placeholder string.
+const memberName = (id, data) => id && id === data.identity?.id ? data.identity.name || 'You' : 'Member';
 const messageOf = (error) => error?.message || 'That did not work. Please try again.';
 const dateOf = (value) => {
   if (!value || Number.isNaN(new Date(value).valueOf())) return '';

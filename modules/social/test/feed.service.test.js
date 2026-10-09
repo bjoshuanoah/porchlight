@@ -296,6 +296,12 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
       opened.push("membership");
       return fx.membership.verifyAccessToken(token);
     },
+    // PORCH-034 attribution reads the membership roster through the same
+    // service, still no hidden-list collection on the feed path.
+    attributionNames: (deps) => {
+      opened.push("membership");
+      return fx.membership.attributionNames(deps);
+    },
   };
   const spyFeed = new FeedService({
     posts: recording("posts", fx.collections.posts),

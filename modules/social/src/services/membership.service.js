@@ -412,6 +412,32 @@ export class MembershipService {
   }
 
   /**
+   * Attribution names (PORCH-034): the family-facing member names for the
+   * authored-content views, resolved at READ time against THIS origin
+   * network's active membership only — a DID holding no active membership
+   * here resolves to no name (names render for network members only), and
+   * nothing is frozen on the post or comment document. Rides the same
+   * injected identity boundary callback as the owner directory; null on
+   * assemblies that don't wire it, rendering the plain nameless fallback.
+   *
+   * @param {object} deps
+   * @param {string} deps.networkId
+   * @param {string[]} [deps.dids]
+   * @returns {Promise<Map<string, string | null>>} attribution per requested DID (members only)
+   */
+  async attributionNames({ networkId, dids = [] } = {}) {
+    const wanted = [...new Set((dids ?? []).filter(Boolean).map(String))];
+    if (!wanted.length) return new Map();
+    const rows = await this.memberships.find({ networkId: String(networkId) });
+    const roster = new Set(rows.filter((row) => row.state === "active" && row.did).map((row) => String(row.did)));
+    const members = wanted.filter((did) => roster.has(did));
+    if (!members.length) return new Map();
+    const resolved = this.memberNames ? await this.memberNames(members) : [];
+    const byDid = new Map((resolved ?? []).map((row) => [row.did, row.displayName]));
+    return new Map(members.map((did) => [did, byDid.get(did) ?? null]));
+  }
+
+  /**
    * Instant member revocation (owner console): the membership goes inactive
    * and every open membership session for it dies in the same write — the
    * perimeter closes the moment the owner acts.
