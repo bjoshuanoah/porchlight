@@ -42,6 +42,8 @@ export declare function saveConfig(root: string, config: PorchlightConfig): Porc
 
 export interface CollectionLike {
   findOne(filter?: Record<string, unknown>): Promise<Record<string, unknown> | null>;
+  /** All matching rows (flat equality filter), shallow copies. */
+  find(filter?: Record<string, unknown>): Promise<Array<Record<string, unknown>>>;
   insertOne(document: Record<string, unknown>): Promise<{ insertedId: unknown }>;
   updateOne(
     filter: Record<string, unknown>,

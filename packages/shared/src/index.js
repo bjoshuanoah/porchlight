@@ -144,11 +144,17 @@ export function createMemoryStore() {
   return {
     collection(name) {
       const rows = byName(name);
+      const matches = (row, filter = {}) =>
+        Object.entries(filter).every(([k, v]) => row[k] === v);
       const doc = (filter = {}) =>
-        rows.find((row) => Object.entries(filter).every(([k, v]) => row[k] === v)) ?? null;
+        rows.find((row) => matches(row, filter)) ?? null;
       return {
         async findOne(filter = {}) {
           return doc(filter);
+        },
+        /** All matching rows as shallow copies (flat equality filter). */
+        async find(filter = {}) {
+          return rows.filter((row) => matches(row, filter)).map((row) => ({ ...row }));
         },
         async insertOne(document) {
           rows.push({ ...document });

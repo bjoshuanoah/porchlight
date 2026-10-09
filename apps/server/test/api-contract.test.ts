@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Express } from "express";
+import { sign, generateKeyPairSync } from "node:crypto";
 import { DEFAULT_CONFIG, createMemoryStore, loadConfig, normalizeConfig, saveConfig } from "@porchlight/shared";
 import type { PorchlightConfig } from "@porchlight/shared";
 import { BootstrapService } from "../src/services/bootstrap.service.js";
@@ -28,11 +29,15 @@ interface TestHub {
   port: Promise<number>;
 }
 
-function testHub(overrides: Partial<PorchlightConfig["mode"]> = {}, home = "/tmp/porchlight-test-home"): TestHub {
+function testHub(
+  overrides: Partial<PorchlightConfig["mode"]> = {},
+  home = "/tmp/porchlight-test-home",
+  hubUrl: () => string | null = () => null,
+): TestHub {
   const db = createMemoryStore();
   const config = mutableConfig(overrides);
   const bootstrap = new BootstrapService(db, config, home);
-  const app = createServer({ store: db, readiness: OK_PROBES, config, bootstrap });
+  const app = createServer({ store: db, readiness: OK_PROBES, config, bootstrap, hubUrl });
   const { promise, resolve } = Promise.withResolvers<number>();
   const listener = app.listen(0, () => {
     const address = listener.address();
@@ -56,21 +61,74 @@ test("health route returns ok with dependency probes (contract)", async (t) => {
   assert.deepEqual(body.deps, { mongo: "ok", redis: "ok" });
 });
 
-test("identity module owns /api/identity session creation (contract)", async (t) => {
+test("identity module owns the device-key account + auth flow (contract)", async (t) => {
   const hub = testHub();
   t.after(hub.close);
   const port = await hub.port;
+  const base = `http://127.0.0.1:${port}/api/identity`;
 
-  const res = await fetch(`http://127.0.0.1:${port}/api/identity/session`, {
+  // The member's browser generates a non-extractable Ed25519 device key; only
+  // the public half ever reaches the hub (ac-1 — hub verifies, never signs).
+  const device = generateKeyPairSync("ed25519");
+  const publicKeyJwk = device.publicKey.export({ format: "jwk" });
+  const created = await fetch(`${base}/bootstrap/account`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ userId: "user_1" }),
+    body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_1", publicKeyJwk } }),
   });
-  assert.equal(res.status, 201);
+  assert.equal(created.status, 201);
+  interface CreatedAccountBody { account: { did: string; actorType: string } }
+  const createdBody = (await created.json()) as CreatedAccountBody;
+  const account = createdBody.account;
+  assert.match(account.did, /^did:porch:[0-9a-f]{40}$/);
+  assert.equal(account.actorType, "human");
 
-  const body = (await res.json()) as { userId: string; token: string };
-  assert.equal(body.userId, "user_1");
-  assert.equal(typeof body.token, "string");
+  // Challenge-signature auth proof → session tokens.
+  const challengeRes = await fetch(`${base}/session/challenge`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did: account.did }),
+  });
+  assert.equal(challengeRes.status, 200);
+  interface ChallengeBody { nonce: string }
+  const challenge = (await challengeRes.json()) as ChallengeBody;
+  const signature = sign(null, Buffer.from(challenge.nonce, "utf8"), device.privateKey).toString("base64url");
+  const sessionRes = await fetch(`${base}/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did: account.did, deviceId: "dev_1", nonce: challenge.nonce, signature }),
+  });
+  assert.equal(sessionRes.status, 201);
+  interface SessionBody { accessToken: string; expiresInSeconds: number }
+  const session = (await sessionRes.json()) as SessionBody;
+  assert.equal(typeof session.accessToken, "string");
+  assert.equal(session.expiresInSeconds, 600);
+
+  // The DID document is served by the home hub as the homing pointer (ac-9).
+  const docRes = await fetch(`${base}/did/${encodeURIComponent(account.did)}`);
+  assert.equal(docRes.status, 200);
+  assert.match(docRes.headers.get("content-type") ?? "", /did\+json/);
+  interface DidDocumentBody { id: string }
+  const document = (await docRes.json()) as DidDocumentBody;
+  assert.equal(document.id, account.did);
+});
+
+test("identity hub serves well-known discovery surfaces (contract)", async (t) => {
+  const hub = testHub({}, "/tmp/porchlight-test-home", () => "https://hub.test");
+  t.after(hub.close);
+  const port = await hub.port;
+
+  const jwks = await fetch(`http://127.0.0.1:${port}/.well-known/jwks.json`);
+  assert.equal(jwks.status, 200);
+  interface JwksBody { keys: unknown[] }
+  const jwksBody = (await jwks.json()) as JwksBody;
+  assert.ok(jwksBody.keys.length >= 1);
+
+  const oidc = await fetch(`http://127.0.0.1:${port}/.well-known/openid-configuration`);
+  assert.equal(oidc.status, 200);
+  interface DiscoveryBody { issuer: string; jwks_uri: string }
+  const discovery = (await oidc.json()) as DiscoveryBody;
+  assert.equal(discovery.issuer, "https://hub.test");
 });
 
 test("social module owns /api/social post creation (contract)", async (t) => {
@@ -131,16 +189,19 @@ test("first account creation records into the bootstrap ledger", async (t) => {
   t.after(hub.close);
   const port = await hub.port;
 
+  const device = generateKeyPairSync("ed25519");
+  const publicKeyJwk = device.publicKey.export({ format: "jwk" });
+  const devicePayload = { deviceId: "dev_1", publicKeyJwk };
   const res = await fetch(`http://127.0.0.1:${port}/api/identity/bootstrap/account`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Brian", email: "b@example.com" }),
+    body: JSON.stringify({ displayName: "Brian", email: "b@example.com", device: devicePayload }),
   });
   assert.equal(res.status, 201);
   const again = await fetch(`http://127.0.0.1:${port}/api/identity/bootstrap/account`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: "Other" }),
+    body: JSON.stringify({ displayName: "Other", device: devicePayload }),
   });
   assert.equal(again.status, 200);
 
@@ -149,19 +210,36 @@ test("first account creation records into the bootstrap ledger", async (t) => {
 });
 
 test("identity adoption flows through the API and records the ledger", async (t) => {
-  const hub = testHub();
-  t.after(hub.close);
-  const port = await hub.port;
+  const homeHub = testHub();
+  const adoptingHub = testHub();
+  t.after(() => { homeHub.close(); adoptingHub.close(); });
+  const homePort = await homeHub.port;
+  const port = await adoptingHub.port;
 
+  // The identity exists on its home hub first (second-hub adoption, ac-3).
+  const device = generateKeyPairSync("ed25519");
+  const publicKeyJwk = device.publicKey.export({ format: "jwk" });
+  const created = await fetch(`http://127.0.0.1:${homePort}/api/identity/bootstrap/account`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Susan", device: { deviceId: "dev_s1", publicKeyJwk } }),
+  });
+  const createdBody = (await created.json()) as { account: { did: string; displayName: string } };
+
+  // The adopting hub verifies the DID at its home hub and stores a reference —
+  // the identity record never copies (the server adapter carries only a public shape).
   const res = await fetch(`http://127.0.0.1:${port}/api/identity/bootstrap/adopt`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sourceHubUrl: "https://other.hub.example", externalIdentityId: "ident_77" }),
+    body: JSON.stringify({ sourceHubUrl: `http://127.0.0.1:${homePort}`, did: createdBody.account.did }),
   });
   assert.equal(res.status, 201);
-  const body = (await res.json()) as { adopted: boolean; account: { kind: string } };
+  interface AdoptedBody { adopted: boolean; account: { kind: string; did: string; adoptedIdentity: { sourceHubUrl: string; did: string } } }
+  const body = (await res.json()) as AdoptedBody;
   assert.equal(body.adopted, true);
   assert.equal(body.account.kind, "adopted");
+  assert.equal(body.account.did, createdBody.account.did);
+  assert.equal(body.account.adoptedIdentity.did, createdBody.account.did);
 });
 
 test("network creation and invite issuance complete the social bootstrap steps", async (t) => {
