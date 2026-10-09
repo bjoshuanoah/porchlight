@@ -17,6 +17,7 @@ import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
+import { Lockup } from "./brand.jsx";
 
 const origin = window.location.origin;
 const stored = window.localStorage;
@@ -581,7 +582,8 @@ function App() {
   return <ThemeProvider theme={theme}><CssBaseline />
     {!frontDoor && <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(12px)", background: "rgba(255,255,255,.96)" }}>
       <Toolbar sx={{ minHeight: { xs: 56, lg: 64 }, maxWidth: 1180, width: "100%", mx: "auto", px: { xs: 2, lg: 4 } }}>
-        <Typography variant="h6" onClick={() => navigate("/timeline")} sx={{ fontWeight: 700, color: "primary.main", cursor: "pointer", flex: { xs: 1, lg: 0 }, minWidth: { lg: 180 } }}>☀ Porchlight</Typography>
+        {/* Brand lockup (PORCH-032): the new lamp mark plus the navy wordmark. */}
+        <Lockup onClick={() => navigate("/timeline")} size={30} sx={{ cursor: "pointer", flex: { xs: 1, lg: 0 }, minWidth: { lg: 180 } }} />
         <Stack direction="row" spacing={3} alignItems="center" sx={{ display: { xs: "none", lg: "flex" }, flex: 1, justifyContent: "center" }}>
           {primary.map((path, index) => index === 2
             ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", boxShadow: "0 6px 18px rgba(216,138,36,.28)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>

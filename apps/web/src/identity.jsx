@@ -7,6 +7,7 @@ import {
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { copyLink, directoryRows, inviteDialogCopy, inviteRows } from './member-directory.js';
+import { Lockup, LampMark } from './brand.jsx';
 import { tokens } from './theme.js';
 
 const section = { mb: 3 };
@@ -230,7 +231,7 @@ export function Join({ data, actions, navigate }) {
   }
   return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
     <Box component="header" sx={{ mb: 3, textAlign: 'center' }}>
-      <Typography variant="h6" sx={{ fontWeight: 650, color: 'primary.main' }}>☀ Porchlight</Typography>
+      <Lockup size={32} />
     </Box>
     <Heading title={stage === 'done' ? "You're home." : 'Join your family'}
       subtitle={stage === 'done' ? `Your place on ${network?.name || 'your family network'} is ready.`
@@ -328,7 +329,10 @@ function SetupShell({ children }) {
           <Heading title="Set up your porch" subtitle="Two quick questions and you are home: the network's name, and who you are. Everything else waits until you are inside." />
           {children}
         </Box>
-        <Box aria-hidden="true" sx={{ display: { xs: "none", md: "block" }, minHeight: 480, background: `radial-gradient(circle at 50% 115%, rgba(255,190,87,.35), transparent 60%), linear-gradient(180deg, ${tokens.warm}, ${tokens.amberSoft})` }} />
+        {/* Brand surface (PORCH-032): the lamp mark glows over the porch-side gradient. */}
+        <Box aria-hidden="true" sx={{ display: { xs: "none", md: "flex" }, alignItems: "flex-end", justifyContent: "center", minHeight: 480, background: `radial-gradient(circle at 50% 115%, rgba(255,190,87,.35), transparent 60%), linear-gradient(180deg, ${tokens.warm}, ${tokens.amberSoft})` }}>
+          <LampMark size={120} sx={{ mb: 6, filter: "drop-shadow(0 0 28px rgba(255,190,87,.45))" }} />
+        </Box>
       </Box>
     </Paper>
   </Box>;
