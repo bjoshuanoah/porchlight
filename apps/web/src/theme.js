@@ -96,8 +96,14 @@ export const theme = createTheme({
     },
     MuiTextField: { defaultProps: { variant: "outlined" } },
     // Front-door fields are 48px tall (spec: owner bootstrap and member join).
+    // PORCH-035: resting input borders carry the token value (#E4E0D8) with no
+    // residue from the focus fix — focus is MUI's neutral stronger border on
+    // the same notched outline, nothing additive.
     MuiOutlinedInput: {
-      styleOverrides: { root: { minHeight: 48 } },
+      styleOverrides: {
+        root: { minHeight: 48 },
+        notchedOutline: { borderColor: tokens.border },
+      },
     },
     MuiAvatar: {
       styleOverrides: { root: { backgroundColor: tokens.amberSoft, color: tokens.navy, fontWeight: 600 } },
@@ -119,9 +125,23 @@ export const theme = createTheme({
     MuiCssBaseline: {
       styleOverrides: {
         body: { backgroundColor: tokens.page },
+        // PORCH-035 (Brian, Oct 14, 2026): the amber focus ring serves keyboard
+        // wayfinding on non-input focusables only (buttons, links, tabs, chips).
+        // Inputs and textareas indicate focus with MUI's stronger border alone —
+        // the ring below never reaches an input element, and this is the only
+        // focus rule in the app: no per-screen patch can reintroduce it.
         "*:focus-visible": {
           outline: "2px solid transparent",
           boxShadow: "0 0 0 3px rgba(216,138,36,.28)",
+        },
+        // Text-entry surfaces only: text inputs of every text-ish type, textareas,
+        // native selects, and the MUI Select focus target (div.MuiSelect-select,
+        // the element that actually receives focus inside an outlined Select).
+        // checkbox/radio/button/file inputs stay on the ring — they have no
+        // stronger-border counterpart, so removing the ring there would strip
+        // their only focus indicator.
+        "input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=range]):not([type=color]):not([type=file]):focus-visible, textarea:focus-visible, select:focus-visible, .MuiSelect-select:focus-visible": {
+          boxShadow: "none",
         },
         "@media (prefers-reduced-motion: reduce)": {
           "*, *::before, *::after": { animationDuration: "0.01ms !important", transitionDuration: "0.01ms !important" },

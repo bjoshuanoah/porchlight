@@ -57,3 +57,46 @@ test("shape, breakpoints, motion, and component tokens", () => {
   assert.equal(theme.transitions.duration.short, 170);
   assert.equal(theme.transitions.easing.easeInOut, "cubic-bezier(.2,.8,.2,1)");
 });
+
+// PORCH-035 (Brian, Oct 14, 2026): inputs indicate focus with the stronger
+// border alone — the theme-wide amber ring never reaches an input, so the
+// orange additive border is gone from every text field, textarea, and select.
+test("PORCH-035: amber ring survives on non-input focusables, never on inputs", () => {
+  const overrides = theme.components.MuiCssBaseline.styleOverrides;
+  // The ring rule itself is unchanged for buttons, links, tabs, chips…
+  assert.equal(overrides["*:focus-visible"].boxShadow, "0 0 0 3px rgba(216,138,36,.28)");
+  assert.equal(overrides["*:focus-visible"].outline, "2px solid transparent");
+  // …and one theme-level exclusion covers every text-entry surface: text-ish
+  // input types, textareas, native selects, and the MUI Select focus target
+  // (div.MuiSelect-select is the element that receives focus inside an
+  // outlined Select, not the wrapper input element).
+  const excludeInputs = overrides[
+    "input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=range]):not([type=color]):not([type=file]):focus-visible, textarea:focus-visible, select:focus-visible, .MuiSelect-select:focus-visible"
+  ];
+  assert.equal(excludeInputs.boxShadow, "none");
+});
+
+// ac-4 (PORCH-035): with no focus on any input, resting borders match the
+// design tokens exactly and carry no residue from the focus fix.
+test("PORCH-035: resting input borders are the token value", () => {
+  const outlined = theme.components.MuiOutlinedInput.styleOverrides;
+  assert.equal(outlined.notchedOutline.borderColor, "#E4E0D8"); // tokens.border
+  assert.equal(outlined.root.minHeight, 48); // unchanged front-door height
+});
+
+// ac-2 (PORCH-035): one theme-level fix. No screen file may carry its own
+// focus styling (focus-visible/:focus/Mui-focused) — the CssBaseline rule in
+// theme.js is the single mechanism, so the orange ring cannot reappear on a
+// screen nobody visited during the fix.
+test("PORCH-035: focus styling exists only in the theme layer", async () => {
+  const { readdir, readFile } = await import("node:fs/promises");
+  const { join, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const srcDir = join(dirname(fileURLToPath(new URL(import.meta.url))), "..", "src");
+  const focusPattern = /focus-visible|:focus\b|Mui-focused/;
+  for (const name of await readdir(srcDir)) {
+    if (name === "theme.js") continue;
+    const source = await readFile(join(srcDir, name), "utf8");
+    assert.doesNotMatch(source, focusPattern, `${name} carries per-screen focus styling`);
+  }
+});
