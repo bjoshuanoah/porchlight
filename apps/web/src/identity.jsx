@@ -269,10 +269,8 @@ export function Setup({ data, actions, navigate }) {
   const [adoptUrl, setAdoptUrl] = useState('');
   const [adoptId, setAdoptId] = useState('');
   const [networkName, setNetworkName] = useState('');
-  const [ownerLink, setOwnerLink] = useState('');
   const [familyLinks, setFamilyLinks] = useState([]);
   const [quota, setQuota] = useState({ storageCeilingMb: '', retentionDays: '' });
-  const [joinedOwnNetwork, setJoinedOwnNetwork] = useState(Boolean(data?.connections?.some((item) => item.identity?.id && item.token)));
   const adoptedNote = account?.account?.kind === "adopted";
 
   async function refreshStates() {
@@ -329,19 +327,6 @@ export function Setup({ data, actions, navigate }) {
     if (!result) return;
     await refreshStates();
     setStage("invites");
-  }
-  async function makeOwnerInvite() {
-    const result = await operation.run("issueBootstrapInvite");
-    if (!result?.invite) return;
-    const link = invitationUrl(result.invite, data) || result.joinUrl || "";
-    const code = link.split("/join/")[1] || result.invite.token;
-    if (data?.identity?.id && (data?.connections || []).some((item) => item.identity?.id === data.identity.id && item.deviceId)) {
-      const ownerConnection = data.connections.find((item) => item.identity?.id === data.identity.id);
-      const admitted = await operation.run("joinDevice", [{ url: ownerConnection.url, code, did: data.identity.id, deviceId: ownerConnection.deviceId, name: data.identity.name }]);
-      if (!admitted) { setOwnerLink(link); return; }
-      setJoinedOwnNetwork(true);
-    } else setOwnerLink(link);
-    await refreshStates();
   }
   async function inviteFamily() {
     const result = await operation.run("issueInvite");
@@ -410,18 +395,10 @@ export function Setup({ data, actions, navigate }) {
         <Button type="submit" variant="contained" disabled={operation.busy}>Create network</Button>
       </Stack></Box>}
       {stage === "invites" && <Stack spacing={2}>
-        {!joinedOwnNetwork && <>
-          <Typography color="text.secondary">First, this hub connects you — the owner — to your own network. It makes the first join link for you.</Typography>
-          <Button variant="contained" disabled={operation.busy} onClick={() => void makeOwnerInvite()}>Make the first join link</Button>
-          {ownerLink && <Alert severity="info">Use this link on the device where you created your account: {ownerLink}</Alert>}
-        </>}
-        {joinedOwnNetwork && <>
-          <Typography color="text.secondary">Now one join link for each family member. Anyone with the link becomes a member; you can withdraw any link the moment you want.</Typography>
-          <Button variant="contained" disabled={operation.busy} onClick={() => void inviteFamily()}>Make a family join link</Button>
-          {familyLinks.length > 0 && <List dense>{familyLinks.map((link, index) => <ListItem key={link} divider><ListItemText primary={link} secondary={`Link ${index + 1} — share it with your family`} /></ListItem>)}</List>}
-          <Button variant="text" onClick={() => setStage("quotas")}>Continue to space limits</Button>
-        </>}
-        {!joinedOwnNetwork && <Typography variant="body2" color="text.secondary">If your account was created on another device of yours, open this link there — or pair this device from that one — and come back to finish.</Typography>}
+        <Typography color="text.secondary">You are already a member of the network you created — your place opened with the network itself. Now one join link for each family member. Anyone with the link becomes a member; you can withdraw any link the moment you want.</Typography>
+        <Button variant="contained" disabled={operation.busy} onClick={() => void inviteFamily()}>Make a family join link</Button>
+        {familyLinks.length > 0 && <List dense>{familyLinks.map((link, index) => <ListItem key={link} divider><ListItemText primary={link} secondary={`Link ${index + 1} — share it with your family`} /></ListItem>)}</List>}
+        <Button variant="text" onClick={() => setStage("quotas")}>Continue to space limits</Button>
       </Stack>}
       {stage === "quotas" && <Box component="form" onSubmit={saveQuota}><Stack spacing={2}>
         <Typography color="text.secondary">Quantity-only guardrails for your hub: how much space the family may use and how long moments stay. Empty means no limit for now.</Typography>

@@ -16,6 +16,7 @@ function fixture(options = {}) {
     verifyMemberIdToken: options.verifyMemberIdToken ?? (async (token) => (token ? { did: token } : null)),
     networks: db.collection("networks"),
     audit: async () => {},
+    registeredDeviceKey: options.registeredDeviceKey ?? null,
   });
   return { db, invites, membership };
 }
@@ -368,4 +369,83 @@ test("ac-2 (PORCH-010): restore never widens the perimeter — no proof, no memb
     () => membership.restoreSession({ identityAccessToken: "did:porchlight:susan" }),
     (error) => error.code === "E_NOT_A_MEMBER",
   );
+});
+
+/* ---- founder-root binding (PORCH-018): bootstrap binds the owner -------- */
+
+function founderNetworkRow() {
+  return {
+    _id: "net_1",
+    name: "Family",
+    ownerDid: "did:porchlight:owner",
+    ownerAccountId: null,
+    quota: { storageCeilingMb: null, retentionDays: null },
+    createdAt: "2026-10-08T00:00:00.000Z",
+  };
+}
+
+test("ac-1: bindFounder seeds the owner-role membership for the network owner", async () => {
+  const { db, membership } = fixture();
+  const network = founderNetworkRow();
+  await db.collection("networks").insertOne(network);
+
+  const bound = await membership.bindFounder({ network, did: "did:porchlight:owner" });
+  assert.equal(bound.networkId, "net_1");
+  assert.equal(bound.did, "did:porchlight:owner");
+  assert.equal(bound.role, "owner");
+  assert.equal(bound.state, "active");
+
+  // Exactly one membership row exists, admitted without any invite.
+  const rows = await db.collection("memberships").find({});
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].admittedViaInviteId, null);
+});
+
+test("ac-3: bindFounder is idempotent and binds nothing for a non-founder", async () => {
+  const { db, membership } = fixture();
+  const network = founderNetworkRow();
+  await db.collection("networks").insertOne(network);
+
+  const first = await membership.bindFounder({ network, did: "did:porchlight:owner" });
+  const second = await membership.bindFounder({ network, did: "did:porchlight:owner" });
+  assert.equal(second._id, first._id);
+  assert.equal((await db.collection("memberships").find({})).length, 1);
+
+  // A DID the network row does not record as its owner binds nothing, and
+  // an ownerless network row (legacy shape) binds nothing either.
+  assert.equal(await membership.bindFounder({ network, did: "did:porchlight:susan" }), null);
+  assert.equal(await membership.bindFounder({ network, did: null }), null);
+  assert.equal(await membership.bindFounder({ network: { ...network, ownerDid: null }, did: "did:porchlight:owner" }), null);
+  assert.equal((await db.collection("memberships").find({})).length, 1);
+});
+
+test("ac-1/ac-2: restore re-binds a founder whose hub predates the binding and enrolls the presenting device", async () => {
+  const deviceJwk = { kty: "OKP", crv: "Ed25519", x: "reg-public-key" };
+  const { db, membership } = fixture({
+    registeredDeviceKey: async (did, deviceId) =>
+      did === "did:porchlight:owner" && deviceId === "dev_1" ? { publicKeyJwk: deviceJwk } : null,
+  });
+  // Legacy hub shape: network row recorded the owner, no membership row, and
+  // the identity plane holds the founder's device registration.
+  await db.collection("networks").insertOne(founderNetworkRow());
+  await db.collection("device_registrations").insertOne({
+    _id: "reg_1",
+    did: "did:porchlight:owner",
+    deviceId: "dev_1",
+    publicKeyJwk: deviceJwk,
+  });
+
+  const restored = await membership.restoreSession({ identityAccessToken: "did:porchlight:owner", deviceId: "dev_1" });
+  assert.equal(restored.did, "did:porchlight:owner");
+  assert.equal(restored.sessions.length, 1);
+  assert.equal(restored.sessions[0].networkId, "net_1");
+  assert.equal(restored.sessions[0].role, "owner");
+
+  // The presenting device's registered key enrolled for write verification.
+  const keys = await db.collection("device_keys").find({ networkId: "net_1", did: "did:porchlight:owner" });
+  assert.equal(keys.length, 1);
+  assert.deepEqual(keys[0].publicKeyJwk, deviceJwk);
+
+  // A non-founder device enrollment is untouched by the founder path.
+  assert.equal((await db.collection("device_keys").find({ deviceId: "dev_x" })).length, 0);
 });

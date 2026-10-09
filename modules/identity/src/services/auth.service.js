@@ -125,6 +125,18 @@ export class AuthService {
     };
   }
 
+  /**
+   * Resolve an active device registration row for (did, deviceId) — the
+   * public JWK the identity plane already verified possession of at session
+   * open. Exposed so a composed flow (network-side device enrollment) can
+   * copy the possession-proven key; the private half never leaves the
+   * device and never crosses this seam.
+   */
+  async activeDeviceRegistration(did, deviceId) {
+    if (!did || !deviceId) return null;
+    return this.deviceRegistrations.findOne({ did, deviceId, status: "active" });
+  }
+
   /** Agents verify identically to humans; delegation is the whole point (ac-2). */
   async openSessionForAgent({ did, deviceId, nonce, signature, now = () => new Date() }) {
     return this.openSession({ did, deviceId, nonce, signature, now });

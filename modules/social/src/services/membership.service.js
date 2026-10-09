@@ -41,14 +41,20 @@ export class MembershipService {
    *   Server-wired identity-plane resolver (identity module session lookup).
    * @param {import("@porchlight/shared").CollectionLike} [deps.networks]
    * @param {(action: string, detail?: object) => Promise<void>} [deps.audit]
+   * @param {(did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null> | null} [deps.registeredDeviceKey]
+   *   Server-wired identity-plane device-registration resolver (active
+   *   registration row for (did, deviceId)) — the session-key copy source
+   *   for founder device enrollment. Resolves nothing identity-side here:
+   *   possession was already proven when the identity session opened.
    */
-  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit }) {
+  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey }) {
     this.memberships = memberships;
     this.membershipSessions = membershipSessions;
     this.deviceKeys = deviceKeys;
     this.invites = invites;
     this.verifyMemberIdToken = verifyMemberIdToken ?? (async () => null);
     this.networks = networks ?? null;
+    this.registeredDeviceKey = registeredDeviceKey ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
   }
@@ -215,17 +221,66 @@ export class MembershipService {
   }
 
   /**
-   * Re-establish membership sessions on a re-opened or re-bound device
+   * Founder-root binding (PORCH-018). The hub account proves ownership,
+   * never an invite: when `did` IS the network row's recorded `ownerDid`,
+   * the owner holds an active owner-role membership on the network they
+   * created — no invite consumed, no manual bind step. Idempotent: an
+   * already-bound founder returns their existing active membership; a
+   * non-founders DID or a network without a recorded ownerDid binds
+   * nothing (null). Memberships stay invited-only everywhere else; this is
+   * the one direct admission path keyed on the hub account, matching the
+   * founder rule admission already forces (role "owner" for the ownerDid).
+   *
+   * @returns the membership VIEW, or null when nothing was bound.
+   */
+  async bindFounder({ network, did } = {}) {
+    if (!network || !did || network.ownerDid !== did) return null;
+    // A revoked founder binding stays closed: the network-side revocation
+    // kill switch is authoritative regardless of the founder identity, so
+    // only a DID with no membership row at all can first-bind here.
+    const existing = await this.memberships.findOne({ networkId: network._id, did });
+    if (existing) return existing.state === "active" ? this.view(existing) : null;
+    const membership = {
+      _id: `mem_${crypto.randomUUID()}`,
+      networkId: network._id,
+      did,
+      role: "owner",
+      state: "active",
+      admittedViaInviteId: null,
+      admittedAt: new Date().toISOString(),
+      revokedAt: null,
+    };
+    await this.memberships.insertOne(membership);
+    await this.audit("founder_bind", { networkId: network._id, did, detail: {} });
+    return this.view(membership);
+  }
+
+  /**
    * (PORCH-010 device-link/pair landing): the identity plane proves the DID
    * through the same injected verifier admission uses; the session rides
-   * ONLY live membership rows — it never creates membership and never
-   * widens the perimeter. Every network the member belongs to gets its own
-   * network-scoped token, exactly as admission would have issued.
+   * ONLY live membership rows — it never widens the perimeter, with one
+   * founder-root exception (PORCH-018): when the presenting DID is the
+   * network row's recorded ownerDid, a missing owner binding is created
+   * here — the hub account is the proof, never an invite — and the
+   * presenting device's registered key enrolls for write verification
+   * (possession proven at identity session open, re-proven at every write).
+   * This is also the repair path for hubs bootstrapped before the binding
+   * existed: the owner's next silent re-credential binds them.
    */
   async restoreSession({ identityAccessToken, deviceId = null } = {}) {
     const identity = await this.verifyMemberIdToken(identityAccessToken);
     if (!identity?.did) {
       throw typedError("E_MUST_SIGN_IN", "Open your identity on this device first, then continue.");
+    }
+    if (this.networks) {
+      const network = await this.networks.findOne({});
+      if (network && network.ownerDid === identity.did && deviceId) {
+        const registration = await this.registeredDeviceKey?.(identity.did, deviceId);
+        if (registration?.publicKeyJwk) {
+          await this.enrollDevice({ networkId: network._id, did: identity.did, deviceId, publicKeyJwk: registration.publicKeyJwk });
+        }
+      }
+      await this.bindFounder({ network, did: identity.did });
     }
     const rows = (await this.memberships.find({ did: identity.did })).filter(row => row.state === "active");
     if (!rows.length) {

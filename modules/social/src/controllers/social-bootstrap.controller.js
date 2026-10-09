@@ -14,12 +14,14 @@ export class SocialBootstrapController {
   /**
    * @param {NetworkService} networks
    * @param {InviteService} invites
+   * @param {import("../services/membership.service.js").MembershipService} membership
    * @param {{ record: (step: string, detail?: object) => Promise<void>, hubUrl?: () => string | null,
    *            steps?: (() => Promise<{ account?: { status: string }, network?: { status: string }, invite?: { status: string }, quota?: { status: string } }>) | null }} [ledger]
    */
-  constructor(networks, invites, ledger) {
+  constructor(networks, invites, membership, ledger) {
     this.networks = networks;
     this.invites = invites;
+    this.membership = membership;
     this.ledger = ledger ?? { record: async () => {} };
   }
 
@@ -64,7 +66,15 @@ export class SocialBootstrapController {
       return res.status(400).json({ error: error.message });
     }
     if (result.created) await this.ledger.record("network", { detail: `network "${result.network.name}" created` });
-    res.status(result.created ? 201 : 200).json(result);
+    // Founder-root binding (PORCH-018): the owner who creates the network
+    // leaves bootstrap already a member of it — no invite consumed, no
+    // manual bind step. Idempotent on resume; a request without an
+    // ownerDid (or a DID that is not the network row's ownerDid) binds
+    // nothing and returns the network result unchanged.
+    const membership = ownerDid
+      ? await this.membership.bindFounder({ network: result.network, did: ownerDid })
+      : null;
+    res.status(result.created ? 201 : 200).json(membership ? { ...result, membership } : result);
   };
 
   /** POST /bootstrap/invite — issue a join-link invite (new token each call). */

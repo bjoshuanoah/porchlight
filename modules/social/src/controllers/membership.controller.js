@@ -64,8 +64,9 @@ export class MembershipController {
 
   /**
    * POST /session/restore {identityAccessToken} — re-establish membership
-   * sessions for an already-admitted member on a re-bound device. Rides only
-   * live membership rows; never creates membership.
+   * sessions for an already-admitted member on a re-bound device. Rides
+   * live membership rows plus the one founder-root exception (PORCH-018:
+   * the network owner's binding may be created here, hub account as proof).
    */
   restore = async (req, res) => {
     try {

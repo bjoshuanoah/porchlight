@@ -138,6 +138,14 @@ async function refresh() {
   const j = await r.json();
   const bad = j.lastError ? ' LAST ERROR: ' + j.lastError : '';
   say('steps: ' + Object.entries(j.steps).map(([k, v]) => k + '=' + v.status).join(', ') + bad);
+  // Resumed setup: the account step is already complete and its response is
+  // gone, so the owner DID re-resolves from the hub account surface — the
+  // network step still binds the founder (PORCH-018).
+  if (!ownerDid) {
+    const a = await fetch('/api/identity/account');
+    const aj = await a.json();
+    if (aj.account && aj.account.did) ownerDid = aj.account.did;
+  }
 }
 refresh();
 </script>
