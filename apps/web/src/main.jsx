@@ -10,7 +10,7 @@ import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import { theme } from "./theme.js";
 import { readJoinQuery } from "./frontdoor.js";
 import { fullName } from "./setup-state.js";
-import { request, loadFeeds, setUnauthorizedHandler } from "./api.js";
+import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
@@ -314,8 +314,10 @@ function App() {
     return admitted;
   };
   const unsupported = () => { throw new Error("Your family server does not offer this action yet. No change was made."); };
-  const connectionForPost = (post) =>
-    identityConnections.find((item) => new URL(item.url).origin === post?.origin) || active;
+  // Card- and detail-level writes resolve the post's own origin connection
+  // through the shared resolver (PORCH-038 ac-4); card and detail ride one
+  // routing rule, so a card write lands in the same conversation detail loads.
+  const connectionForPost = (post) => connectionForPostOrigin(post, identityConnections, active);
   const actions = useMemo(() => ({
     isHidden: (post) => hidden.has(`${post.origin || origin}:${post._id || post.id}`),
     hide: (post) => setHidden(hidePost(stored, `${origin}:${identity?.id}`, `${post.origin || origin}:${post._id || post.id}`)),

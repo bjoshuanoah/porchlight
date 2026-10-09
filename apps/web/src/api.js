@@ -35,6 +35,24 @@ async function attempt(connection, path, init = {}, recoverable) {
   return result;
 }
 
+// A post's origin decides where its card-level writes go (PORCH-038 ac-4):
+// a reply or reaction added from a timeline card rides the connection that
+// owns the post's origin hub, so the write lands in the conversation's own
+// network — a group post writes into its group's origin-contained
+// conversation — and never crosses origins. An origin with no live
+// connection falls back to the active connection, mirroring detail-page
+// writes.
+export function connectionForPostOrigin(post, connections, fallback = null) {
+  const origin = post?.origin ? String(post.origin).replace(/\/$/, '') : null;
+  if (origin) {
+    const match = (connections ?? []).find((connection) => {
+      try { return new URL(connection.url).origin === origin; } catch { return false; }
+    });
+    if (match) return match;
+  }
+  return fallback;
+}
+
 export async function request(connection, path, init = {}) {
   return attempt(connection, path, init, true);
 }
