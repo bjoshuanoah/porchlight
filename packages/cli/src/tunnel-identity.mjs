@@ -261,7 +261,7 @@ function namedTunnelReadyWatcher(paths, config, identity) {
         if (url) {
           process.stdout.write(
             `\nHub is tunnel-reachable: ${url} (named tunnel ${identity.tunnelId} re-bound from stored credentials — no fresh tunnel is minted on restart).\n` +
-              `Remote bootstrap: open ${url}/bootstrap on any device (phone on cellular works).\n` +
+              `Remote bootstrap: open ${url} in any browser (phone on cellular works) — the setup wizard asks for the network's name and who you are.\n` +
               "From a terminal here: `porchlight bootstrap` drives setup on the owner's behalf.\n",
           );
         } else {
@@ -287,7 +287,7 @@ function quickTunnelReadyWatcher(paths, config) {
         process.stdout.write(
           `\nHub is tunnel-reachable: ${url} (EPHEMERAL quick tunnel — this URL churns per boot; bind a persistent one: ` +
             "`cloudflared tunnel login` once, then `porchlight tunnel mint --hostname <your-host>`).\n" +
-            `Remote bootstrap: open ${url}/bootstrap on any device (phone on cellular works).\n` +
+            `Remote bootstrap: open ${url} in any browser (phone on cellular works) — the setup wizard asks for the network's name and who you are.\n` +
             "From a terminal here: `porchlight bootstrap` drives setup on the owner's behalf.\n",
         );
         signalReady();

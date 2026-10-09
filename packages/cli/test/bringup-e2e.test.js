@@ -193,10 +193,11 @@ test("porchlight bring-up, supervision, resumable bootstrap, and setup completio
     assert.equal(resumed.steps.network.status, "pending");
     assert.equal(resumed.resumable, true);
 
-    // drive the remaining steps through the CLI driver (the real owner path)
+    // drive the remaining steps through the CLI driver (the real owner path;
+    // PORCH-020: two steps only — invites and settings live in the console)
     const driver = await execFileP(
       process.execPath,
-      [BIN, "bootstrap", "--home", home, "--network", "Family", "--quota-store", "5120", "--quota-days", "365"],
+      [BIN, "bootstrap", "--home", home, "--network", "Family"],
       { maxBuffer: 1024 * 1024 },
     );
     assert.match(driver.stdout, /\[skip\] account — already complete/);
@@ -204,17 +205,13 @@ test("porchlight bring-up, supervision, resumable bootstrap, and setup completio
     // Founder-root binding (PORCH-018): the resumed bootstrap still binds
     // the owner — the membership row exists the moment the network does.
     assert.match(driver.stdout, /owner bound to this network \(role: owner\)/);
-    assert.match(driver.stdout, /\[done\] invite/);
-    assert.match(driver.stdout, /\[done\] quota/);
+    assert.doesNotMatch(driver.stdout, /invite|quota/);
 
     const final = await getState(base);
-    for (const step of ["account", "network", "invite", "quota"]) {
+    for (const step of ["account", "network"]) {
       assert.equal(final.steps[step].status, "complete");
     }
-    // ---- ac-5: settings live in the runtime config; invites on the network ----
-    const { loadConfig } = await import("@porchlight/shared");
-    const stored = loadConfig(home);
-    assert.deepEqual(stored.quota, { storageCeilingMb: 5120, retentionDays: 365 });
+    // ---- ac-5: the owner is bound and the network is live ----
     const network = (await (await fetch(`${base}/api/social/network`)).json()).network;
     assert.ok(String(network._id).startsWith("net_"));
     assert.equal(network.name, "Family");

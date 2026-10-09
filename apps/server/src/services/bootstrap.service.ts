@@ -1,8 +1,14 @@
-import { saveConfig, type PorchlightConfig, type CollectionLike, type StoreLike } from "@porchlight/shared";
+import type { PorchlightConfig, CollectionLike, StoreLike } from "@porchlight/shared";
 
+/** The ledger steps the bootstrap flow owns (PORCH-020): first account
+ *  creation and network creation. Invites and network settings are
+ *  decoupled — the owner issues join links and sets quotas from the owner
+ *  console after landing, never inside the setup flow. Bootstrap-era
+ *  endpoints may still record legacy invite rows on older hubs; the
+ *  completion and resumability computations below ignore them. */
 export type BootstrapStep = "account" | "network" | "invite" | "quota";
 
-export const BOOTSTRAP_STEPS: readonly BootstrapStep[] = ["account", "network", "invite", "quota"];
+export const BOOTSTRAP_STEPS = ["account", "network"] as const;
 
 export interface StepRecord {
   status: "complete" | "pending" | "failed";
@@ -118,30 +124,7 @@ export class BootstrapService {
     );
   }
 
-  /** Owner-set quota ceilings (quantity-only rule) into the runtime config. */
-  async setQuotas(
-    quotas: { storageCeilingMb?: number | null; retentionDays?: number | null },
-  ): Promise<PorchlightConfig> {
-    const entries = [
-      ["storageCeilingMb", quotas.storageCeilingMb],
-      ["retentionDays", quotas.retentionDays],
-    ] as const;
-    for (const [name, value] of entries) {
-      if (value === undefined) continue;
-      if (value !== null && (typeof value !== "number" || value <= 0 || !Number.isFinite(value))) {
-        throw Object.assign(new Error(`quota ${name} must be a positive number or null (unset)`), {
-          code: "E_INVALID_QUOTA",
-        });
-      }
-    }
-    const updated = structuredClone(this.config);
-    if (quotas.storageCeilingMb !== undefined) updated.quota.storageCeilingMb = quotas.storageCeilingMb;
-    if (quotas.retentionDays !== undefined) updated.quota.retentionDays = quotas.retentionDays;
-    // Quotas are settings of the phase-configuration runtime config — written
-    // back to the same file setup created; the server never forks config.
-    this.config.quota = updated.quota;
-    return saveConfig(this.configDir, updated);
-  }
+
 }
 
 export default BootstrapService;

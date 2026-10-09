@@ -1,12 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Express } from "express";
 import { sign, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import type { KeyObject } from "node:crypto";
-import { DEFAULT_CONFIG, createMemoryStore, loadConfig, normalizeConfig, saveConfig } from "@porchlight/shared";
+import { DEFAULT_CONFIG, createMemoryStore, normalizeConfig } from "@porchlight/shared";
 import type { PorchlightConfig } from "@porchlight/shared";
 import type { StoreLike } from "@porchlight/shared";
 import { BootstrapService } from "../src/services/bootstrap.service.js";
@@ -579,15 +576,14 @@ test("missing fields return 400 without domain state", async (t) => {
   assert.equal(res.status, 400);
 });
 
-test("bootstrap page is served as HTML at /bootstrap", async (t) => {
+test("the legacy bootstrap URL redirects into the SPA's setup wizard (PORCH-020)", async (t) => {
   const hub = testHub();
   t.after(hub.close);
   const port = await hub.port;
 
-  const res = await fetch(`http://127.0.0.1:${port}/bootstrap`);
-  assert.equal(res.status, 200);
-  assert.match(res.headers.get("content-type") ?? "", /text\/html/);
-  assert.match(await res.text(), /hub setup/);
+  const res = await fetch(`http://127.0.0.1:${port}/bootstrap`, { redirect: "manual" });
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get("location"), "/setup");
 });
 
 test("bootstrap state route exposes the ledger with pending steps", async (t) => {
@@ -599,7 +595,10 @@ test("bootstrap state route exposes the ledger with pending steps", async (t) =>
   assert.equal(res.status, 200);
   const body = (await res.json()) as { resumable: boolean; steps: Record<string, { status: string }> };
   assert.equal(body.resumable, false);
-  assert.deepEqual(Object.values(body.steps).map((step) => step.status), ["pending", "pending", "pending", "pending"]);
+  // PORCH-020: the ledger owns exactly the flow's two steps; invites and
+  // settings are owner-console surfaces, never bootstrap steps.
+  assert.deepEqual(Object.keys(body.steps), ["account", "network"]);
+  assert.deepEqual(Object.values(body.steps).map((step) => step.status), ["pending", "pending"]);
 });
 
 test("first account creation records into the bootstrap ledger", async (t) => {
@@ -694,115 +693,6 @@ test("invite issuance is refused before a network exists", async (t) => {
     body: JSON.stringify({}),
   });
   assert.equal(invite.status, 409);
-});
-
-test("quota settings complete over the API into the runtime config file", async (t) => {
-  const home = await mkdtemp(join(tmpdir(), "porchlight-quotas-"));
-  const config = mutableConfig();
-  saveConfig(home, config);
-  const db = createMemoryStore();
-  const bootstrap = new BootstrapService(db, config, home);
-  const app = createServer({ store: db, readiness: OK_PROBES, config, bootstrap });
-  const { promise, resolve } = Promise.withResolvers<number>();
-  const listener = app.listen(0, () => {
-    const address = listener.address();
-    resolve(typeof address === "object" && address ? address.port : 0);
-  });
-  t.after(() => {
-    listener.closeIdleConnections();
-    listener.close();
-  });
-  t.after(() => void rm(home, { recursive: true, force: true }));
-  const port = await promise;
-
-  const res = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ storageCeilingMb: 5120, retentionDays: 365 }),
-  });
-  assert.equal(res.status, 201);
-  const body = (await res.json()) as { quota: { storageCeilingMb: number; retentionDays: number } };
-  assert.deepEqual(body.quota, { storageCeilingMb: 5120, retentionDays: 365 });
-  const stored = loadConfig(home);
-  assert.equal(stored?.quota.storageCeilingMb, 5120);
-});
-
-test("quota values below zero are refused before any write", async (t) => {
-  const hub = testHub();
-  t.after(hub.close);
-  const port = await hub.port;
-
-  const res = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ storageCeilingMb: -1 }),
-  });
-  assert.equal(res.status, 400);
-});
-
-test("quota write closes with the era once the quota step completes; the state read stays open", async (t) => {
-  const hub = testHub();
-  t.after(hub.close);
-  const port = await hub.port;
-
-  // Era open (quota step pending): the write lands and completes the step.
-  const open = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ storageCeilingMb: 1024 }),
-  });
-  assert.equal(open.status, 201);
-
-  // Once the quota step is complete, the write's era is closed.
-  await hub.bootstrap.record("quota", { detail: "completed during the test" });
-  const closed = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ storageCeilingMb: 2048 }),
-  });
-  assert.equal(closed.status, 403);
-  const body = (await closed.json()) as { error: string; code: string };
-  assert.equal(body.code, "E_BOOTSTRAP_CLOSED");
-  assert.equal(body.error, "Bootstrap is closed; quotas now live in the owner console.");
-
-  // The recovery view stays open after the era closes.
-  const state = await fetch(`http://127.0.0.1:${port}/api/bootstrap/state`);
-  assert.equal(state.status, 200);
-  const stateBody = (await state.json()) as { steps: Record<string, { status: string }> };
-  assert.equal(stateBody.steps.quota.status, "complete");
-});
-
-test("bootstrap-era quota write fails closed when the ledger is unreadable", async (t) => {
-  const db = createMemoryStore();
-  const config = mutableConfig();
-  // The ledger read throws: the transport guard cannot prove the era open,
-  // so the quota write refuses even though no step ever completed.
-  const brokenStore = {
-    collection: (name: string) =>
-      name === "bootstrap_state"
-        ? { findOne: async () => { throw new Error("ledger unavailable"); } }
-        : db.collection(name),
-  } as unknown as StoreLike;
-  const bootstrap = new BootstrapService(brokenStore, config, "/tmp/porchlight-test-home");
-  const app = createServer({ store: db, readiness: OK_PROBES, config, bootstrap });
-  const { promise, resolve } = Promise.withResolvers<number>();
-  const listener = app.listen(0, () => {
-    const address = listener.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    resolve(port);
-  });
-  t.after(() => { listener.closeIdleConnections(); listener.close(); });
-  const port = await promise;
-
-  const res = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ storageCeilingMb: 5120 }),
-  });
-  assert.equal(res.status, 403);
-  const body = (await res.json()) as { error: string; code: string };
-  assert.equal(body.code, "E_BOOTSTRAP_CLOSED");
-  assert.equal(body.error, "Bootstrap is closed; quotas now live in the owner console.");
 });
 
 test("identity-only mode exposes no social routes (phase configuration)", async (t) => {

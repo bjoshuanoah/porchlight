@@ -43,11 +43,9 @@ const flags = (argv) => {
     if (arg === "--home") out.home = argv[++i];
     else if (arg === "--foreground") out.foreground = true;
     else if (arg === "--no-tunnel") out.tunnel = false;
-    else if (arg === "--name" || arg === "--email" || arg === "--network" || arg === "--hub" || arg === "--hostname") {
+    else if (arg === "--name" || arg === "--network" || arg === "--hub" || arg === "--hostname") {
       out[arg.slice(2)] = argv[++i];
-    } else if (arg === "--quota-store") out.quotaStore = argv[++i];
-    else if (arg === "--quota-days") out.quotaDays = argv[++i];
-    else if (arg === "--host") out.host = argv[++i];
+    } else if (arg === "--host") out.host = argv[++i];
     else if (arg === "--install" || arg === "--uninstall") out.action = arg.slice(2);
     else out._.push(arg);
   }
