@@ -68,7 +68,18 @@ async function getState(base) {
 
 test("porchlight bring-up, supervision, resumable bootstrap, and setup completion", { skip: enabled ? false : "runs only with PORCHLIGHT_E2E=1" }, async (t) => {
   const home = await mkdtemp(join(tmpdir(), "porchlight-e2e-"));
-  t.after(() => { if (!process.env.PORCHLIGHT_E2E_KEEP) return void rm(home, { recursive: true, force: true }); process.stdout.write(`e2e home kept: ${home}\n`); });
+  t.after(async () => {
+    if (process.env.PORCHLIGHT_E2E_KEEP) { process.stdout.write(`e2e home kept: ${home}\n`); return; }
+    // Supervised daemons flush and exit asynchronously after killTree; the
+    // data dir can briefly still hold files when the removal lands. Retry
+    // the removal instead of failing the test on a teardown race.
+    for (let attempt = 0; attempt < 12; attempt++) {
+      try { await rm(home, { recursive: true }); return; } catch (error) {
+        if (error.code !== "ENOTEMPTY" && error.code !== "EBUSY") throw error;
+        await new Promise((wait) => setTimeout(wait, 500));
+      }
+    }
+  });
   process.stdout.write(`e2e home: ${home}\n`);
 
   // ---- ac-1: dependency-complete install path ----
@@ -126,10 +137,23 @@ test("porchlight bring-up, supervision, resumable bootstrap, and setup completio
     assert.ok(restored.restarts >= 1);
 
     // ---- ac-4: interrupted bootstrap — complete one step, then crash ----
-    const response = await fetch(`${base}/api/identity/bootstrap/account`, {
+    // Keys on device: the first account binds a device-held Ed25519 key
+    // (identity core, PORCH-004). A device-less account can never open a
+    // challenge-signature session, so creation without one must fail closed.
+    const deviceless = await fetch(`${base}/api/identity/bootstrap/account`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ displayName: "Brian" }),
+    });
+    assert.ok(deviceless.status >= 400, "a device-less first account must be rejected");
+    assert.equal((await deviceless.json()).code, "E_DEVICE_KEY_REQUIRED");
+    const { generateKeyPairSync } = await import("node:crypto");
+    const bootstrapDevice = generateKeyPairSync("ed25519");
+    const publicKeyJwk = bootstrapDevice.publicKey.export({ format: "jwk" });
+    const response = await fetch(`${base}/api/identity/bootstrap/account`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ displayName: "Brian", device: { deviceId: "dev_e2e", label: "Owner CLI", publicKeyJwk } }),
     });
     assert.ok([200, 201].includes(response.status));
     const preKill = await getState(base);

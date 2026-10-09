@@ -7,16 +7,39 @@
 export class OidcController {
   /**
    * @param {import("trustService").TrustService} trustService
+   * @param {import("authService").AuthService} authService
    */
-  constructor(trustService) {
+  constructor(trustService, authService) {
     this.trustService = trustService;
+    this.authService = authService;
   }
 
-  /** POST /oidc/authorize {did, clientId, nonce, codeChallenge, codeChallengeMethod} — member-authenticated. */
+  /** Resolve the Bearer access token to a session identity or fail closed (401). */
+  async requireSession(req, res) {
+    const header = req.headers.authorization ?? "";
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
+    const identity = token ? await this.authService.verifyAccessToken(token) : null;
+    if (!identity) {
+      res.status(401).json({ error: "active session required", code: "E_SESSION_REQUIRED" });
+      return null;
+    }
+    return identity;
+  }
+
+  /**
+   * POST /oidc/authorize {did, clientId, nonce, codeChallenge, codeChallengeMethod}
+   * Member-authenticated and session-bound to the did: a member only ever
+   * authorizes their own identity — a session can mint a code for nobody else.
+   */
   authorize = async (req, res) => {
+    const session = await this.requireSession(req, res);
+    if (!session) return;
     const { did, clientId, nonce, codeChallenge, codeChallengeMethod } = req.body ?? {};
     if (!did || !clientId || !nonce || !codeChallenge) {
       return res.status(400).json({ error: "did, clientId, nonce and codeChallenge required", code: "E_FIELDS_REQUIRED" });
+    }
+    if (did !== session.did) {
+      return res.status(403).json({ error: "authorization codes are issued only to your own identity", code: "E_FORBIDDEN" });
     }
     try {
       const result = await this.trustService.createAuthCode({ did, clientId, nonce, codeChallenge, codeChallengeMethod });

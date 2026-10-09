@@ -2,15 +2,33 @@
  * Account controller: transport only. Bootstrap first-account creation,
  * second-hub adoption, handle reassignment — every decision lives in
  * AccountService. Errors map by typed code; nothing else.
+ *
+ * Presentation-plane writes are session-bound to the did: an active session
+ * may act only on its own identity (perimeter ac: no anonymous or third-party
+ * identity writes).
  */
 export class AccountController {
   /**
    * @param {AccountService} accountService
+   * @param {import("authService").AuthService} authService
    * @param {{ record: (step: string, detail?: object) => Promise<void> }} [ledger]
    */
-  constructor(accountService, ledger) {
+  constructor(accountService, authService, ledger) {
     this.accountService = accountService;
+    this.authService = authService;
     this.ledger = ledger ?? { record: async () => {} };
+  }
+
+  /** Resolve the Bearer access token to a session identity or fail closed (401). */
+  async requireSession(req, res) {
+    const header = req.headers.authorization ?? "";
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
+    const identity = token ? await this.authService.verifyAccessToken(token) : null;
+    if (!identity) {
+      res.status(401).json({ error: "active session required", code: "E_SESSION_REQUIRED" });
+      return null;
+    }
+    return identity;
   }
 
   /** GET /account — bootstrap state for first-account/adoption offer. */
@@ -30,7 +48,14 @@ export class AccountController {
       if (result.created) await this.ledger.record("account", { detail: "owner account created with device-held key" });
       res.status(result.created ? 201 : 200).json(result);
     } catch (error) {
-      const status = error.status ?? 500;
+      const statusByCode = {
+        E_DISPLAY_NAME_REQUIRED: 400,
+        E_DEVICE_KEY_REQUIRED: 400,
+        E_KEY_TYPE_REJECTED: 400,
+        E_PRIVATE_KEY_REJECTED: 400,
+        E_OWNER_ACCOUNT_EXISTS: 409,
+      };
+      const status = statusByCode[error.code] ?? error.status ?? 500;
       res.status(status).json({ error: error.message, code: error.code ?? "E_INTERNAL" });
     }
   };
@@ -65,10 +90,17 @@ export class AccountController {
   /**
    * POST /handle {did, handle} — presentation-plane reassignment: the handle
    * may change (including on hub moves); the DID never changes (ac-10).
+   * Session-bound to the did: a member reassigns only their own handle, never
+   * an identity they hold no session for.
    */
   setHandle = async (req, res) => {
+    const session = await this.requireSession(req, res);
+    if (!session) return;
     const { did, handle } = req.body ?? {};
     if (!did || !handle) return res.status(400).json({ error: "did and handle required", code: "E_FIELDS_REQUIRED" });
+    if (did !== session.did) {
+      return res.status(403).json({ error: "handles are reassigned only to your own identity", code: "E_FORBIDDEN" });
+    }
     try {
       const identity = await this.accountService.setHandle({ did, handle });
       res.json({ handle: identity.handle, did: identity.did });
@@ -79,10 +111,19 @@ export class AccountController {
     }
   };
 
-  /** Profile field writes live on the account record the DID points at. */
+  /**
+   * Profile field writes live on the account record the DID points at.
+   * Session-bound to the did: a member records profile data only on their own
+   * account row.
+   */
   recordProfile = async (req, res) => {
+    const session = await this.requireSession(req, res);
+    if (!session) return;
     const { did, displayName, profile } = req.body ?? {};
     if (!did) return res.status(400).json({ error: "did required", code: "E_FIELDS_REQUIRED" });
+    if (did !== session.did) {
+      return res.status(403).json({ error: "profile fields are written only to your own identity", code: "E_FORBIDDEN" });
+    }
     try {
       const identity = await this.accountService.recordProfile({ did, displayName, profile });
       res.json({ did: identity.did, displayName: identity.displayName, profile: identity.profile });

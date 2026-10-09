@@ -49,19 +49,75 @@ export function bootstrapPage(): string {
 <script>
 const api = (path, init) => fetch('/api' + path, { headers: { 'content-type': 'application/json' }, ...init });
 const say = (msg, bad) => { const el = document.getElementById('state'); el.textContent += (el.textContent ? '\\n' : '') + msg; };
+let ownerDid = null; // first account/adopter becomes the network owner (founder rule)
+// Keys on device: the owner's first account binds an Ed25519 key generated
+// right here (non-extractable; only the public JWK crosses the network). The
+// private half lands in the same IndexedDB vault the hub-served SPA uses
+// (porchlight-devices/registrations), so this browser can open the identity's
+// challenge-signature session later without a second device step.
+function openVault() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('porchlight-devices', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('registrations');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+async function saveRegistration(did, deviceId, privateKey) {
+  const db = await openVault();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('registrations', 'readwrite');
+      tx.objectStore('registrations').put(privateKey, location.origin + ':' + did + ':' + deviceId);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally { db.close(); }
+}
+function saveConnection(record) {
+  const key = 'porchlight:v1:' + location.origin + ':connections';
+  const existing = JSON.parse(localStorage.getItem(key) || '[]');
+  const revised = existing.filter((item) => item.identity?.id !== record.identity.id).concat(record);
+  localStorage.setItem(key, JSON.stringify(revised));
+}
+async function ownerDevice() {
+  const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
+  const deviceId = crypto.randomUUID();
+  const publicKeyJwk = await crypto.subtle.exportKey('jwk', keys.publicKey);
+  return { deviceId, publicKeyJwk, privateKey: keys.privateKey };
+}
 async function createAccount() {
-  const body = { displayName: document.getElementById('name').value || null, email: document.getElementById('email').value || null };
+  const device = await ownerDevice();
+  const body = {
+    displayName: document.getElementById('name').value || null,
+    email: document.getElementById('email').value || null,
+    device: { deviceId: device.deviceId, label: 'Web', publicKeyJwk: device.publicKeyJwk },
+  };
   const r = await api('/identity/bootstrap/account', { method: 'POST', body: JSON.stringify(body) });
-  say((r.status === 409 ? 'account exists: ' : 'account: ') + JSON.stringify(await r.json()));
+  const j = await r.json();
+  if (!r.ok) { say('account: ' + (j.error || r.status), true); return; }
+  if (j.account && j.account.did) {
+    ownerDid = j.account.did;
+    await saveRegistration(j.account.did, device.deviceId, device.privateKey);
+    saveConnection({
+      url: location.origin, name: j.account.displayName || 'Your family',
+      identity: { id: j.account.did, name: j.account.displayName || 'Family member' },
+      deviceId: device.deviceId, token: null, identityToken: null,
+    });
+  }
+  say((r.status === 409 ? 'account exists: ' : 'account: ') + JSON.stringify({ did: j.account?.did, displayName: j.account?.displayName }));
 }
 async function adoptIdentity() {
   const body = { sourceHubUrl: document.getElementById('hub').value, externalIdentityId: document.getElementById('extid').value };
   const r = await api('/identity/bootstrap/adopt', { method: 'POST', body: JSON.stringify(body) });
   const j = await r.json();
+  if (j.account && j.account.did) ownerDid = j.account.did;
   say('adoption: ' + (j.error || (j.account ? 'accepted (' + j.account.kind + ')' : JSON.stringify(j))));
 }
 async function createNetwork() {
-  const r = await api('/social/bootstrap/network', { method: 'POST', body: JSON.stringify({ name: document.getElementById('net').value }) });
+  const body = { name: document.getElementById('net').value };
+  if (ownerDid) body.ownerDid = ownerDid;
+  const r = await api('/social/bootstrap/network', { method: 'POST', body: JSON.stringify(body) });
   const j = await r.json();
   say('network: ' + (j.error || (j.created ? 'created' : 'already exists') + ' ' + (j.network ? j.network._id : '')));
 }

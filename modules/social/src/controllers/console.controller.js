@@ -28,14 +28,49 @@ export class ConsoleController {
     this.media = media ?? null;
   }
 
+  /**
+   * Owner-console perimeter guard (PORCH-015): every /console/* handler
+   * calls this first. A valid Bearer membership token for THIS network with
+   * the owner role is the only way through — no token or no session is 401
+   * (plain member language), a session without the owner role is 403.
+   * The guard lives in the controller (traceability: the audit pins the
+   * route table, which stays thin middleware-free).
+   *
+   * @returns {Promise<{membership: object, session: object} | null>} the
+   *   verified perimeter to continue with, or null after writing the error.
+   */
+  async #requireOwner(req, res) {
+    const header = req.headers?.authorization ?? "";
+    const accessToken = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
+    const network = await this.networks.get();
+    const perimeter =
+      accessToken && network
+        ? await this.membership.verifyAccessToken(accessToken, { networkId: network._id })
+        : null;
+    if (!perimeter) {
+      res.status(401).json({
+        error: "Sign in to your membership before opening the owner console.",
+        code: "E_SESSION_REQUIRED",
+      });
+      return null;
+    }
+    if (perimeter.membership.role !== "owner") {
+      res.status(403).json({ error: "The owner console belongs to the network owner.", code: "E_FORBIDDEN" });
+      return null;
+    }
+    return perimeter;
+  }
+
   /** GET /console/invites — owner-visible join-link states (unused/used/revoked). */
   listInvites = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const invites = await this.invites.list({ networkId: req.query?.networkId ?? undefined });
     res.json({ invites });
   };
 
   /** POST /console/invites — issue a join-link invite (join URL embeds the code). */
   issueInvite = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "Create the hub network before issuing invites" });
@@ -48,6 +83,7 @@ export class ConsoleController {
 
   /** POST /console/invites/revoke — instant revocation. */
   revokeInvite = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const { inviteId } = req.body ?? {};
     try {
       const result = await this.invites.revoke({ inviteId });
@@ -65,7 +101,8 @@ export class ConsoleController {
   };
 
   /** GET /console/members — the network's membership records. */
-  listMembers = async (_req, res) => {
+  listMembers = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -76,6 +113,7 @@ export class ConsoleController {
 
   /** POST /console/members/revoke — instant revocation; sessions die with it. */
   revokeMember = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -91,7 +129,8 @@ export class ConsoleController {
   };
 
   /** GET /console/limits — quantity-only limits with live usage. */
-  getLimits = async (_req, res) => {
+  getLimits = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -107,6 +146,7 @@ export class ConsoleController {
 
   /** PUT /console/limits — owner sets storage ceiling / retention window. */
   setLimits = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -122,7 +162,8 @@ export class ConsoleController {
   };
 
   /** GET /console/audit — member action trail (uploads, deletions, logins). */
-  listAudit = async (_req, res) => {
+  listAudit = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -137,7 +178,8 @@ export class ConsoleController {
    * media row (original or rendition) and its blob bytes cascade in the
    * same pass.
    */
-  sweepRetention = async (_req, res) => {
+  sweepRetention = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -155,7 +197,8 @@ export class ConsoleController {
    * state (`uploadsHalted: true`) is where the media service rejects new
    * uploads while reads continue.
    */
-  diskStatus = async (_req, res) => {
+  diskStatus = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     if (!this.media) {
       return res.status(501).json({ error: "The media pipeline is not wired into this deployment" });
     }
@@ -167,7 +210,8 @@ export class ConsoleController {
    * idle incomplete uploads (the scheduled pass calls the same service
    * method; the console route makes it observable and re-runnable).
    */
-  gcUploads = async (_req, res) => {
+  gcUploads = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     if (!this.media) {
       return res.status(501).json({ error: "The media pipeline is not wired into this deployment" });
     }
@@ -180,6 +224,7 @@ export class ConsoleController {
    * network membership; the group service enforces it.
    */
   createGroup = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -196,7 +241,8 @@ export class ConsoleController {
   };
 
   /** GET /console/groups — the network's group containers. */
-  listGroups = async (_req, res) => {
+  listGroups = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -210,7 +256,8 @@ export class ConsoleController {
    * named configuration value). Read-only; the vote-privacy surface of
    * the formula is not affected: parameters only, no vote data.
    */
-  getRanking = async (_req, res) => {
+  getRanking = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
     res.json(this.ranking.describe());
   };
 }

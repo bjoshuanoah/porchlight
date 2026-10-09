@@ -45,6 +45,24 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     record: (step: string, detail?: { detail?: string; inviteId?: string }) =>
       options.bootstrap.record(step as BootstrapStep, detail),
     hubUrl,
+    // Bootstrap-era gate: the social module reads the ledger's step statuses
+    // to decide whether a bootstrap write's era is still open. Fail-closed
+    // is the module's rule — an unreadable ledger reads as a closed era.
+    steps: async (): Promise<{
+      account?: { status: string };
+      network?: { status: string };
+      invite?: { status: string };
+      quota?: { status: string };
+    }> => {
+      const doc = await options.bootstrap.load();
+      const { account, network, invite, quota } = doc.steps;
+      return {
+        account: { status: account.status },
+        network: { status: network.status },
+        invite: { status: invite.status },
+        quota: { status: quota.status },
+      };
+    },
   };
   const hub = new HealthService(options.readiness ?? DOWN_PROBES, options.config.mode, hubUrl);
   router.use("/", createSystemRouter(hub, options.bootstrap));
@@ -55,7 +73,9 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     // model path at its published entry; the server performs no domain logic.
     // Standards discovery surfaces (.well-known/*) mount at the host root, so
     // the app factory mounts them outside the /api prefix.
-    const identity = assembleIdentityModule(options.store, { hubUrl, ledger });
+    // Identity keeps a record-only ledger: its bootstrap surface records
+    // progress but carries no era gate (the gate is the social perimeter's).
+    const identity = assembleIdentityModule(options.store, { hubUrl, ledger: { record: ledger.record } });
     router.use("/identity", identity.api);
     wellKnown = identity.wellKnown;
     identityAuth = { verifyAccessToken: (token: string) => identity.authService.verifyAccessToken(token) };

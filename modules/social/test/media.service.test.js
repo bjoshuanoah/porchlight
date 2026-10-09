@@ -21,6 +21,10 @@ const CHUNK_SIZE = 16;
  */
 function mediaFixture({ diskProbe = async () => ({ totalBytes: 1_000_000, freeBytes: 900_000 }) } = {}) {
   const fx = fixture();
+  // Owner-root rule (PORCH-015): the hub-owner identity founded this
+  // network, so Susan's admission resolves the owner role — the console
+  // surfaces below need a genuine owner token.
+  fx.collections.networks.updateOne({ _id: FAMILY }, { $set: { ownerDid: SUSAN } });
   const mod = assembleSocialModule(fx.store, {
     verifyMemberIdToken: (token) => (token ? { did: token } : null),
     media: { chunkSize: CHUNK_SIZE, diskProbe },
@@ -614,8 +618,11 @@ test("ac-1/ac-3: the media API surface serves the full browser flow end to end",
     assert.equal(originalResponse.headers.get("x-porchlight-sha256"), sha256Hex(bytes));
     assert.deepEqual(Buffer.from(await originalResponse.arrayBuffer()), bytes);
 
-    // Disk-guard status rides the console surface.
-    const diskResponse = await fetch(`${base}/console/disk`);
+    // Disk-guard status rides the console surface — owner-only now
+    // (PORCH-015): the founding owner's token passes, members' do not.
+    const diskResponse = await fetch(`${base}/console/disk`, {
+      headers: { authorization: `Bearer ${susan.token}` },
+    });
     assert.equal(diskResponse.status, 200);
     const disk = await diskResponse.json();
     assert.equal(disk.available, true);

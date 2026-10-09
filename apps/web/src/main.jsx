@@ -182,7 +182,8 @@ function App() {
     showPost: (key) => setHidden(unhidePost(stored, `${origin}:${identity?.id}`, key)),
     loadReactions: async (post) => {
       const result = await request(connectionForPost(post), `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`);
-      // Only the emoji values render: who reacted never leaves this surface.
+      // The client renders only emoji values. Per-member reaction rows do
+      // cross the wire (memberDid per row) — never claim otherwise here.
       return [...new Set((result.reactions || []).map((row) => row.emoji).filter(Boolean))];
     },
     getMedia: async (mediaId, kind = "feed-thumb", postOrigin = active?.url) => {

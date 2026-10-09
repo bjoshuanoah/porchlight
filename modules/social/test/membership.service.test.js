@@ -257,6 +257,54 @@ test("session refresh rotates the access token inside the same network scope", a
   );
 });
 
+/* ---- owner-root rule (PORCH-015): ownership is the hub account's ------- */
+
+test("owner-root rule: the network's ownerDid admits as owner regardless of invite role", async () => {
+  const { db, invites, membership } = fixture();
+  // The founder's hub identity is recorded on the network row at creation.
+  await db.collection("networks").insertOne({
+    _id: "net_1",
+    name: "Family",
+    ownerDid: "did:porchlight:owner",
+    ownerAccountId: null,
+    quota: { storageCeilingMb: null, retentionDays: null },
+    createdAt: "2026-10-08T00:00:00.000Z",
+  });
+  const invite = await invites.issue({ networkId: "net_1", role: "member" });
+  const device = okp();
+  const admitted = await membership.admit({
+    code: invite.token,
+    identityAccessToken: "did:porchlight:owner",
+    deviceId: "dev_1",
+    devicePublicKeyJwk: device.publicKeyJwk,
+    signature: device.sign(`porchlight-join:${invite.token}`).toString("base64url"),
+  });
+  // The invite's role never demotes the founder — the hub account proves it.
+  assert.equal(admitted.membership.role, "owner");
+});
+
+test("owner-root rule: every other DID takes the invite's role", async () => {
+  const { db, invites, membership } = fixture();
+  await db.collection("networks").insertOne({
+    _id: "net_1",
+    name: "Family",
+    ownerDid: "did:porchlight:owner",
+    ownerAccountId: null,
+    quota: { storageCeilingMb: null, retentionDays: null },
+    createdAt: "2026-10-08T00:00:00.000Z",
+  });
+  const invite = await invites.issue({ networkId: "net_1", role: "member" });
+  const device = okp();
+  const admitted = await membership.admit({
+    code: invite.token,
+    identityAccessToken: "did:porchlight:susan",
+    deviceId: "dev_1",
+    devicePublicKeyJwk: device.publicKeyJwk,
+    signature: device.sign(`porchlight-join:${invite.token}`).toString("base64url"),
+  });
+  assert.equal(admitted.membership.role, "member");
+});
+
 function canonical(value) {
   return JSON.stringify(sortKeys(value));
 }

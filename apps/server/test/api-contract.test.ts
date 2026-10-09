@@ -7,6 +7,7 @@ import type { Express } from "express";
 import { sign, generateKeyPairSync } from "node:crypto";
 import { DEFAULT_CONFIG, createMemoryStore, loadConfig, normalizeConfig, saveConfig } from "@porchlight/shared";
 import type { PorchlightConfig } from "@porchlight/shared";
+import type { StoreLike } from "@porchlight/shared";
 import { BootstrapService } from "../src/services/bootstrap.service.js";
 import { createServer } from "../src/router.js";
 import type { Probe } from "../src/dependencies.js";
@@ -289,7 +290,9 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
     }),
   });
   const identityToken = (session.body as FeedSessionBody).accessToken;
-  await call(port, "/api/social/bootstrap/network", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Family" }) });
+  // The network carries the founder rule: Susan's admit through the first
+  // join invite lands as "owner", so her membership token opens the console.
+  await call(port, "/api/social/bootstrap/network", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Family", ownerDid: did }) });
   const invite = await call(port, "/api/social/bootstrap/invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
   const inviteBody = invite.body as FeedInviteBody;
   const code = inviteBody.joinUrl.split("/join/")[1];
@@ -318,9 +321,11 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
   await createPost({ type: "text", body: "plain text post" });
 
   // Group container: group timeline is the origin-filtered groupId query.
+  // The console screens are owner-only; Susan admits as the founder, so her
+  // membership token is the console credential here.
   const group = await call(port, "/api/social/console/groups", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: auth,
     body: JSON.stringify({ name: "Picnic", members: [did] }),
   });
   assert.equal(group.status, 201);
@@ -368,7 +373,7 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
   assert.equal(searchBody.posts.some((post) => post._id === captioned._id), true);
 
   // Owner-readable ranking parameters surface on the console.
-  const ranking = await call(port, "/api/social/console/ranking");
+  const ranking = await call(port, "/api/social/console/ranking", { headers: auth });
   assert.equal(ranking.status, 200);
   const rankingBody = ranking.body as FeedRankingBody;
   assert.equal(rankingBody.formula.length > 0, true);
@@ -560,6 +565,71 @@ test("quota values below zero are refused before any write", async (t) => {
     body: JSON.stringify({ storageCeilingMb: -1 }),
   });
   assert.equal(res.status, 400);
+});
+
+test("quota write closes with the era once the quota step completes; the state read stays open", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+
+  // Era open (quota step pending): the write lands and completes the step.
+  const open = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ storageCeilingMb: 1024 }),
+  });
+  assert.equal(open.status, 201);
+
+  // Once the quota step is complete, the write's era is closed.
+  await hub.bootstrap.record("quota", { detail: "completed during the test" });
+  const closed = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ storageCeilingMb: 2048 }),
+  });
+  assert.equal(closed.status, 403);
+  const body = (await closed.json()) as { error: string; code: string };
+  assert.equal(body.code, "E_BOOTSTRAP_CLOSED");
+  assert.equal(body.error, "Bootstrap is closed; quotas now live in the owner console.");
+
+  // The recovery view stays open after the era closes.
+  const state = await fetch(`http://127.0.0.1:${port}/api/bootstrap/state`);
+  assert.equal(state.status, 200);
+  const stateBody = (await state.json()) as { steps: Record<string, { status: string }> };
+  assert.equal(stateBody.steps.quota.status, "complete");
+});
+
+test("bootstrap-era quota write fails closed when the ledger is unreadable", async (t) => {
+  const db = createMemoryStore();
+  const config = mutableConfig();
+  // The ledger read throws: the transport guard cannot prove the era open,
+  // so the quota write refuses even though no step ever completed.
+  const brokenStore = {
+    collection: (name: string) =>
+      name === "bootstrap_state"
+        ? { findOne: async () => { throw new Error("ledger unavailable"); } }
+        : db.collection(name),
+  } as unknown as StoreLike;
+  const bootstrap = new BootstrapService(brokenStore, config, "/tmp/porchlight-test-home");
+  const app = createServer({ store: db, readiness: OK_PROBES, config, bootstrap });
+  const { promise, resolve } = Promise.withResolvers<number>();
+  const listener = app.listen(0, () => {
+    const address = listener.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    resolve(port);
+  });
+  t.after(() => { listener.closeIdleConnections(); listener.close(); });
+  const port = await promise;
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/bootstrap/quotas`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ storageCeilingMb: 5120 }),
+  });
+  assert.equal(res.status, 403);
+  const body = (await res.json()) as { error: string; code: string };
+  assert.equal(body.code, "E_BOOTSTRAP_CLOSED");
+  assert.equal(body.error, "Bootstrap is closed; quotas now live in the owner console.");
 });
 
 test("identity-only mode exposes no social routes (phase configuration)", async (t) => {
