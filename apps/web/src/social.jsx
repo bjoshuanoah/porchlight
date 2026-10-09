@@ -7,6 +7,7 @@ import {
 import { AddReactionOutlined } from '@mui/icons-material';
 import { tokens } from './theme.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
+import { reactionRowsOf, ownEmojiRows, reflectReaction } from './reactions.js';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
@@ -120,7 +121,9 @@ function Media({ post, actions }) {
 // counts and no who-reacted inspection surface; per-member rows identify
 // the member's own reaction for the warm highlight exclusively. Tapping an
 // emoji the member already reacted with clears it and tapping any other
-// adds it: change or clear, never an error (ac-2, ac-3).
+// adds it: change or clear, never an error (ac-2, ac-3). The row reflection
+// lives in the shared reactions module, so the timeline card and the post
+// detail reflect the same origin conversation through one routine (PORCH-038).
 function PresentReactions({ post, data, actions }) {
   const [rows, setRows] = useState(null);
   const [anchor, setAnchor] = useState(null);
@@ -130,28 +133,16 @@ function PresentReactions({ post, data, actions }) {
     let current = true;
     setRows(null);
     Promise.resolve().then(() => invoke(actions, 'loadReactions', post))
-      .then((value) => { if (current && Array.isArray(value)) setRows(value.filter((row) => row?.emoji)); })
+      .then((value) => { if (current) setRows(reactionRowsOf(value)); })
       .catch(() => { if (current) setRows([]); });
     return () => { current = false; };
   }, [identityOf(post), actions.loadReactions]);
-  const own = new Set((rows ?? [])
-    .filter((row) => String(row.memberDid ?? '') === ownDid)
-    .map((row) => row.emoji));
+  const own = ownEmojiRows(rows, ownDid);
   const toggle = (emoji, isOwn) => {
     setAnchor(null);
     if (!ownDid || operation.busy) return;
     operation.run(() => invoke(actions, isOwn ? 'unreact' : 'react', post, emoji), (result) => {
-      setRows((current) => {
-        const base = current ?? [];
-        if (isOwn) return base.filter((row) => !(row.emoji === emoji && String(row.memberDid ?? '') === ownDid));
-        if (base.some((row) => row.emoji === emoji && String(row.memberDid ?? '') === ownDid)) return base;
-        return [...base, {
-          emoji,
-          memberDid: ownDid,
-          _id: result?.reaction?._id ?? `local:${emoji}`,
-          createdAt: result?.reaction?.createdAt ?? new Date().toISOString(),
-        }];
-      });
+      setRows((current) => reflectReaction(current, { emoji, ownDid, isOwn, reaction: result?.reaction }));
     });
   };
   return <Stack
@@ -202,6 +193,10 @@ function PresentReactions({ post, data, actions }) {
 
 function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
   const [localHidden, setLocalHidden] = useState(false);
+  // Card-level reply (PORCH-038 ac-1): the affordance opens an inline
+  // composer riding the same mention handling as the detail composer; the
+  // member never navigates to post detail to answer.
+  const [replying, setReplying] = useState(false);
   const operation = useOperation();
   if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
   const openPost = () => navigate?.(`/posts/${encodeURIComponent(identityOf(post))}`);
@@ -227,9 +222,21 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
       <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2 }}>
         <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'up'))}>Lift</Button>
         <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'down'))}>Lower</Button>
+        {/* Card affordances (PORCH-038): quiet react and reply controls per
+            the product intent. The detail surface stays the full conversation
+            view; Open conversation remains available but is no longer the
+            only door. No engagement counts render on any surface. */}
+        {!detail && <Button size="small" aria-expanded={replying} disabled={data.offline} onClick={() => setReplying(!replying)}>Reply</Button>}
         {!detail && <Button size="small" onClick={openPost}>Open conversation</Button>}
       </Stack>
-      {detail && <PresentReactions post={post} data={data} actions={actions} />}
+      {!detail && replying && !data.offline && <ReplyForm
+        label="Write a reply"
+        offline={data.offline}
+        post={post}
+        actions={actions}
+        onSubmit={(body, mentions) => invoke(actions, 'submitReply', post, body, null, mentions)}
+      />}
+      <PresentReactions post={post} data={data} actions={actions} />
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
     </CardContent>
   </Card>;
