@@ -12,11 +12,12 @@ const FAMILY = "net_family";
  * with the founder identity recorded on the network row (owner-root rule)
  * and an admitted owner + admitted non-owner member.
  */
-async function perimeterFixture() {
+async function perimeterFixture(options = {}) {
   const fx = fixture({ networkIds: [FAMILY] });
   await fx.collections.networks.updateOne({ _id: FAMILY }, { $set: { ownerDid: OWNER } });
   const mod = assembleSocialModule(fx.store, {
     verifyMemberIdToken: (token) => (token ? { did: token } : null),
+    ...options,
   });
   const ownerDev = device("dev_owner");
   const memberDev = device("dev_member");
@@ -137,6 +138,28 @@ test("console guard: the founder-owner passes a representative console set", asy
     const auditResponse = await fetch(`${base}/console/audit`, { headers: auth });
     assert.equal(auditResponse.status, 200);
     assert.ok(Array.isArray((await auditResponse.json()).events));
+  } finally {
+    close();
+  }
+});
+
+/* ---- console-issued join links name their hub (PORCH-023) ---------------- */
+
+test("console-issued join links record the hub they were made for (PORCH-023 ac-2)", async () => {
+  const fx = await perimeterFixture({ hubUrl: () => "https://home-1234.porchlight.example" });
+  const { base, close } = await serve(fx.mod);
+  const auth = { "content-type": "application/json", authorization: `Bearer ${fx.owner.accessToken}` };
+  try {
+    const issue = await fetch(`${base}/console/invites`, { method: "POST", headers: auth, body: JSON.stringify({ role: "member", maxUses: 1 }) });
+    assert.equal(issue.status, 201);
+    const link = (await issue.json()).invite.joinUrl;
+    assert.ok(String(link).startsWith("https://home-1234.porchlight.example/join/"));
+
+    // The verified answer hands the member front door the named hub.
+    const token = String(link).split("/join/")[1];
+    const verification = await fetch(`${base}/join/verify?code=${encodeURIComponent(token)}`);
+    assert.equal(verification.status, 200);
+    assert.equal((await verification.json()).joinUrl, link);
   } finally {
     close();
   }

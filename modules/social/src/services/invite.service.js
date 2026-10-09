@@ -106,7 +106,10 @@ export class InviteService {
     if ((invite.useCount ?? 0) >= (invite.maxUses ?? 1)) {
       return invalid("E_INVITE_EXHAUSTED", INVITE_PLAIN_MESSAGES.E_INVITE_EXHAUSTED);
     }
-    return { valid: true, invite: this.withStatus(invite) };
+    // The verified answer carries the join link the invite names (absolute
+    // when the invite recorded its hub URL) — the member front door tells
+    // the visited origin apart from the named one (PORCH-023).
+    return { valid: true, invite: this.withJoinUrl(this.withStatus(invite)) };
   }
 
   /**

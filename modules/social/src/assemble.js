@@ -186,6 +186,7 @@ export function assembleSocialModule(store, options = {}) {
       ranking: rankingService,
       media: mediaService,
       system: options.system ?? null,
+      hubUrl: options.hubUrl ?? null,
     }),
     media: new MediaController({ media: mediaService, export: exportService }),
     albums: new AlbumController({ albums: albumService }),

@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, List, ListItem, ListItemText,
   Paper, Stack, TextField, Typography,
 } from '@mui/material';
-import { hubOrigin, parseDeviceGrant, parseJoinCode, splitJoinLink, verifyFailure } from './frontdoor.js';
+import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { fullName, resumedDetail, setupStage } from './setup-state.js';
 import { tokens } from './theme.js';
 
@@ -130,19 +130,28 @@ function verifyCopy(state, cause, hub) {
 // The member's front door: exactly two fields, one connect action, then the
 // visible verification steps. The hub checks in plain sight: invitation,
 // device, membership. No signup form, no vendor surface anywhere.
+// URL-implied network (Brian, Oct 14, 2026): the hub being joined is the hub
+// serving this page. When the invite rides the URL (path or query string),
+// entry is skipped entirely — the code is verified automatically against the
+// serving hub. Only a mismatch between the visited address and the hub the
+// invite names falls back to explicit entry (the mismatch state).
 export function Join({ data, actions, navigate }) {
-  const [url, setUrl] = useState(data?.connections?.[0]?.url || window.location.origin);
-  const [code, setCode] = useState(() => parseJoinCode(window.location.pathname));
-  const [stage, setStage] = useState('fields'); // fields | confirm | naming | busy | done
+  const visited = window.location.origin;
+  const [url, setUrl] = useState(visited);
+  const [code, setCode] = useState(() => parseJoinCode(window.location.pathname) || readJoinQuery(window.location.search));
+  const [stage, setStage] = useState('fields'); // fields | confirm | naming | busy | done | mismatch
   const [network, setNetwork] = useState(null);
   const [name, setName] = useState('');
   const [chosen, setChosen] = useState(null);
+  const [mismatch, setMismatch] = useState(null);
   const operation = useOperation(actions);
+  const arrived = useRef(false);
 
-  const local = (data?.connections || []).filter((item) => {
-    try { return new URL(item.url).origin === hubOrigin(url) && item.deviceId; }
+  const localAt = (originValue) => (data?.connections || []).filter((item) => {
+    try { return new URL(item.url).origin === originValue && item.deviceId; }
     catch { return false; }
   });
+  const local = localAt((() => { try { return hubOrigin(url); } catch { return ''; } })());
   const target = (() => {
     try { return hubOrigin(url); } catch { return ''; }
   })();
@@ -150,6 +159,34 @@ export function Join({ data, actions, navigate }) {
     setStage('fields');
     operation.setError(verifyCopy(state, cause, target));
   };
+  /** Verify the invite against one hub; returns true only when safe to proceed. */
+  async function verify(originValue, codeValue) {
+    setStage('busy');
+    operation.setError(''); operation.setNotice('');
+    try {
+      const result = await actions.verifyJoin({ url: originValue, code: codeValue.trim() });
+      const found = joinLinkMismatch(result.joinUrl, originValue);
+      setNetwork(result.network || null);
+      if (found) { setMismatch(found); setStage('mismatch'); return false; }
+      return true;
+    } catch (cause) {
+      failure(verifyFailure(cause), cause);
+      return false;
+    }
+  }
+  const proceedStage = () => setStage(localAt(visited).length ? 'confirm' : 'naming');
+  useEffect(() => {
+    // Landing with the invite embedded (path /join/<code> or ?invite=/<code>):
+    // skip the entry step and verify against the hub serving the page — no
+    // prompt for network URL or invite code (PORCH-023 ac-1).
+    if (arrived.current) return;
+    arrived.current = true;
+    if (!code.trim()) return;
+    void (async () => {
+      if (await verify(visited, code)) proceedStage();
+    })();
+    // Landing-only: manual entry resumes through connect(), never re-runs here.
+  }, []);
   async function connect(event) {
     event.preventDefault();
     operation.setError(''); operation.setNotice('');
@@ -161,14 +198,7 @@ export function Join({ data, actions, navigate }) {
     let origin;
     try { origin = hubOrigin(url); }
     catch { failure('wrongUrl', null); return; }
-    setStage('busy');
-    try {
-      const result = await actions.verifyJoin({ url: origin, code: code.trim() });
-      setNetwork(result.network || null);
-      setStage('confirm');
-    } catch (cause) {
-      failure(verifyFailure(cause), cause);
-    }
+    if (await verify(origin, code)) proceedStage();
   }
   async function proceed(existing) {
     const origin = target;
@@ -192,11 +222,21 @@ export function Join({ data, actions, navigate }) {
       <Typography variant="h6" sx={{ fontWeight: 650, color: 'primary.main' }}>☀ Porchlight</Typography>
     </Box>
     <Heading title={stage === 'done' ? "You're home." : 'Join your family'}
-      subtitle={stage === 'done' ? `Your place on ${network?.name || 'your family network'} is ready.` :
-        `The network address and the invitation ${network ? '' : 'code'}${network ? ' were checked' : ''} — connect to your family's Porchlight.`} />
+      subtitle={stage === 'done' ? `Your place on ${network?.name || 'your family network'} is ready.`
+        : stage === 'fields' || stage === 'mismatch' ? 'The network URL is the hub you are joining; the invite code is your proof of invitation.'
+        : stage === 'busy' ? 'Checking the invitation with the hub…'
+        : 'Connect once and this device stays yours.'} />
     {stage === 'done' ? <Paper elevation={0} sx={frontPanel}><Stack spacing={2}>
       <Typography>Your family can see you now. Nothing to import, nothing to set up twice.</Typography>
       <Button variant="contained" sx={{ height: 48 }} onClick={() => navigate?.('/timeline')}>Open Timeline</Button>
+    </Stack></Paper>
+    : stage === 'mismatch' ? <Paper elevation={0} sx={frontPanel}><Stack spacing={2}>
+      <Alert severity="warning" icon={false}>
+        This invitation was made for {mismatch.named}, but you are visiting {mismatch.visited}.
+      </Alert>
+      <Typography>One join link belongs to one address. Open the invitation's own address to continue, or enter the two details yourself.</Typography>
+      <Button component="a" href={mismatch.joinUrl} variant="contained" sx={{ height: 48 }}>Open the invite's own address</Button>
+      <Button variant="outlined" sx={{ height: 48 }} onClick={() => setStage('fields')}>Enter the two details yourself</Button>
     </Stack></Paper>
       : stage === 'confirm' || stage === 'naming' || stage === 'busy' ? <Paper elevation={0} sx={frontPanel}><Stack spacing={2}>
         <Alert severity="success" icon={false}>
@@ -219,10 +259,10 @@ export function Join({ data, actions, navigate }) {
         <Feedback operation={operation} />
       </Stack></Paper>
         : <Paper elevation={0} sx={frontPanel}><form onSubmit={connect}><Stack spacing={2}>
-          <TextField label="Server URL" type="url" value={url} onChange={(event) => setUrl(event.target.value)} required fullWidth
-            helperText="The address where your family's Porchlight runs." autoComplete="url" />
+          <TextField label="Network URL" type="url" value={url} onChange={(event) => setUrl(event.target.value)} required fullWidth
+            helperText="The hub you are joining — your family's Porchlight lives at this address." autoComplete="url" />
           <TextField label="Invite code" value={code} onChange={(event) => setCode(event.target.value)} required fullWidth
-            helperText="The code in the link your family's owner sent you." autoComplete="off" />
+            helperText="Proof of invitation: the code from the join link your family's owner sent." autoComplete="off" />
           <Feedback operation={operation} />
           <Button type="submit" variant="contained" fullWidth sx={{ height: 48 }} disabled={operation.busy}>Connect</Button>
         </Stack></form></Paper>}

@@ -449,3 +449,16 @@ test("ac-1/ac-2: restore re-binds a founder whose hub predates the binding and e
   // A non-founder device enrollment is untouched by the founder path.
   assert.equal((await db.collection("device_keys").find({ deviceId: "dev_x" })).length, 0);
 });
+
+test("verify carries the join link the invite names (PORCH-023 ac-2)", async () => {
+  const { invites } = fixture();
+  const named = await invites.issue({ networkId: "net_1", hubUrl: "https://home-1234.porchlight.example/" });
+  const verified = await invites.verify(named.token);
+  assert.equal(verified.valid, true);
+  assert.equal(verified.invite.joinUrl, `https://home-1234.porchlight.example/join/${named.token}`);
+
+  // No recorded hub URL: the invite names nothing, so nothing reads as a mismatch.
+  const silent = await invites.issue({ networkId: "net_1" });
+  const anonymous = await invites.verify(silent.token);
+  assert.equal(anonymous.invite.joinUrl, `/join/${silent.token}`);
+});
