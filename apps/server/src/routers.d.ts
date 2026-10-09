@@ -33,7 +33,7 @@ declare module "@porchlight/identity" {
 declare module "@porchlight/social" {
   export function createSocialRouter(controllers: {
     bootstrap: unknown;
-    feed: unknown;
+    content: unknown;
     membership: unknown;
     console: unknown;
   }): import("express").Router;
@@ -50,9 +50,37 @@ declare module "@porchlight/social" {
     membershipService: MembershipService;
     quotaService: QuotaService;
     auditService: AuditService;
+    groupService: GroupService;
+    postService: PostService;
+    interactionService: InteractionService;
+    notificationService: NotificationService;
     controllers: unknown;
     api: import("express").Router;
   };
+  export class PostService {
+    create(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ post: Record<string, unknown> }>;
+    get(options?: { accessToken?: string | null; postId?: string }): Promise<{ post: Record<string, unknown> }>;
+    list(options?: { accessToken?: string | null }): Promise<{ posts: Array<Record<string, unknown>> }>;
+    deletePost(options?: { accessToken?: string | null; postId?: string; signature?: string }): Promise<{ deleted: boolean; postId: string }>;
+    memberContentSweep(options?: { accessToken?: string | null; signature?: string }): Promise<{ sweptPosts: number }>;
+    cascadePost(post: Record<string, unknown>, options?: { actorDid?: string | null }): Promise<{ deleted: boolean; postId: string }>;
+    recount(options?: { postId?: string; networkId?: string }): Promise<void>;
+  }
+  export class InteractionService {
+    comment(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ comment: Record<string, unknown> }>;
+    react(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ reaction: Record<string, unknown> }>;
+    vote(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ vote: Record<string, unknown> }>;
+    commentThread(options?: { accessToken?: string | null; postId?: string }): Promise<{ comments: Array<Record<string, unknown>> }>;
+    reactionsFor(options?: { accessToken?: string | null; postId?: string }): Promise<{ reactions: Array<Record<string, unknown>> }>;
+  }
+  export class NotificationService {
+    inbox(options?: { accessToken?: string | null }): Promise<{ notifications: Array<Record<string, unknown>> }>;
+  }
+  export class GroupService {
+    constructor(deps: { groups: unknown; memberships: unknown });
+    create(options?: { networkId?: string; name?: string; members?: string[] }): Promise<Record<string, unknown>>;
+    list(options?: { networkId?: string }): Promise<Array<Record<string, unknown>>>;
+  }
   export class NetworkService {
     constructor(networks: unknown);
     get(): Promise<unknown>;
