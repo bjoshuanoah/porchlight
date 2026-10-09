@@ -97,8 +97,14 @@ export async function run(args = {}) {
     spawnTunnel(supervisor, paths, config, cloudflared, identity);
   }
 
+  // The bind address (PORCH-025) is reported whenever it widens the default
+  // loopback posture; the loopback URL stays the always-valid local one.
+  const bind =
+    config.hub.host && config.hub.host !== "127.0.0.1"
+      ? `, bind ${config.hub.host} (LAN reachable)`
+      : "";
   process.stdout.write(
-    `porchlight hub starting on http://127.0.0.1:${config.hub.httpPort} ` +
+    `porchlight hub starting on http://127.0.0.1:${config.hub.httpPort}${bind} ` +
       `(mongo :${config.daemons.mongoPort}, redis :${config.daemons.redisPort})\n`,
   );
   process.stdout.write(

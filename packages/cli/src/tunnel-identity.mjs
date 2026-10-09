@@ -216,7 +216,12 @@ export async function mintTunnelIdentity(paths, cloudflaredBinary, { hostname = 
 
 /** Bind argv for the stored identity — same tunnel every boot, no fresh mint. */
 export function boundTunnelArgs(paths, config, identity) {
-  const local = `http://${config.hub.host ?? "127.0.0.1"}:${config.hub.httpPort}`;
+  // The tunnel terminates at the loopback plane, never at the configured bind
+  // address (PORCH-025): a bind address is not a connectable origin for the
+  // cloudflared client ("0.0.0.0" is unroutable), and loopback is always
+  // covered by a wider bind. The LAN-facing option broadens the listener
+  // only; the tunnel endpoint is unchanged.
+  const local = `http://127.0.0.1:${config.hub.httpPort}`;
   if (identity.mode === "token") {
     return ["tunnel", "run", "--url", local, "--no-autoupdate", "--token", readStoredToken(paths)];
   }

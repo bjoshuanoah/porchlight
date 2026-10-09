@@ -49,6 +49,25 @@ test("normalizeConfig: unknown deployment modes fail loudly (bootstrap diagnosti
   );
 });
 
+test("normalizeConfig: hub.host is the operator bind address — 0.0.0.0 accepted, default stays loopback (PORCH-025 ac-1)", () => {
+  // The default posture: loopback plus tunnel — LAN exposure is opt-in.
+  assert.equal(DEFAULT_CONFIG.hub.host, "127.0.0.1");
+  const lan = normalizeConfig({ ...freshConfig(), hub: { host: "0.0.0.0" } });
+  assert.equal(lan.hub.host, "0.0.0.0");
+  // The rest of the hub block survives the partial override.
+  assert.equal(lan.hub.httpPort, 8710);
+  assert.equal(lan.hub.tunnel.enabled, true);
+});
+
+test("normalizeConfig: a bind address that could never be a host fails loudly (PORCH-025)", () => {
+  for (const bad of [123, "", "bad host", "http://x", "127.0.0.1/8", null]) {
+    assert.throws(
+      () => normalizeConfig({ ...freshConfig(), hub: { host: bad } }),
+      /hub\.host must be a bind address/,
+    );
+  }
+});
+
 test("normalizeConfig: schemaVersion mismatch fails loudly, not silently defaulted", () => {
   const config = freshConfig();
   config.schemaVersion = CONFIG_SCHEMA_VERSION + 1;

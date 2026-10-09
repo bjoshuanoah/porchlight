@@ -21,6 +21,31 @@ SPA served by the hub. Phase 1 (self-hosted), no AI surfaces, no hosted tier.
 | 4 | Owner ↔ members | The owner is a special role, proven by identity, never by an invite: the network row records `ownerDid` at creation (`network.service.js:30`) and admission forces role `owner` exactly when the admitted DID is the network owner (`membership.service.js:101`, founder rule). Bootstrap binds the owner directly: network creation seeds the founder's owner-role membership (`bindFounder`, PORCH-018), and a session restore re-binds a founder whose hub predates the binding. Owner-console surfaces require an owner-role membership session (`console.controller.js:42` `#requireOwner`). |
 | 5 | Network origin containment | Membership tokens resolve to exactly one network scope (`verifyAccessToken(accessToken, {networkId})`); content routes carry no origin in the URL and services scope every read/write to the token's origin. Cross-origin interaction writes are unaddressable (foreign-origin posts resolve as not-found, `interaction.service.js`). CI boundary test runs on every push. |
 | 6 | Bootstrap era ↔ steady state | Bootstrap-era write surfaces (first account, network creation, invite issue/revoke, quota ceilings) are callable only while their ledger step is incomplete; each closes permanently once the hub is bootstrapped (`social-bootstrap.controller.js:32` `#eraOpen`, `apps/server/src/controllers/bootstrap.controller.ts`). Default fail-closed: an unwired ledger gate closes the era. |
+| 7 | LAN boundary ↔ hub (`hub.host`, PORCH-025) | The listener may additionally bind a LAN-facing address (operator sets `hub.host: "0.0.0.0"` in the runtime config); the default posture stays loopback plus tunnel. Zero trust on the LAN boundary: one Express pipeline serves every interface, so membership-token and device-signature enforcement are byte-identical for tunnel- and LAN-origin traffic. The tunnel endpoint stays pinned to loopback (`packages/cli/src/tunnel-identity.mjs` `boundTunnelArgs` — a bind address is not a connectable origin); identity issuance stays pinned to the tunnel issuer regardless of the requesting interface (see "LAN bind and issuer pinning" below). |
+
+## LAN bind and issuer pinning (PORCH-025)
+
+The bind-address option (`hub.host`) only broadens the listener; it never
+changes the security posture:
+
+- **Issuance is origin-pinned, not request-pinned.** The OIDC issuer and every
+  trust artifact derive from the tunnel URL re-read from runtime config
+  (`apps/server/src/router.ts` `readTunnelUrl` →
+  `modules/identity/src/services/trust.service.js` `#issuer`), never from the
+  request's Host header. Discovery surfaces report that same pinned issuer to
+  a requester arriving over the LAN bind
+  (`modules/identity/src/controllers/well-known.controller.js`
+  `openidConfiguration`). A missing issuer is surfaced loudly — 503
+  `E_HUB_URL_UNKNOWN` on discovery, `E_HUB_URL_REQUIRED` on issuance — never
+  silently replaced by the request host. No address-specific issuance path
+  exists; any future introduction of one is a build-time check against this
+  PIN (PORCH-025 watch item).
+- **Verified by contract tests**: `apps/server/test/lan-bind.test.ts` binds
+  the full app on `0.0.0.0` and proves (a) the wildcard bind, (b) tokenless
+  and forged-token requests refused identically to the tunnel plane, (c) the
+  tunnel-pinned issuer served to LAN-origin discovery requests, and (d) the
+  loud 503 when no issuer is bound. `packages/cli/test/tunnel-persistence.test.js`
+  proves the tunnel target stays `127.0.0.1` for any configured bind.
 
 ## Actors and capabilities
 

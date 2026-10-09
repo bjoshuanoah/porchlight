@@ -38,7 +38,15 @@ export const DEFAULT_CONFIG = Object.freeze({
   },
   /** Hub listener + tunnel binding. */
   hub: {
-    /** Binds the local listener; the tunnel terminates at this port. */
+    /**
+     * Operator bind address for the hub listener (PORCH-025). Default
+     * "127.0.0.1" keeps the loopback-plus-tunnel posture; "0.0.0.0" adds LAN
+     * reachability beside the tunnel. Zero trust on the LAN boundary:
+     * membership-token enforcement is identical on every interface, the
+     * tunnel target stays pinned to loopback (packages/cli
+     * tunnel-identity.mjs), and identity issuance stays pinned to the tunnel
+     * issuer regardless of which interface a request arrived on.
+     */
     host: "127.0.0.1",
     httpPort: 8710,
     tunnel: {
@@ -95,6 +103,14 @@ export function normalizeConfig(raw) {
     if (!Number.isInteger(value) || value <= 0 || value > 65535) {
       throw new Error(`config ${name} must be an integer TCP port`);
     }
+  }
+  // hub.host is the operator bind address (PORCH-025). Like the ports, it is
+  // validated at normalize time — a value that could never be a bind host
+  // (empty, whitespace, a URL with a scheme/path) fails loudly instead of
+  // surfacing later as a boot failure without diagnostics.
+  const bindHost = merged.hub.host;
+  if (typeof bindHost !== "string" || !bindHost || /[\s/\\:%]/.test(bindHost)) {
+    throw new Error("config hub.host must be a bind address (e.g. \"127.0.0.1\" for loopback plus tunnel, or \"0.0.0.0\" for LAN reachability)");
   }
   // Phase-3 mode name is its contract (Porchlight Server TS 6): an
   // identity-only hub hosts accounts with no network attached, so social
