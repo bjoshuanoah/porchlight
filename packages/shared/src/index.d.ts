@@ -49,6 +49,8 @@ export interface CollectionLike {
     filter: Record<string, unknown>,
     update: { $set?: Record<string, unknown>; upsert?: boolean },
   ): Promise<{ matchedCount: number; upsertedId?: unknown }>;
+  deleteOne(filter?: Record<string, unknown>): Promise<{ deletedCount: number }>;
+  deleteMany(filter?: Record<string, unknown>): Promise<{ deletedCount: number }>;
 }
 
 export interface StoreLike {

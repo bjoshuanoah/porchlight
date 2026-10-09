@@ -27,6 +27,14 @@ export function mongoStore(db: Db): StoreLike {
         const result = await raw.updateOne(filter, { $set: update.$set ?? {} }, { upsert: update.upsert ?? false });
         return { matchedCount: result.matchedCount, upsertedId: result.upsertedId };
       },
+      async deleteOne(filter: Record<string, unknown> = {}) {
+        const result = await raw.deleteOne(filter);
+        return { deletedCount: result.deletedCount };
+      },
+      async deleteMany(filter: Record<string, unknown> = {}) {
+        const result = await raw.deleteMany(filter);
+        return { deletedCount: result.deletedCount };
+      },
     };
   };
   return { collection };

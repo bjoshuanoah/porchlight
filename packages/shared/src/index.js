@@ -172,6 +172,17 @@ export function createMemoryStore() {
           }
           return { matchedCount: 0, upsertedId: null };
         },
+        async deleteOne(filter = {}) {
+          const target = doc(filter);
+          if (!target) return { deletedCount: 0 };
+          rows.splice(rows.indexOf(target), 1);
+          return { deletedCount: 1 };
+        },
+        async deleteMany(filter = {}) {
+          const doomed = rows.filter((row) => matches(row, filter));
+          for (const row of doomed) rows.splice(rows.indexOf(row), 1);
+          return { deletedCount: doomed.length };
+        },
       };
     },
   };
