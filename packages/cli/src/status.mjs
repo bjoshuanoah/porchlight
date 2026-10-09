@@ -26,7 +26,18 @@ export async function run(args = {}) {
   }
 
   const tunnel = readJson(join(paths.state, "tunnel.json"));
-  process.stdout.write(`tunnel:      ${tunnel?.url ?? "not established"}\n`);
+  const identity = readJson(join(paths.root, "tunnel", "identity.json"));
+  if (identity?.mode) {
+    process.stdout.write(
+      `tunnel:      ${tunnel?.url ?? "not established"} (named ${identity.tunnelId ?? "—"}, ` +
+        `host ${identity.hostname ?? "not recorded"}, mode ${identity.mode} — re-bound on every start)\n`,
+    );
+  } else {
+    process.stdout.write(
+      `tunnel:      ${tunnel?.url ?? "not established"} (ephemeral quick tunnel — URL churns per boot; ` +
+        "bind: `cloudflared tunnel login` once, then `porchlight tunnel mint --hostname <your-host>`)\n",
+    );
+  }
 
   try {
     const { config } = loadHomeConfig(args);
