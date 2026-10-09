@@ -31,6 +31,7 @@ declare module "@porchlight/identity" {
 }
 
 declare module "@porchlight/social" {
+  export function canonicalJson(value: object): string;
   export function createSocialRouter(controllers: {
     bootstrap: unknown;
     content: unknown;
@@ -43,6 +44,15 @@ declare module "@porchlight/social" {
     options?: {
       hubUrl?: () => string | null;
       ledger?: { record: (step: string, detail?: object) => Promise<void> };
+      system?: {
+        release: { service: string; version: string | null };
+        launch: () => Promise<{
+          resumable: boolean;
+          lastError: string | null;
+          steps: Record<string, { status: string }>;
+          diagnostics: Array<{ at: string; source: string; message: string }>;
+        }>;
+      };
       verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>;
       media?: {
         mediaRoot?: string;

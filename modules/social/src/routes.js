@@ -84,6 +84,7 @@ export function createSocialRouter(controllers) {
   router.get("/console/limits", ownerConsole.getLimits);
   router.put("/console/limits", ownerConsole.setLimits);
   router.get("/console/audit", ownerConsole.listAudit);
+  router.get("/console/system", ownerConsole.systemStatus);
   router.post("/console/retention/sweep", ownerConsole.sweepRetention);
   router.post("/console/groups", ownerConsole.createGroup);
   router.get("/console/groups", ownerConsole.listGroups);

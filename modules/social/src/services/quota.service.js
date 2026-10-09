@@ -130,14 +130,46 @@ export class QuotaService {
   }
 
   /**
+   * Artifacts whose retention window has closed at `now`. The OWNER-SET
+   * window is a setting, not a per-row snapshot: every live artifact row's
+   * effective expiry is evaluated against the network's CURRENT
+   * retentionDays, so the next retention pass enforces the window the owner
+   * just set (tightening sweeps rows recorded under the old window;
+   * widening preserves rows not yet expired). With the window unset, a
+   * stamped expiresAt (recorded while a window existed) still stands —
+   * clearing the window never resurrects rows already past it — and with
+   * neither stamp nor window nothing expires.
+   */
+  async expiredArtifactRows({ networkId, now = () => new Date() } = {}) {
+    const network = await this.networks.findOne({ _id: networkId });
+    const retentionDays = network ? this.normalize(network.quota ?? {}).retentionDays : null;
+    const rows = await this.artifacts.find({ networkId: String(networkId) });
+    const cutoff = now().toISOString();
+    return rows.filter((row) => {
+      const expiry = this.#expiryAt(row, retentionDays);
+      return expiry !== null && expiry !== undefined && expiry <= cutoff;
+    });
+  }
+
+  /** Effective expiry of one artifact row under a retention window in days. */
+  #expiryAt(row, retentionDays) {
+    if (retentionDays !== null && Number(retentionDays) >= 1) {
+      const created = row.createdAt ? new Date(row.createdAt).getTime() : NaN;
+      if (Number.isFinite(created)) {
+        return isoPlus(new Date(created), Number(retentionDays) * 24 * 60 * 60);
+      }
+    }
+    return row.expiresAt ?? null;
+  }
+
+  /**
    * Retention sweep: remove artifact rows past their retention window and
    * report what left. Reads continue at every threshold; this is the delete
    * path and it audits as a deletion event.
    */
   async sweep({ networkId, now = () => new Date() } = {}) {
-    const rows = await this.artifacts.find({ networkId: String(networkId) });
+    const expired = await this.expiredArtifactRows({ networkId, now });
     const cutoff = now().toISOString();
-    const expired = rows.filter((row) => row.expiresAt !== null && row.expiresAt !== undefined && row.expiresAt <= cutoff);
     let bytesFreed = 0;
     for (const row of expired) {
       await this.artifacts.deleteOne({ _id: row._id });

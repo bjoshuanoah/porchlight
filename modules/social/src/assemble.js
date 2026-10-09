@@ -36,6 +36,10 @@ import { createSocialRouter } from "./routes.js";
  *     record: (step: string, detail?: object) => Promise<void>,
  *     steps?: () => Promise<{ account?: { status: string }, network?: { status: string }, invite?: { status: string }, quota?: { status: string } }>,
  *   },
+ *   system?: {
+ *     release: { service: string, version: string | null },
+ *     launch: () => Promise<{ resumable: boolean, lastError: string | null, steps: Record<string, { status: string }>, diagnostics: Array<{ at: string, source: string, message: string }> }>,
+ *   },
  *   verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>,
  *   rankingConfig?: object,
  *   media?: {
@@ -166,6 +170,7 @@ export function assembleSocialModule(store, options = {}) {
       groups: groupService,
       ranking: rankingService,
       media: mediaService,
+      system: options.system ?? null,
     }),
     media: new MediaController({ media: mediaService, export: exportService }),
   };
