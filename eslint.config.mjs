@@ -26,4 +26,16 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // apps/web is the one browser workspace: the SPA runs on window/document
+    // globals the node-scoped defaults do not define. Node globals stay
+    // available for its scripts and node --test suites.
+    files: ["apps/web/**"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...globals.browser,
+      },
+    },
+  },
 );

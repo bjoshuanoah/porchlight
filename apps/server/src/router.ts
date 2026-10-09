@@ -1,5 +1,6 @@
 import express, { Router } from "express";
-import { join } from "node:path";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createSystemRouter } from "./routes/system.routes.js";
 import { assembleIdentityModule } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
@@ -17,6 +18,8 @@ export interface ServerOptions {
   bootstrap: BootstrapService;
   /** Live tunnel URL; defaults to re-reading the runtime config per call. */
   hubUrl?: () => string | null;
+  /** Built SPA directory; defaults to the files copied into the published server package. */
+  webRoot?: string;
 }
 
 const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
@@ -95,6 +98,21 @@ export function createServer(options: ServerOptions) {
   app.use("/api", routers.api);
   app.get("/bootstrap", (_req, res) => {
     res.type("html").send(bootstrapPage());
+  });
+
+  // The build copies the private web workspace's output next to dist/router.js.
+  // No web package is needed at runtime: published server/dist contains it.
+  const webRoot = options.webRoot ?? fileURLToPath(new URL("./web/", import.meta.url));
+  const staticFiles = express.static(webRoot, { index: false });
+  const reservedPaths = /^\/(?:api|\.well-known|bootstrap)(?:\/|$)/;
+  app.use((req, res, next) => {
+    if (reservedPaths.test(req.path)) return next();
+    staticFiles(req, res, next);
+  });
+  app.get("*", (req, res, next) => {
+    // Missing assets remain real 404s, not successful HTML responses.
+    if (reservedPaths.test(req.path) || req.path.startsWith("/assets/") || extname(req.path)) return next();
+    res.sendFile(join(webRoot, "index.html"));
   });
   return app;
 }
