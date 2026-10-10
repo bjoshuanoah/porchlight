@@ -734,7 +734,11 @@ function App() {
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline,
   };
-  const props = { data, actions, navigate, mode: displayMode };
+  // The Profile appearance control is bound to the stored *preference*
+  // (modePref), never the resolved mode: choosing System must stick as the
+  // selected choice even when the resolved mode is identical to the override
+  // it just cleared; the resolved mode drives the theme, not the control.
+  const props = { data, actions, navigate, mode: modePref };
   const sharedDevice = new Set(connections.map((item) => item.identity?.id).filter(Boolean)).size > 1;
   const setupRoute = route === "/setup";
   const deviceLinkRoute = route === "/device-link" || route.startsWith("/device-link/");

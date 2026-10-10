@@ -92,6 +92,20 @@ test("PORCH-042 ac-2: main.jsx resolves mode pre-theme, tracks the device prefer
   assert.doesNotMatch(source, /location\.reload|window\.location =/);
 });
 
+// Regression (user-reported, Oct 10 2026): clicking System did not stick —
+// the Profile toggle was controlled by the *resolved* mode, so choosing
+// System on a device whose theme already matched the cleared override snapped
+// the selection straight back and looked like nothing happened. The control
+// must be bound to the stored preference, and the resolved mode must keep
+// driving only the theme.
+test("PORCH-042 regression: the Profile appearance control is bound to the preference, not the resolved mode", async () => {
+  const source = await readFile(join(webRoot, "src", "main.jsx"), "utf8");
+  assert.match(source, /mode: modePref/); // preference drives the control
+  assert.doesNotMatch(source, /mode: displayMode/); // resolved mode never controls it
+  // The resolution stays theme-only: themeFor consumes displayMode.
+  assert.match(source, /const muiTheme = themeFor\(displayMode\)/);
+});
+
 // ac-1: the appearance setting renders in Profile with the three modes.
 test("PORCH-042 ac-1: the Profile appearance setting offers Light / Dark / System", async () => {
   const source = await readFile(join(webRoot, "src", "identity.jsx"), "utf8");
