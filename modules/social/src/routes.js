@@ -105,6 +105,11 @@ export function createSocialRouter(controllers) {
   // Owner console server behaviors (PORCH-005 ac-1/3/4) + group containers.
   router.get("/console/ranking", ownerConsole.getRanking);
   router.get("/console/disk", ownerConsole.diskStatus);
+  // Media storage location (PORCH-054): the owner's media-root setting —
+  // current root + readiness state, and the edit action whose failing
+  // path is refused with the check's reason named (no automatic migration).
+  router.get("/console/media-root", ownerConsole.getMediaRoot);
+  router.put("/console/media-root", ownerConsole.setMediaRoot);
   router.post("/console/media/gc", ownerConsole.gcUploads);
   router.get("/console/invites", ownerConsole.listInvites);
   router.post("/console/invites", ownerConsole.issueInvite);

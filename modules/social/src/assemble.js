@@ -16,7 +16,8 @@ import { LinkPreviewService } from "./services/link-preview.service.js";
 import { ExportService } from "./services/export.service.js";
 import { AlbumService } from "./services/album.service.js";
 import { MemberAdminService } from "./services/member-admin.service.js";
-import { createMemoryMediaStore, createFileMediaStore, nodeDiskProbe } from "./services/media.store.js";
+import { createMemoryMediaStore, createRelocatableMediaStore, nodeDiskProbe } from "./services/media.store.js";
+import { MediaVolumeService } from "./services/media.volume.js";
 import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
 import { ContentController } from "./controllers/content.controller.js";
 import { FeedController } from "./controllers/feed.controller.js";
@@ -104,6 +105,11 @@ export function assembleSocialModule(store, options = {}) {
   const groups = collection("groups");
   const mediaUploads = collection("media_uploads");
   const mediaAssets = collection("media_assets");
+  // PORCH-054: the served-root history markers — the record that a
+  // configured root is known-good for this hub (ready-and-waiting's
+  // poll-and-recover distinguishes itself from the five-check refusal
+  // through exactly this marker).
+  const mediaVolumeMarkers = collection("media_volume_markers");
   // Link previews (PORCH-052): per-attach reference rows + the URL-level
   // metadata cache (quantity-only, no engagement data).
   const linkPreviews = collection("link_previews");
@@ -149,14 +155,35 @@ export function assembleSocialModule(store, options = {}) {
     replayHours: options.realtime?.replayHours ?? 24,
   });
   // Media pipeline (PORCH-008): the blob store is content-addressed —
-  // filesystem-backed for the real hub (mediaRoot), memory for tests and
-  // daemon-less runs. The disk probe reads the live filesystem unless a
-  // test injects its own. The rendition ladder rungs (PORCH-044) are
-  // owner-readable configuration forwarded from the hub config.
+  // filesystem-backed for the real hub at the configured media root
+  // (PORCH-054: re-pointable at runtime, never re-homed), memory for
+  // tests and daemon-less runs. The disk probe reads the live filesystem
+  // unless a test injects its own; it follows the CURRENT root so the
+  // guard rides the same volume the pipeline writes to. The rendition
+  // ladder rungs (PORCH-044) are owner-readable configuration forwarded
+  // from the hub config.
   const mediaConfig = options.media ?? {};
-  const blobs = mediaConfig.store ?? (mediaConfig.mediaRoot ? createFileMediaStore(mediaConfig.mediaRoot) : createMemoryMediaStore());
+  const relocatable = !mediaConfig.store && Boolean(mediaConfig.mediaRoot);
+  const blobs = relocatable
+    ? createRelocatableMediaStore(mediaConfig.mediaRoot)
+    : (mediaConfig.store ?? createMemoryMediaStore());
+  const volumeService = new MediaVolumeService(
+    { markers: mediaVolumeMarkers, uploads: mediaUploads, blobs },
+    {
+      root: relocatable ? mediaConfig.mediaRoot : null,
+      rootIsDefault: relocatable ? (mediaConfig.mediaRootIsDefault ?? false) : false,
+      persistRoot: relocatable ? (mediaConfig.persistRoot ?? null) : null,
+      pollIntervalMs: mediaConfig.volumePollIntervalMs ?? 10_000,
+      fs: mediaConfig.volumeFs ?? null,
+      timer: mediaConfig.volumeTimer ?? null,
+      relocatable,
+      // The five-check startup gate (PORCH-054 ac-2) runs now, from the
+      // constructor's gatePromise: media ingest/serving await the settled
+      // gate while auth, timelines, and chat come up untouched.
+    },
+  );
   const diskProbe = mediaConfig.diskProbe ?? (() => {
-    const root = mediaConfig.mediaRoot;
+    const root = volumeService.root;
     return root ? nodeDiskProbe(root) : Promise.resolve({ totalBytes: 0, freeBytes: 0 });
   });
   const mediaService = new MediaService(
@@ -170,6 +197,7 @@ export function assembleSocialModule(store, options = {}) {
       diskProbe,
       audit,
       realtime: realtimeService,
+      volume: volumeService,
     },
     {
       softUsedRatio: mediaConfig.softUsedRatio,
@@ -314,6 +342,7 @@ export function assembleSocialModule(store, options = {}) {
     rankingService,
     feedService,
     mediaService,
+    mediaVolume: volumeService,
     linkPreviewService,
     exportService,
     albumService,

@@ -23,6 +23,10 @@ export interface PorchlightConfig {
   quota: { storageCeilingMb: number | null; retentionDays: number | null };
   /** PORCH-044: the rendition ladder rungs (owner-readable configuration). */
   media: {
+    /** PORCH-054: the configured media root; null = the hub data directory default. */
+    root: string | null;
+    /** PORCH-054: the ready-and-waiting readiness poll interval [Assumed: 10s]. */
+    volumePollSeconds: number;
     renditions: {
       image: Record<string, number>;
       video: Record<string, number>;

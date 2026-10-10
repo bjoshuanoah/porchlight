@@ -1,6 +1,7 @@
 import { socialModels } from "../models.js";
 import { sha256 } from "../util/crypto.js";
 import { sha256Hex } from "./media.store.js";
+import { createInertVolume } from "./media.volume.js";
 import {
   RENDITION_FORMAT_V2,
   imageMetadata,
@@ -64,7 +65,7 @@ export class MediaService {
    *           chunkSize?: number, uploadTtlSeconds?: number,
    *           renditionRungs?: { image?: Record<string, number>, video?: Record<string, number> }} [options]
    */
-  constructor({ uploads, assets, artifacts, membership, quota, blobs, diskProbe, audit, realtime }, options = {}) {
+  constructor({ uploads, assets, artifacts, membership, quota, blobs, diskProbe, audit, realtime, volume }, options = {}) {
     this.uploads = uploads;
     this.assets = assets;
     this.artifacts = artifacts;
@@ -74,6 +75,11 @@ export class MediaService {
     this.realtime = realtime ?? null;
     this.diskProbe = diskProbe ?? null;
     this.audit = audit ?? (async () => {});
+    // Volume readiness (PORCH-054): the configured media root's state
+    // machine. Media without a configured filesystem root (memory-store
+    // tests, daemon-less runs) rides the inert volume — always ready, no
+    // state to name.
+    this.volume = volume ?? createInertVolume();
     this.models = socialModels;
     this.softUsedRatio = options.softUsedRatio ?? 0.9;
     this.hardUsedRatio = options.hardUsedRatio ?? 0.95;
@@ -99,6 +105,9 @@ export class MediaService {
    */
   async beginUpload({ accessToken, payload, signature } = {}) {
     const session = await this.#requireSession(accessToken);
+    // Volume readiness (PORCH-054 ac-3): a paused or refused volume pauses
+    // INGEST — no upload row is opened against a dead archive volume.
+    await this.volume.assertReady();
     if (!payload || typeof payload !== "object") {
       throw typedError("E_UPLOAD_PAYLOAD_REQUIRED", MESSAGES.E_UPLOAD_PAYLOAD_REQUIRED);
     }
@@ -150,8 +159,11 @@ export class MediaService {
    * transport chunk is rejected before it can poison the commit.
    * Idempotent: re-PUTting a received index rewrites that blob in place.
    */
-  async putChunk({ accessToken, uploadId, index, bytes, chunkSha }) {
+  async putChunk({ accessToken, uploadId, index, bytes, chunkSha } = {}) {
     const session = await this.#requireSession(accessToken);
+    // Volume readiness (PORCH-054 ac-3): chunk bytes never land anywhere
+    // but the configured root, and only while it is ready.
+    await this.volume.assertReady();
     const upload = await this.#openUpload(uploadId, session);
     const indexNum = Number(index);
     if (!Number.isInteger(indexNum) || indexNum < 0 || indexNum >= upload.chunkCount) {
@@ -174,7 +186,7 @@ export class MediaService {
     if (actualSha !== chunkSha) {
       throw typedError("E_CHUNK_CORRUPT", MESSAGES.E_CHUNK_CORRUPT);
     }
-    await this.blobs.put(chunkKey(uploadId, indexNum), chunk);
+    await this.#putBlob(chunkKey(uploadId, indexNum), chunk);
     if (!upload.receivedChunks.includes(indexNum)) {
       upload.receivedChunks = [...upload.receivedChunks, indexNum].sort((a, b) => a - b);
     }
@@ -221,6 +233,9 @@ export class MediaService {
    */
   async completeUpload({ accessToken, uploadId, payload, signature } = {}) {
     const session = await this.#requireSession(accessToken);
+    // Volume readiness (PORCH-054 ac-3): a commit against a paused volume
+    // refuses before any assembly or quota write.
+    await this.volume.assertReady();
     const upload = await this.#openUpload(uploadId, session);
     if (!payload || !isHex64(payload.sha256) || !Number.isInteger(Number(payload.size))) {
       throw typedError("E_COMMIT_DECLARATION_INVALID", MESSAGES.E_COMMIT_DECLARATION_INVALID);
@@ -259,7 +274,7 @@ export class MediaService {
     // raced into an over-filled network) before anything is stored.
     await this.quota.admitUpload({ networkId: upload.networkId, bytes: assembled.length, kind: "original" });
     const blobKey = sha256Hex(assembled);
-    await this.blobs.put(blobKey, assembled);
+    await this.#putBlob(blobKey, assembled);
     const mediaId = `med_${crypto.randomUUID()}`;
     const limits = await this.quota.limits({ networkId: upload.networkId });
     const asset = {
@@ -332,6 +347,7 @@ export class MediaService {
     if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
       throw typedError("E_MEDIA_EMPTY", MESSAGES.E_MEDIA_UNDECODABLE);
     }
+    await this.volume.assertReady();
     await this.#diskGate(networkId);
     await this.quota.admitUpload({ networkId, bytes: bytes.length, kind: "original" });
     const sourceMeta = await this.#probeOriginal(bytes, contentType);
@@ -339,7 +355,7 @@ export class MediaService {
       throw typedError("E_MEDIA_UNDECODABLE", MESSAGES.E_MEDIA_UNDECODABLE);
     }
     const blobKey = sha256Hex(bytes);
-    await this.blobs.put(blobKey, bytes);
+    await this.#putBlob(blobKey, bytes);
     const mediaId = `med_${crypto.randomUUID()}`;
     const limits = await this.quota.limits({ networkId });
     const asset = {
@@ -426,7 +442,7 @@ export class MediaService {
         this.#assertRenditionBudget(original, existing, renditionKind, rendered.bytes.length);
       }
       const blobKey = sha256Hex(rendered.bytes);
-      await this.blobs.put(blobKey, rendered.bytes);
+      await this.#putBlob(blobKey, rendered.bytes);
       const renditionId = `rnd_${crypto.randomUUID()}`;
       await this.assets.insertOne({
         _id: renditionId,
@@ -552,6 +568,10 @@ export class MediaService {
    */
   async serveRendition({ accessToken, mediaId, renditionKind }) {
     const session = await this.#requireSession(accessToken);
+    // Volume readiness (PORCH-054 ac-3): a paused or refused volume pauses
+    // SERVING — the surface answers with the named ready-and-waiting state,
+    // never from another location and never a silent miss.
+    await this.volume.assertReady();
     // The origin-asset lookup IS the containment check (throws when the
     // media does not exist at this token's origin).
     const original = await this.#originAsset(mediaId, session);
@@ -606,6 +626,9 @@ export class MediaService {
    */
   async serveOriginal({ accessToken, mediaId }) {
     const session = await this.#requireSession(accessToken);
+    // Volume readiness (PORCH-054 ac-3): serving pause covers the archive
+    // action too — the original is never served from another location.
+    await this.volume.assertReady();
     const original = await this.#originAsset(mediaId, session);
     if (original.kind !== "original") {
       throw typedError("E_MEDIA_NOT_FOUND", MESSAGES.E_MEDIA_NOT_FOUND);
@@ -715,6 +738,26 @@ export class MediaService {
       }
     }
     return views;
+  }
+
+  /**
+   * GET /console/media-root backing (ac-1): the current configured root
+   * with its readiness state (ready / volume not ready) — the owner
+   * console and health surface both read this shape.
+   */
+  async volumeStatus() {
+    return this.volume.status();
+  }
+
+  /**
+   * PUT /console/media-root backing (ac-4). Delegates the five startup
+   * checks and the store re-point to the volume service; the refusing
+   * edit's typed error carries the check's named reason. The response
+   * copy names plainly that nothing moved: the owner runs the move and
+   * repoints.
+   */
+  async changeRoot({ root } = {}) {
+    return this.volume.changeRoot(root);
   }
 
   /**
@@ -843,6 +886,26 @@ export class MediaService {
   }
 
   /* Internals */
+
+  /**
+   * The volume-gated blob write (PORCH-054, the storage boundary): bytes
+   * land ONLY in the configured root, only while it is ready, and only
+   * after the file store's read-back verification passes (uploads
+   * acknowledge after read-back). A storage-boundary failure pauses media
+   * in the named ready-and-waiting state — never a silent fallback, never
+   * a redirect to another location. E_BLOB_IMMUTABLE is a logical key
+   * conflict (content already exists with different bytes), not a volume
+   * state, so it passes through unchanged.
+   */
+  async #putBlob(key, bytes) {
+    await this.volume.assertReady();
+    try {
+      return await this.blobs.put(key, bytes);
+    } catch (error) {
+      if (error?.code === "E_BLOB_IMMUTABLE") throw error;
+      throw this.volume.noteWriteFailure(error);
+    }
+  }
 
   /** Upload admission disk gate (hard stop; soft warning passes through). */
   async #diskGate(networkId) {
@@ -1045,6 +1108,10 @@ export const MESSAGES = {
   E_COMMIT_SIZE_MISMATCH: "The uploaded bytes did not match the committed size.",
   E_COMMIT_SHA_MISMATCH: "The uploaded bytes did not match the committed sha256.",
   E_DISK_HARD_STOP: "The server's disk is critically full: new uploads are stopped until space is freed. Existing media and reads are unaffected.",
+  E_MEDIA_VOLUME_NOT_READY: "The archive volume is not ready — media is paused ready-and-waiting and resumes automatically when the volume mounts back.",
+  E_MEDIA_ROOT_INVALID: "A media root needs the volume's absolute path.",
+  E_MEDIA_ROOT_REFUSED: "That media root was refused by the volume checks.",
+  E_MEDIA_ROOT_UNAVAILABLE: "The media root cannot be edited in this deployment.",
   E_MEDIA_NOT_FOUND: "That media doesn't exist in this network.",
   E_RENDITION_KIND_UNKNOWN: "Renditions are feed-thumb, detail, or album.",
   E_RENDITION_NOT_FOUND: "That rendition has not been generated yet.",

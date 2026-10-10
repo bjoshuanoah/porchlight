@@ -179,6 +179,10 @@ export class MediaController {
       E_BLOB_MISSING: 500,
       E_EXPORT_MEDIA_MISSING: 500,
       E_MEDIA_UNDECODABLE: 415,
+      // PORCH-054: the volume readiness states surface exactly as named.
+      E_MEDIA_VOLUME_NOT_READY: 503,
+      E_MEDIA_ROOT_INVALID: 400,
+      E_MEDIA_ROOT_REFUSED: 422,
     };
     if (error?.code && plain[error.code]) {
       return res.status(plain[error.code]).json({ error: error.message, code: error.code });

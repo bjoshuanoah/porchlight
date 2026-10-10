@@ -27,3 +27,19 @@ test("getHealth reports the phase mode and the tunnel hub URL", async () => {
   assert.equal(doc.mode.deploymentMode, "self-hosted");
   assert.equal(doc.hubUrl, "https://hub.example");
 });
+test("getHealth carries the configured media root and its readiness state (PORCH-054, late-bound)", async () => {
+  const doc = await service({ mongo: "ok", redis: "ok" }).getHealth();
+  assert.equal(doc.media, null, "no media pipeline wired = null media readiness");
+  const hub = service({ mongo: "ok", redis: "ok" });
+  hub.setMediaStatus(async () => ({
+    root: "/Volumes/FamilyArchive",
+    state: "volume-not-ready",
+    check: "volume-not-ready",
+    reason: "The media root /Volumes/FamilyArchive is not a live mounted directory (volume not ready).",
+    flag: null,
+  }));
+  const withMedia = await hub.getHealth();
+  assert.ok(withMedia.media, "the wired provider surfaces the media readiness");
+  assert.equal(withMedia.media.root, "/Volumes/FamilyArchive");
+  assert.equal(withMedia.media.state, "volume-not-ready");
+});

@@ -97,6 +97,16 @@ export function createFileMediaStore(root) {
         return key;
       }
       writeFileSync(path, bytes, { flag: "wx" });
+      // Write verification at the storage boundary (PORCH-054): an upload
+      // is acknowledged only after its bytes read back from the target
+      // root identical — a successful put is verifiably durable media, not
+      // a flushed-without-proof write.
+      if (!readFileSync(path).equals(bytes)) {
+        throw Object.assign(
+          new Error("the stored bytes did not read back identical from the media root"),
+          { code: "E_BLOB_READBACK" },
+        );
+      }
       return key;
     },
     async get(key) {
@@ -129,5 +139,40 @@ export async function nodeDiskProbe(path) {
   return {
     totalBytes: Number(info.blocks) * Number(info.bsize),
     freeBytes: Number(info.bavail) * Number(info.bsize),
+  };
+}
+
+/**
+ * Relocatable media store facade (PORCH-054): the one store object the
+ * pipeline holds, pointed at the CURRENT configured media root and
+ * re-pointable at runtime. A relocate NEVER moves existing bytes (no
+ * automatic migration in V1) — it only rebinds where the next put lands;
+ * the old root keeps its bytes for the owner-managed move. Without a
+ * configured root (tests, daemon-less runs) it serves the memory store
+ * and cannot be relocated (a console edit refuses with E_MEDIA_ROOT_UNAVAILABLE).
+ */
+export function createRelocatableMediaStore(initialRoot) {
+  let delegate = initialRoot ? createFileMediaStore(initialRoot) : createMemoryMediaStore();
+  let current = initialRoot ?? null;
+  return {
+    get root() {
+      return current;
+    },
+    relocate(root) {
+      delegate = root ? createFileMediaStore(root) : createMemoryMediaStore();
+      current = root ?? null;
+    },
+    put(key, buffer) {
+      return delegate.put(key, buffer);
+    },
+    get(key) {
+      return delegate.get(key);
+    },
+    has(key) {
+      return delegate.has(key);
+    },
+    delete(key) {
+      return delegate.delete(key);
+    },
   };
 }
