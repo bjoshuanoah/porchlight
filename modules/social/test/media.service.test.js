@@ -817,6 +817,94 @@ test("PORCH-044: a pre-v2 rendition self-heals to the renderable format on read"
   assert.ok(healed.width && healed.height);
 });
 
+test("PORCH-044: hydration self-heals a pre-format archive before the set of record reports", async () => {
+  const fx = mediaFixture();
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const bytes = await sampleImageBytes({ width: 1600, height: 1067, seed: 51 });
+  const committed = await upload(fx.media, susan, bytes);
+  await fx.mod.postService.create({
+    accessToken: susan.token,
+    payload: { type: "photo", mediaRefs: [committed.mediaId], caption: "the pier" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: [committed.mediaId], caption: "the pier" }),
+  });
+
+  // Simulate the full pre-PORCH-044 archive: no media-geometry stamp on
+  // the original, every rendition row at the byte-derivative format.
+  await fx.collections.media_assets.updateOne(
+    { _id: committed.mediaId },
+    { $set: { width: undefined, height: undefined } },
+  );
+  for (const row of await fx.collections.media_assets.find({ networkId: FAMILY, originalId: committed.mediaId, kind: "rendition" })) {
+    await fx.collections.media_assets.updateOne({ _id: row._id }, { $set: { format: "porchlight-rendition/1" } });
+  }
+
+  // A feed read upgrades the archive IN PLACE before hydrating: the
+  // reported addresses are the stored ones (a stale content address would
+  // make every surface's rendition URL 404 against the healed archive).
+  const { posts } = await fx.mod.feedService.timeline({ accessToken: susan.token });
+  const view = posts.find((row) => (row.mediaRefs ?? []).includes(committed.mediaId));
+  const meta = view.mediaMeta[committed.mediaId];
+  assert.ok(meta);
+  const storedOriginal = await fx.collections.media_assets.findOne({ _id: committed.mediaId });
+  assert.ok(storedOriginal.width && storedOriginal.height, "the read heal stamps the original's display dims");
+  for (const rung of meta.renditions) {
+    assert.ok(rung.width > 0 && rung.height > 0);
+  }
+  const rows = await fx.collections.media_assets.find({ networkId: FAMILY, originalId: committed.mediaId, kind: "rendition" });
+  assert.ok(rows.length);
+  for (const row of rows) {
+    assert.equal(row.format, "porchlight-rendition/2");
+    assert.ok(row.width && row.height);
+  }
+  const album = rows.find((row) => row.renditionKind === "album");
+  const served = await fx.media.serveRendition({ accessToken: susan.token, mediaId: committed.mediaId, renditionKind: "album" });
+  assert.equal(served.sha256, album.sha256, "the hydrated address answers at the content-addressed URL");
+
+  // Idempotent per archive: a second feed read heals nothing.
+  const shas = rows.map((row) => row.sha256).sort();
+  await fx.mod.feedService.timeline({ accessToken: susan.token });
+  const rowsAgain = await fx.collections.media_assets.find({ networkId: FAMILY, originalId: committed.mediaId, kind: "rendition" });
+  assert.deepEqual(rowsAgain.map((row) => row.sha256).sort(), shas);
+});
+
+test("PORCH-044: a pre-format video archive generates its poster + playable set on member read", async () => {
+  const fx = mediaFixture({ chunkSize: 1024 * 1024 });
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const clip = await mediaVideoUpload(fx, susan, await sampleVideoBytes({ seconds: 1 }));
+
+  // The pre-PORCH-044 vocabulary knew only the image rungs: rewrite the
+  // video's rendition rows into that shape — derivative feed-thumb/detail
+  // rows and NO poster or playable at all — so a member read of the
+  // playable rendition must upgrade the archive, not fail
+  // E_RENDITION_NOT_FOUND forever.
+  await fx.collections.media_assets.updateOne(
+    { _id: clip.mediaId },
+    { $set: { width: undefined, height: undefined, durationSeconds: undefined } },
+  );
+  const ingestRows = await fx.collections.media_assets.find({ networkId: FAMILY, originalId: clip.mediaId, kind: "rendition" });
+  assert.deepEqual(ingestRows.map((row) => row.renditionKind).sort(), ["playable", "poster"]);
+  const posterRow = ingestRows.find((row) => row.renditionKind === "poster");
+  const playableRow = ingestRows.find((row) => row.renditionKind === "playable");
+  await fx.collections.media_assets.updateOne({ _id: posterRow._id }, { $set: { renditionKind: "feed-thumb", format: "porchlight-rendition/1" } });
+  await fx.collections.media_assets.updateOne({ _id: playableRow._id }, { $set: { renditionKind: "detail", format: "porchlight-rendition/1" } });
+
+  const served = await fx.media.serveRendition({ accessToken: susan.token, mediaId: clip.mediaId, renditionKind: "playable" });
+  assert.ok(served.bytes.length > 0);
+  assert.equal(served.contentType, "video/mp4");
+  const rows = await fx.collections.media_assets.find({ networkId: FAMILY, originalId: clip.mediaId, kind: "rendition" });
+  assert.deepEqual(rows.map((row) => row.renditionKind).sort(), ["playable", "poster"], "the old derivative rows are gone; the video set of record replaced them");
+  for (const row of rows) assert.equal(row.format, "porchlight-rendition/2");
+
+  const [hydrated] = await fx.media.withMediaMeta([{ mediaRefs: [clip.mediaId] }], FAMILY);
+  const meta = hydrated.mediaMeta[clip.mediaId];
+  assert.ok(meta.poster && meta.poster.width > 0);
+  assert.equal(meta.renditions.length, 1);
+  assert.equal(meta.renditions[0].kind, "playable");
+  assert.ok(meta.width > 0 && meta.height > 0, "hydration carries the stamped display dims (layout reserve)");
+  const stored = await fx.collections.media_assets.findOne({ _id: clip.mediaId });
+  assert.ok(stored.width && stored.height && stored.durationSeconds);
+});
+
 test("PORCH-044: every feed surface hydrates mediaMeta — the rendition set of record", async () => {
   const fx = mediaFixture({ chunkSize: 1024 * 1024 });
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });

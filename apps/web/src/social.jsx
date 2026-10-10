@@ -12,6 +12,7 @@ import {
   playableVideoUrl, posterUrl, rungKindForViewport,
 } from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
+import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from './reactions.js';
 import { groupRows, groupMemberRows, canManageGroup, addableCandidates } from './groups.js';
@@ -72,6 +73,15 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
   const direct = Boolean(meta && actions?.mediaTransport);
   const [resource, setResource] = useState(null);
   const [loadError, setLoadError] = useState('');
+  // Boot-window retry (PORCH-044): the first direct render can race the
+  // rendition worker's credential relay (a fresh worker install resets its
+  // token state). The worker parks and retries; this is the last-line
+  // retry if a request still slips through — one remount after the boot
+  // window has settled, the content-addressed URL answering from the
+  // worker's cache on the second try. Bounded: exactly one retry per media
+  // item — a genuinely broken rendition surfaces its error for real.
+  const [attempt, setAttempt] = useState(0);
+  const retriedRef = useRef(false);
   const operation = useOperation();
   const getMedia = actions?.getMedia;
   const origin = post?.origin ?? originOf(post);
@@ -82,22 +92,33 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
     // hydrated mediaMeta (a stale pre-PORCH-044 timeline or hub) keeps the
     // pre-PORCH-044 behavior — its renditions are not decodable, so the
     // bytes that render at all are the explicit original.
+    // Feed reads arrive on a cadence (arrival poll, writes, reconnect), so
+    // the identity-keyed blob cache (media-blob.js) answers every repeat
+    // request: the SAME object URL re-serves — no second network read, no
+    // revoke, no media remount (the page-visible reload churn).
+    const kind = meta ? rungKindForViewport(meta, window.innerWidth, window.devicePixelRatio) : 'original';
+    const version = kind ? (meta?.renditions?.find((rung) => rung.kind === kind)?.sha256 ?? null) : null;
+    const identity = mediaBlobKey({ origin, mediaId: id, kind: kind ?? 'original', version });
+    const posterSha = post.type === 'video' ? (meta?.poster?.sha256 ?? null) : null;
+    const posterIdentity = posterSha ? mediaBlobKey({ origin, mediaId: id, kind: 'poster', version: posterSha }) : null;
+    const cached = readMediaBlob(identity);
+    if (cached) {
+      setResource({
+        blob: cached.blob,
+        url: cached.url,
+        posterUrl: posterIdentity ? (readMediaBlob(posterIdentity)?.url ?? null) : null,
+        ...(cached.shape ?? {}),
+      });
+      return undefined;
+    }
     let active = true;
-    let url;
-    let posterUrlObj;
     setResource(null);
     setLoadError('');
-    const kind = meta ? rungKindForViewport(meta, window.innerWidth, window.devicePixelRatio) : 'original';
+    const posterPromise = posterIdentity ? getMedia(id, 'poster', origin, posterSha).catch(() => null) : null;
     Promise.resolve().then(() => {
       if (typeof getMedia !== 'function') throw new Error('Media is not available here yet.');
-      const version = kind ? meta?.renditions?.find((rung) => rung.kind === kind)?.sha256 : null;
       const bytesPromise = getMedia(id, kind ?? 'original', origin, version);
-      if (post.type === 'video' && meta?.poster?.sha256) {
-        // The poster rides the video post's own rendition set in fallback
-        // mode too: poster + playable, fetched through the authorized call.
-        return Promise.all([bytesPromise, getMedia(id, 'poster', origin, meta.poster.sha256).catch(() => null)]);
-      }
-      return Promise.all([bytesPromise, Promise.resolve(null)]);
+      return Promise.all([bytesPromise, posterPromise]);
     }).then(async ([blob, posterBlob]) => {
       if (!(blob instanceof Blob)) throw new Error('Your hub did not return the media.');
       if (!active) return;
@@ -106,13 +127,13 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
       // media — dimensions resolving can never relayout the feed, and the
       // only placeholder is this spinner (no shimmer anywhere).
       const shape = (meta && meta.width) ? { width: meta.width, height: meta.height } : await mediaShape(blob, post.type);
-      if (active) {
-        url = URL.createObjectURL(blob);
-        if (posterBlob instanceof Blob) posterUrlObj = URL.createObjectURL(posterBlob);
-        setResource({ blob, url, posterUrl: posterUrlObj ?? null, ...shape });
-      }
+      const url = URL.createObjectURL(blob);
+      const posterUrlObj = posterBlob instanceof Blob ? URL.createObjectURL(posterBlob) : null;
+      const row = putMediaBlob(identity, { url, blob, shape });
+      if (posterIdentity && posterUrlObj) putMediaBlob(posterIdentity, { url: posterUrlObj, blob: posterBlob });
+      setResource({ blob, url: row.url, posterUrl: posterUrlObj ?? null, ...shape });
     }).catch((error) => { if (active) setLoadError(messageOf(error)); });
-    return () => { active = false; if (url) URL.revokeObjectURL(url); if (posterUrlObj) URL.revokeObjectURL(posterUrlObj); };
+    return () => { active = false; };
   }, [id, getMedia, origin, direct]);
   // Timeline media treatment (PORCH-043): natural aspect ratio governs; the
   // 85vh object-fit-contain cap is the single exception for extreme images.
@@ -164,8 +185,19 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
   // rendition loads behind it.
   const videoPoster = meta ? posterUrl(meta, origin) : null;
   const videoPlayable = meta ? playableVideoUrl(meta, origin) : null;
+  // Rendition elements remount once for the boot-window retry: key=attempt
+  // re-issues the same content-addressed request after the window settles.
+  const directImg = post.type === 'photo' && direct;
+  const directVideo = post.type === 'video' && direct;
+  useEffect(() => {
+    if ((!directImg && !directVideo) || retriedRef.current) return undefined;
+    if (!loadError) return undefined;
+    retriedRef.current = true;
+    const timer = setTimeout(() => { setLoadError(''); setAttempt((n) => n + 1); }, 1200);
+    return () => clearTimeout(timer);
+  }, [loadError, directImg, directVideo]);
   return <Box>
-    {post.type === 'photo' && direct && <Box component="img"
+    {directImg && <Box key={`img-${attempt}`} component="img"
       src={renditionSrc(meta, origin) ?? playableVideoUrl(meta, origin)}
       srcSet={renditionSrcset(meta, origin) || undefined}
       sizes={detail ? detailImageSizes(meta) : timelineImageSizes()}
@@ -174,7 +206,7 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
       sx={{ ...mediaSx, ...fitSx }} />}
     {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
       sx={{ ...mediaSx, ...fitSx }} />}
-    {post.type === 'video' && direct && <Box component="video" src={videoPlayable} poster={videoPoster} controls preload="metadata"
+    {directVideo && <Box key={`vid-${attempt}`} component="video" src={videoPlayable} poster={videoPoster} controls preload="metadata"
       onLoadedMetadata={(event) => { if (!meta.width && event.target) setResource({ width: event.target.videoWidth, height: event.target.videoHeight }); }}
       onError={() => setLoadError('Your hub did not return the media.')}
       sx={{ ...mediaSx, ...fitSx }} />}
