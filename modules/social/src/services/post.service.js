@@ -100,8 +100,11 @@ export class PostService {
    *   of record, display dims) so clients never fetch rendition metadata
    *   per item (PORCH-044 ac-2).
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
+   * @param {import("./link-preview.service.js").LinkPreviewService} [deps.previews]
+   *   Link previews (PORCH-052) — compose-time attach validation, view
+   *   hydration, and the deletion cascade for ingested og:image artifacts.
    */
-  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime }) {
+  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime, previews }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -112,6 +115,7 @@ export class PostService {
     this.groups = groups;
     this.membership = membership;
     this.media = media;
+    this.previews = previews ?? null;
     this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
@@ -142,17 +146,18 @@ export class PostService {
       throw typedError("E_NOT_PERMITTED", POST_MESSAGES.E_NOT_PERMITTED);
     }
     await this.verifyWrite({ networkId, did: session.did, deviceId: session.deviceId, payload, signature });
-    const post = await this.#buildPost({ networkId, did: session.did, payload, signature });
+    const { post, preview } = await this.#buildPost({ networkId, did: session.did, payload, signature });
     await this.posts.insertOne(post);
     await this.audit("post_create", { networkId, did: session.did, detail: { postId: post._id, type: post.type } });
     // PORCH-047: the origin's live timeline learns the post the moment the
     // commit lands — post.created, content-only payload (postView), to the
-    // origin room only.
+    // origin room only. The attach-time preview metadata rides content
+    // only (no engagement data exists on a preview record).
     await this.realtime?.published({
       networkId,
       type: "post.created",
       postId: post._id,
-      content: postView(post),
+      content: { ...postView(post), preview: this.previewPayload(preview) },
     });
     return { post: (await this.memberViews([post], networkId))[0], did: session.did };
   }
@@ -178,10 +183,11 @@ export class PostService {
     return { posts: await this.memberViews(rows, session.networkId), did: session.did };
   }
 
-  /** Member views with attribution and the hydrated mediaMeta (PORCH-044). */
+  /** Member views with attribution, mediaMeta (PORCH-044), and previews (PORCH-052). */
   async memberViews(postRows, networkId) {
     const attributed = await this.#withAttribution(postRows.map((post) => this.view(post)), networkId);
-    return this.media.withMediaMeta(attributed, networkId);
+    const withMeta = await this.media.withMediaMeta(attributed, networkId);
+    return this.previews ? await this.previews.withViews(withMeta, networkId) : withMeta;
   }
 
   /**
@@ -245,6 +251,15 @@ export class PostService {
     // to the member's posts.
     const sweptPostIdSet = new Set(authoredPosts.map((post) => post._id));
     const sweptDerived = (await this.derivedData.find({ networkId })).filter((row) => sweptPostIdSet.has(row.postId));
+    // Link previews (PORCH-052): the member's posts' references plus every
+    // reply they authored elsewhere die with the sweep — same og:image
+    // cascade coverage as the single-post cascade.
+    const previewIds = [...authoredPosts, ...theirComments]
+      .map((row) => row.previewId)
+      .filter(Boolean);
+    const previewCascade = this.previews
+      ? await this.previews.cascadeRows({ networkId, previewIds })
+      : { parts: [], blobKeys: [] };
 
     const snapshot = [
       { collection: this.posts, rows: authoredPosts },
@@ -254,8 +269,10 @@ export class PostService {
       { collection: this.notifications, rows: repliesToTheirComments },
       { collection: this.derivedData, rows: sweptDerived },
       ...keyed,
+      ...previewCascade.parts,
     ];
     await this.runTransactional(snapshot);
+    await this.previews?.releaseBlobs(previewCascade.blobKeys);
 
     // Surviving posts the member interacted with must forget those
     // interactions in their rank-input counters.
@@ -292,6 +309,14 @@ export class PostService {
     const notifications = await this.notifications.find({ postId: post._id });
     const derived = await this.derivedData.find({ postId: post._id });
     const keyed = await this.#keyedRows({ networkId, posts: [post] });
+    // Link previews (PORCH-052): the post's reference and every reply's
+    // reference die with the parent — including each ingest's og:image
+    // asset rows, rendition rows, and ledger rows that survive no other
+    // reference (the content-addressed bytes die with the last reference).
+    const previewIds = [post.previewId, ...comments.map((comment) => comment.previewId)].filter(Boolean);
+    const previewCascade = this.previews
+      ? await this.previews.cascadeRows({ networkId, previewIds })
+      : { parts: [], blobKeys: [] };
 
     const snapshot = [
       { collection: this.posts, rows: [post] },
@@ -301,8 +326,10 @@ export class PostService {
       { collection: this.notifications, rows: notifications },
       { collection: this.derivedData, rows: derived },
       ...keyed,
+      ...previewCascade.parts,
     ];
     await this.runTransactional(snapshot);
+    await this.previews?.releaseBlobs(previewCascade.blobKeys);
     await this.audit("post_delete", {
       networkId,
       did: actorDid ?? post.authorId,
@@ -424,25 +451,48 @@ export class PostService {
     if (groupId !== null) {
       await this.#assertGroupContainment({ networkId, did, groupId });
     }
+    // Link preview (PORCH-052): one removable reference validated against
+    // the origin's rows. An invalid reference degrades to no preview —
+    // compose never blocks (ac-3); the URL itself still rides the body as
+    // a plain link.
+    const preview = payload.previewId ? await this.#attachPreview({ networkId, previewId: payload.previewId }) : null;
     const displayHint =
       typeof payload.crossPostRef === "string" && payload.crossPostRef.length > 0
         ? { crossPostOf: payload.crossPostRef }
         : null;
     return {
-      _id: `post_${crypto.randomUUID()}`,
-      originNetworkId: networkId,
-      authorId: did,
-      type,
-      groupId,
-      deviceSignature: signature,
-      mediaRefs,
-      caption: typeof payload.caption === "string" ? payload.caption : null,
-      body: type === "text" ? body : null,
-      visibility: "members-only",
-      displayHint,
-      interactionCounters: { ...ZERO_COUNTERS },
-      createdAt: new Date().toISOString(),
+      post: {
+        _id: `post_${crypto.randomUUID()}`,
+        originNetworkId: networkId,
+        authorId: did,
+        type,
+        groupId,
+        deviceSignature: signature,
+        mediaRefs,
+        previewId: preview?._id ?? null,
+        caption: typeof payload.caption === "string" ? payload.caption : null,
+        body: type === "text" ? body : null,
+        visibility: "members-only",
+        displayHint,
+        interactionCounters: { ...ZERO_COUNTERS },
+        createdAt: new Date().toISOString(),
+      },
+      preview,
     };
+  }
+
+  /**
+   * Preview attach (PORCH-052): the compose payload carries the reference
+   * id the resolve call produced; only that origin's own rows attach, so
+   * containment holds and a stale/foreign id degrades to no preview.
+   */
+  async #attachPreview({ networkId, previewId }) {
+    return this.previews?.assertAttachable({ networkId, previewId }) ?? null;
+  }
+
+  /** The attach-time preview view for a live-event payload (content only). */
+  previewPayload(previewRow) {
+    return this.previews?.previewView(previewRow) ?? null;
   }
 
   /** Groups are within-network containers; membership ⊂ network membership. */
@@ -473,6 +523,7 @@ export function postView(post) {
     type: post.type,
     groupId: post.groupId,
     mediaRefs: post.mediaRefs,
+    previewId: post.previewId ?? null,
     caption: post.caption,
     body: post.body,
     visibility: post.visibility,

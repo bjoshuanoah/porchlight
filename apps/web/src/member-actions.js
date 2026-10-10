@@ -18,10 +18,17 @@ export async function publishPost(connection, payload) {
   return signed(connection, "social/posts", payload);
 }
 
-export async function publishReply(connection, post, body, parentId = null, mentions = []) {
+export async function publishReply(connection, post, body, parentId = null, mentions = [], previewId = null) {
   return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/comments`, {
-    postId: post._id || post.id, body, parentId, mentions,
+    postId: post._id || post.id, body, parentId, mentions, previewId,
   });
+}
+
+// Link previews (PORCH-052): compose-time URL resolution — the HUB fetches
+// the third-party URL (bounded); the device signs the resolve the same way
+// it signs every write (the resolve may ingest an og:image original).
+export async function resolvePreview(connection, url) {
+  return signed(connection, "social/previews/resolve", { scope: "link-preview", url });
 }
 
 // Mention autocomplete (PORCH-037): the member types a NAME. The hub answers

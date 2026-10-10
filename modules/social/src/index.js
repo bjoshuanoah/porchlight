@@ -10,6 +10,7 @@ export * from "./services/invite.service.js";
 export * from "./services/membership.service.js";
 export * from "./services/quota.service.js";
 export * from "./services/media.service.js";
+export * from "./services/link-preview.service.js";
 export * from "./services/export.service.js";
 export * from "./services/media.store.js";
 export * from "./services/audit.service.js";

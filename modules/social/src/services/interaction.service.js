@@ -37,14 +37,16 @@ export class InteractionService {
    * @param {import("./membership.service.js").MembershipService} deps.membership
    * @param {import("./notification.service.js").NotificationService} deps.notifications
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
+   * @param {import("./link-preview.service.js").LinkPreviewService} [deps.previews]
    */
-  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime }) {
+  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
     this.votes = votes;
     this.membership = membership;
     this.notifications = notifications;
+    this.previews = previews ?? null;
     this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
@@ -79,6 +81,7 @@ export class InteractionService {
       parentId: parent === null ? null : parent._id,
       body,
       mentions,
+      previewId: (await this.previews?.assertAttachable({ networkId, previewId: payload.previewId }))?._id ?? null,
       deviceSignature: signature,
       createdAt: new Date().toISOString(),
     };
@@ -91,15 +94,19 @@ export class InteractionService {
       detail: { postId: payload.postId, commentId: comment._id },
     });
     // PORCH-047: reply.created to the origin room — content-only payload
-    // (the comment view; parentId rides it for nested replies). No vote
-    // writes emit events: votes modulate prominence internally only.
+    // (the comment view; parentId rides it for nested replies). The
+    // attach-time preview metadata rides content only. No vote writes emit
+    // events: votes modulate prominence internally only.
+    const commentContent = await this.previews
+      ? (await this.previews.withViews([InteractionService.commentView(comment)], networkId))[0]
+      : InteractionService.commentView(comment);
     await this.realtime?.published({
       networkId,
       type: "reply.created",
       postId: payload.postId,
-      content: InteractionService.commentView(comment),
+      content: commentContent,
     });
-    return { comment: (await this.#withAttribution([InteractionService.commentView(comment)], networkId))[0] };
+    return { comment: (await this.#withAttribution([commentContent], networkId))[0] };
   }
 
   /**
@@ -235,7 +242,8 @@ export class InteractionService {
     const session = await this.#requireSession({ accessToken, postId });
     const rows = await this.comments.find({ postId, networkId: session.networkId });
     rows.sort((a, b) => (a.createdAt > b.createdAt ? 1 : -1));
-    return { comments: await this.#withAttribution(rows.map((row) => InteractionService.commentView(row)), session.networkId) };
+    const views = await this.#withAttribution(rows.map((row) => InteractionService.commentView(row)), session.networkId);
+    return { comments: this.previews ? await this.previews.withViews(views, session.networkId) : views };
   }
 
   /** Reaction read for a member: as-authored emoji values, by member. */
@@ -264,6 +272,7 @@ export class InteractionService {
       authorDid: comment.authorDid,
       body: comment.body,
       mentions: comment.mentions,
+      previewId: comment.previewId ?? null,
       createdAt: comment.createdAt,
     };
   }

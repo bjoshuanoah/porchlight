@@ -254,7 +254,7 @@ test("ac-4: interaction views carry no vote material", async () => {
   const commentView = (await interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
   assert.deepEqual(
     Object.keys(commentView).sort(),
-    ["_id", "authorDid", "authorName", "body", "createdAt", "mentionNames", "mentions", "parentId", "postId"],
+    ["_id", "authorDid", "authorName", "body", "createdAt", "mentionNames", "mentions", "parentId", "postId", "previewId"],
   );
   // Mention names resolve at read time alongside the author name
   // (PORCH-037): one name per mention, aligned by position (null here

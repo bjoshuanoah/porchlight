@@ -18,13 +18,28 @@ export class ContentController {
    * @param {import("../services/realtime.service.js").RealtimeService} [deps.realtime]
    *   PORCH-047: the real-time surface (REST catch-up read). Absent on
    *   assemblies built before an assembled realtime service exists.
+   * @param {import("../services/link-preview.service.js").LinkPreviewService} [deps.previews]
+   *   Link previews (PORCH-052): the compose-time URL resolution surface.
    */
-  constructor({ posts, interactions, notifications, realtime }) {
+  constructor({ posts, interactions, notifications, realtime, previews }) {
     this.posts = posts;
     this.interactions = interactions;
     this.notifications = notifications;
+    this.previews = previews ?? null;
     this.realtime = realtime ?? null;
   }
+
+  /**
+   * POST /previews/resolve — the compose-time preview resolution surface
+   * (PORCH-052 ac-3): the hub resolves one pasted URL with bounded fetch
+   * and answers with the preview record OR the plain-link degrade. Member
+   * devices never fetch third-party metadata; submit is never blocked by
+   * a resolution result.
+   */
+  resolvePreview = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return this.#delegate(res, () => this.previews.resolve({ accessToken: this.bearer(req), payload, signature }));
+  };
 
   /** POST /posts — signed post creation (ac-1; cross-post via crossPostRef, ac-2). */
   createPost = async (req, res) => {
@@ -180,6 +195,12 @@ export class ContentController {
       E_EMOJI_REQUIRED: 400,
       E_REACTION_EXISTS: 409,
       E_INVALID_VOTE: 400,
+      E_PREVIEW_URL_REQUIRED: 400,
+      E_PREVIEW_FETCH_FAILED: 502,
+      E_PREVIEW_CONTENT_TYPE: 415,
+      E_PREVIEW_TOO_LARGE: 413,
+      E_PREVIEW_REDIRECTS: 502,
+      E_PREVIEW_HOST_PRIVATE: 422,
       E_GROUP_UNKNOWN: 404,
       E_GROUP_NOT_MEMBER: 403,
       E_NOTIFICATION_NOT_MEMBER: 403,

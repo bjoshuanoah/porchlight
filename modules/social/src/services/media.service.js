@@ -319,6 +319,63 @@ export class MediaService {
   }
 
   /**
+   * External (link-preview og:image) ingest (PORCH-052): the identical
+   * media pipeline path to member uploads — quota admission with the disk
+   * gate, hub-side pixel probe, content-addressed immutable original,
+   * artifact ledger row, rendition ladder — minus the member-signature
+   * surface: the signer is the HUB itself (the fetched third-party asset
+   * is ingested at compose time, and no device ever holds those bytes).
+   * `did` and `deviceSignature` are null on the asset row; origin
+   * containment still keys every subsequent serve to the networkId.
+   */
+  async ingestExternalImage({ networkId, bytes, contentType } = {}) {
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+      throw typedError("E_MEDIA_EMPTY", MESSAGES.E_MEDIA_UNDECODABLE);
+    }
+    await this.#diskGate(networkId);
+    await this.quota.admitUpload({ networkId, bytes: bytes.length, kind: "original" });
+    const sourceMeta = await this.#probeOriginal(bytes, contentType);
+    if (!sourceMeta) {
+      throw typedError("E_MEDIA_UNDECODABLE", MESSAGES.E_MEDIA_UNDECODABLE);
+    }
+    const blobKey = sha256Hex(bytes);
+    await this.blobs.put(blobKey, bytes);
+    const mediaId = `med_${crypto.randomUUID()}`;
+    const limits = await this.quota.limits({ networkId });
+    const asset = {
+      _id: mediaId,
+      networkId,
+      did: null,
+      kind: "original",
+      contentType,
+      blobKey,
+      sha256: blobKey,
+      bytes: bytes.length,
+      width: sourceMeta?.width ?? null,
+      height: sourceMeta?.height ?? null,
+      durationSeconds: sourceMeta?.durationSeconds ?? null,
+      immutable: true,
+      deviceSignature: null,
+      uploadId: null,
+      createdAt: new Date().toISOString(),
+    };
+    await this.assets.insertOne(asset);
+    await this.quota.recordArtifact({
+      networkId,
+      kind: "original",
+      bytes: asset.bytes,
+      retentionDays: limits.retentionDays,
+      sourceId: mediaId,
+    });
+    const renditions = await this.generateRenditions(mediaId, { retentionDays: limits.retentionDays });
+    await this.audit("link_preview_ingest", {
+      networkId,
+      detail: { mediaId, bytes: asset.bytes, renditions: renditions.map((row) => row.kind) },
+    });
+    return mediaId;
+  }
+
+  /**
    * Rendition generation (ac-2/ac-4): the hub produces the rendition set
    * ON THE SERVER — never a device — from the immutable original: the
    * image rungs (feed-thumb, album, detail — width rungs clamped to the
