@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import { AddReactionOutlined } from '@mui/icons-material';
 import { tokens } from './theme.js';
+import { photoFirst } from './photo-first.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction } from './reactions.js';
@@ -76,18 +77,56 @@ function MediaItem({ id, post, actions, detail = false }) {
     Promise.resolve().then(() => {
       if (typeof getMedia !== 'function') throw new Error('Media is not available here yet.');
       return getMedia(id, 'original', origin);
-    }).then((blob) => {
+    }).then(async (blob) => {
       if (!(blob instanceof Blob)) throw new Error('Your hub did not return the media.');
+      if (!active) return;
+      // PORCH-043 ac-7: decode before the first paint, then reserve layout
+      // space through CSS aspect-ratio in the same render that shows the
+      // media — dimensions resolving can never relayout the feed, and the
+      // only placeholder is this spinner (no shimmer anywhere).
+      const shape = await mediaShape(blob, post.type);
       if (active) {
         url = URL.createObjectURL(blob);
-        setResource({ blob, url });
+        setResource({ blob, url, ...shape });
       }
     }).catch((error) => { if (active) setLoadError(messageOf(error)); });
     return () => { active = false; if (url) URL.revokeObjectURL(url); };
   }, [id, getMedia, origin]);
+  // Timeline media treatment (PORCH-043): natural aspect ratio governs; the
+  // 85vh object-fit-contain cap is the single exception for extreme images.
+  // Media escapes the text rail — edge-to-edge against the viewport on
+  // mobile (the post container is already full-width) and against the card
+  // interior on desktop (margin: 0 calc(var(--post-pad) * -1)); media never
+  // nests inside another padded media card (ac-1, ac-6).
+  const media = post.type === 'photo' || post.type === 'video';
+  const breakout = !detail && media;
+  const mediaSx = breakout ? {
+    // img/video are replaced elements: the breakout needs both the negative
+    // rail margins and the matching width so the element spans the full
+    // post-container width (100% + both rail paddings).
+    width: { xs: `calc(100% + ${2 * photoFirst.rail}px)`, lg: `calc(100% + ${2 * photoFirst.postPad}px)` },
+    mx: { xs: -photoFirst.rail / 8, lg: -(photoFirst.postPad / 8) },
+    borderRadius: { xs: '0px', lg: `${photoFirst.desktopMediaRadius}px` },
+    overflow: 'hidden',
+    display: 'block',
+    bgcolor: 'background.default',
+  } : {
+    display: 'block',
+    width: media || post.type === 'audio' ? '100%' : undefined,
+    maxHeight: detail ? 720 : undefined,
+    borderRadius: detail ? 2 : undefined,
+    bgcolor: 'background.default',
+  };
+  // Layout reservation (ac-7): CSS aspect-ratio in place from the first
+  // paint; the 85vh cap only letterboxes (object-fit contain), never crops.
+  const fitSx = media && (resource?.width ?? 0) && (resource?.height ?? 0)
+    ? { aspectRatio: `${resource.width} / ${resource.height}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' }
+    : {};
   return <Box>
-    {resource && post.type === 'photo' && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy" sx={{ display: 'block', width: '100%', maxHeight: detail ? 720 : 440, objectFit: 'contain', borderRadius: 2, bgcolor: 'background.default' }} />}
-    {resource && post.type === 'video' && <Box component="video" src={resource.url} controls preload="metadata" sx={{ display: 'block', width: '100%', maxHeight: detail ? 720 : 440 }} />}
+    {resource && post.type === 'photo' && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
+      sx={{ ...mediaSx, ...fitSx }} />}
+    {resource && post.type === 'video' && <Box component="video" src={resource.url} controls preload="metadata"
+      sx={{ ...mediaSx, ...fitSx }} />}
     {resource && post.type === 'audio' && <Box component="audio" src={resource.url} controls preload="none" sx={{ width: '100%' }} />}
     {!resource && !loadError && <CircularProgress size={20} aria-label="Loading media" />}
     {loadError && <Alert severity="error">{loadError}</Alert>}
@@ -100,15 +139,42 @@ function MediaItem({ id, post, actions, detail = false }) {
       anchor.download = `${id}`;
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    })}>Get original</Button>
+    })} sx={{ mt: 1, px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Get original</Button>
     {operation.error && <Alert severity="error">{operation.error}</Alert>}
   </Box>;
+}
+
+// PORCH-043 ac-7: natural dimensions resolve before the media's first paint,
+// so the aspect-ratio reservation is in place from the moment the media
+// renders. Photos decode through createImageBitmap; videos read their
+// intrinsic ratio from metadata.
+async function mediaShape(blob, type) {
+  if (type === 'photo') {
+    const bitmap = await createImageBitmap(blob);
+    const shape = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    return shape;
+  }
+  if (type === 'video') {
+    return new Promise((resolve, reject) => {
+      const element = document.createElement('video');
+      element.preload = 'metadata';
+      const done = (value) => { element.src = ''; resolve(value); };
+      element.onloadedmetadata = () => done({ width: element.videoWidth, height: element.videoHeight });
+      element.onerror = () => reject(new Error('Your hub did not return playable video.'));
+      element.src = URL.createObjectURL(blob);
+    });
+  }
+  return {};
 }
 
 function Media({ post, actions, detail = false }) {
   const media = Array.isArray(post?.mediaRefs) ? post.mediaRefs : [];
   if (!media.length) return null;
-  return <Stack spacing={1} sx={{ mt: 2 }}>
+  // PORCH-043 rhythm: caption→media 12px on the timeline surface; multiple
+  // media items render flush (continuous album); detail keeps its own
+  // treatment. PORCH-045 replaces this stack with the ruled carousel.
+  return <Stack spacing={0} sx={{ mt: detail ? 2 : photoFirst.spacing.captionMedia / 8 }}>
     {media.map((entry, index) => {
       const id = typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id;
       return id ? <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} detail={detail} /> : null;
@@ -125,7 +191,7 @@ function Media({ post, actions, detail = false }) {
 // adds it: change or clear, never an error (ac-2, ac-3). The row reflection
 // lives in the shared reactions module, so the timeline card and the post
 // detail reflect the same origin conversation through one routine (PORCH-038).
-function PresentReactions({ post, data, actions, reactionState }) {
+function PresentReactions({ post, data, actions, reactionState, spacingY = 2 }) {
   // Controlled mode (PORCH-041 ac-4): the detail card and the conversation
   // column reflect ONE origin conversation — when reactionState is provided
   // both bars render the PostDetail owner's rows and every toggle lands in
@@ -157,7 +223,7 @@ function PresentReactions({ post, data, actions, reactionState }) {
     spacing={1}
     alignItems="center"
     flexWrap="wrap"
-    sx={{ mt: 2 }}
+    sx={{ mt: spacingY }}
     aria-label="Reactions from your family"
   >
     {[...new Set((rows ?? []).map((row) => row.emoji))].map((emoji) => {
@@ -207,35 +273,60 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   const operation = useOperation();
   if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
   const openPost = () => navigate?.(`/posts/${encodeURIComponent(identityOf(post))}`);
-  return <Card>
-    <CardContent sx={{ p: "20px", "&:last-child": { pb: "20px" } }}>
+  // PORCH-043 mobile post container (below 900px): width 100%, no radius,
+  // no side borders, no shadow — the Feed's 1px warm-neutral divider
+  // provides post separation (continuous album, no card gap mode). Desktop
+  // keeps the Oct 9 contained card (ac-5, ac-6).
+  const cardSx = detail ? undefined : {
+    width: '100%',
+    borderRadius: { xs: 0, lg: '14px' },
+    border: { xs: 'none', lg: `1px solid ${tokens.border}` },
+    boxShadow: { xs: 'none', lg: '0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)' },
+  };
+  // PORCH-043 timeline actions (mobile chrome ruling): 14px/600 amber text,
+  // no backgrounds or borders, ≥44px touch targets, distributed evenly. The
+  // detail surface keeps PORCH-041's own treatment (supersession is scoped
+  // to the timeline rebuild).
+  const actionSx = detail
+    ? undefined
+    : { fontSize: 14, fontWeight: 600, justifyContent: 'center' };
+  return <Card sx={cardSx}>
+    <CardContent sx={{ p: detail ? '20px' : { xs: '16px', lg: '20px' }, '&:last-child': { pb: detail ? '20px' : { xs: '16px', lg: '20px' } } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
         <Stack direction="row" spacing={1.5} alignItems="center">
           {/* Detail card treatment (PORCH-041 spec): 40px avatar header on the detail surface. */}
           <Avatar sx={{ width: detail ? 40 : 36, height: detail ? 40 : 36, fontSize: detail ? 17 : 15 }}>{(post.author?.name ?? post.authorName ?? memberName(post.authorId, data)).trim().charAt(0).toUpperCase()}</Avatar>
           <Box>
-            <Typography variant="body2" fontWeight={600} color="text.primary">{post.author?.name ?? post.authorName ?? memberName(post.authorId, data)}</Typography>
+            {/* Header (PORCH-043 chrome): author 15px/600; 24px outlined
+                network chip with thin border and 12px text; date muted; the
+                column rides 36px avatars on the timeline surface. */}
+            <Typography variant="body2" fontWeight={600} fontSize={15} color="text.primary">{post.author?.name ?? post.authorName ?? memberName(post.authorId, data)}</Typography>
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-              <Chip label={`From ${originName(post, data)}`} size="small" variant="outlined" />
-              {post.groupName && <Chip label={post.groupName} size="small" sx={{ bgcolor: 'porchlight.amberSoft', color: 'primary.main', fontSize: '0.6875rem' }} />}
+              <Chip label={`From ${originName(post, data)}`} size="small" variant="outlined" sx={{ fontSize: '0.75rem', height: '24px' }} />
+              {post.groupName && <Chip label={post.groupName} size="small" sx={{ bgcolor: 'porchlight.amberSoft', color: 'primary.main', fontSize: '0.6875rem', height: '24px' }} />}
               <Typography variant="caption" color="porchlight.muted">{dateOf(post.createdAt)}</Typography>
             </Stack>
           </Box>
         </Stack>
         <Button size="small" disabled={operation.busy} onClick={() => operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); })}>Hide</Button>
       </Stack>
-      {post.body && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px' }}>{post.body}</Typography>}
-      {post.caption && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px' }}>{post.caption}</Typography>}
+      {/* Rhythm (PORCH-043 vertical table): 25–30% tighter post-internal
+          spacing; the body line stays 16px/25px on the timeline with the
+          readable 68ch length. */}
+      {(post.body || post.caption) && <Box sx={{ mt: detail ? 2 : 1 }}>
+        {post.body && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch' }}>{post.body}</Typography>}
+        {post.caption && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch', ...(post.body ? { mt: 0.5 } : {}) }}>{post.caption}</Typography>}
+      </Box>}
       <Media post={post} actions={actions} detail={detail} />
-      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2 }}>
-        <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'up'))}>Lift</Button>
-        <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'down'))}>Lower</Button>
+      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2, ...(detail ? {} : { justifyContent: 'space-between' }) }}>
+        <Button disabled={operation.busy || data.offline} sx={actionSx} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'up'))}>Lift</Button>
+        <Button disabled={operation.busy || data.offline} sx={actionSx} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'down'))}>Lower</Button>
         {/* Card affordances (PORCH-038): quiet react and reply controls per
             the product intent. The detail surface stays the full conversation
             view; Open conversation remains available but is no longer the
             only door. No engagement counts render on any surface. */}
-        {!detail && <Button size="small" aria-expanded={replying} disabled={data.offline} onClick={() => setReplying(!replying)}>Reply</Button>}
-        {!detail && <Button size="small" onClick={openPost}>Open conversation</Button>}
+        {!detail && <Button aria-expanded={replying} disabled={data.offline} sx={actionSx} onClick={() => setReplying(!replying)}>Reply</Button>}
+        {!detail && <Button sx={actionSx} onClick={openPost}>Open conversation</Button>}
       </Stack>
       {!detail && replying && !data.offline && <ReplyForm
         label="Write a reply"
@@ -244,7 +335,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
         actions={actions}
         onSubmit={(body, mentions) => invoke(actions, 'submitReply', post, body, null, mentions)}
       />}
-      <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />
+      <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} spacingY={detail ? 2 : photoFirst.spacing.actionsReactions / 8} />
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
     </CardContent>
   </Card>;
@@ -254,9 +345,19 @@ function Heading({ title, subtitle }) {
   return <Box sx={{ mb: 3 }}><Typography variant="h1" component="h1" fontWeight={650}>{title}</Typography>{subtitle && <Typography variant="body1" color="text.secondary">{subtitle}</Typography>}</Box>;
 }
 
+// PORCH-043: the mobile feed breaks out of the page gutter so posts span
+// the full viewport (ac-1) and post separation is the 1px warm-neutral
+// divider — continuous-album mode, no card gap (ac-5). Desktop keeps the
+// contained 16px-gap card river (ac-6). Breakout values match the shell's
+// page padding (theme tokens: 16px mobile, 20px desktop — main.jsx).
+const feedBreakout = { mx: { xs: -2, lg: 0 } };
+const albumDivider = <Box sx={{ height: '1px', flexShrink: 0, width: '100%', bgcolor: photoFirst.dividerColor, display: { xs: 'block', lg: 'none' } }} aria-hidden="true" />;
+
 function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
   const visible = rows(posts).filter((post) => visibleAtOrigin(post, data) && !hidden?.has(postKey(post)) && !actions?.isHidden?.(post));
-  return visible.length ? <Stack spacing={2}>{visible.map((post, index) => <PostCard key={postKey(post) || index} post={post} data={data} actions={actions} navigate={navigate} onHide={onHide} />)}</Stack> : <Alert severity="info">{empty}</Alert>;
+  return visible.length
+    ? <Box sx={feedBreakout}><Stack spacing={{ xs: 0, lg: 2 }} divider={albumDivider}>{visible.map((post, index) => <PostCard key={postKey(post) || index} post={post} data={data} actions={actions} navigate={navigate} onHide={onHide} />)}</Stack></Box>
+    : <Alert severity="info">{empty}</Alert>;
 }
 
 // Empty timeline (tokens): encouraging, never marketing — the porch-at-dusk

@@ -95,6 +95,16 @@ export const theme = createTheme({
       styleOverrides: { paper: { borderRadius: 18, boxShadow: "0 20px 60px rgba(18,32,51,.18)" } },
     },
     MuiTextField: { defaultProps: { variant: "outlined" } },
+    // PORCH-043 (Brian, Oct 14, 2026): the viewport locks (user-scalable=no),
+    // so involuntary iOS focus zoom is starved structurally instead: every
+    // text-entry control (composer, search, reply composer, PIN entry) keeps
+    // a computed font-size ≥ 16px. inputs, multiline textareas, and the MUI
+    // Select focus target all ride the .MuiInputBase-input class.
+    MuiInputBase: {
+      styleOverrides: {
+        input: { fontSize: "1rem" },
+      },
+    },
     // Front-door fields are 48px tall (spec: owner bootstrap and member join).
     // PORCH-035: resting input borders carry the token value (#E4E0D8) with no
     // residue from the focus fix — focus is MUI's neutral stronger border on
