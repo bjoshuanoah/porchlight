@@ -11,6 +11,24 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Porchlight · A place for family</title>
+    <script>
+      // PORCH-042 first-paint contract: the active mode resolves before the
+      // first render pass — stored per-origin choice (porchlight:mode in
+      // localStorage), System fallback follows prefers-color-scheme. The
+      // background sets inline so dark never flashes warm-cream.
+      (function () {
+        var dark;
+        try {
+          var stored = localStorage.getItem("porchlight:mode");
+          var mode = stored === "light" || stored === "dark" ? stored : "system";
+          dark = mode === "dark" || (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        } catch (e) { dark = false; }
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        document.documentElement.style.backgroundColor = dark ? "#17120E" : "#F7F5F0";
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", dark ? "#17120E" : "#F7F5F0");
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
