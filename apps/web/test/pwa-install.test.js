@@ -75,13 +75,16 @@ test("PORCH-051 ac-2: exactly one service worker registration exists in the app"
   assert.match(transport, /navigator\.serviceWorker\.register\("\/sw\.js", \{ scope: "\/" \}\)/);
 });
 
-test("PORCH-051 ac-2: the worker never intercepts or caches /api/** and never caches non-2xx", async () => {
+test("PORCH-051 ac-2 (repaired PORCH-052): /api/** other than the rendition serve paths is never intercepted or cached; non-2xx is never cached", async () => {
   const worker = await src("public/sw.js");
-  // The boundary guard: /api paths return before any respondWith, so the
-  // media-auth surface and live data are never intercepted or cache-served.
-  assert.match(worker, /if \(url\.pathname === "\/api" \|\| url\.pathname\.startsWith\("\/api\/"\)\) return;/);
-  // Non-rendition paths (which includes everything the shell and the hub
-  // API serve) never enter respondWith.
+  // Interception is scoped by the rendition filter alone — and it runs
+  // BEFORE any /api boundary check, because the genuine rendition URLs are
+  // /api/social/**/renditions/... and their Authorization must ride the
+  // worker (the early /api return PORCH-051 shipped 401'd every direct
+  // rendition; that ordering bug is the PORCH-052 repair).
+  assert.doesNotMatch(worker, /url\.pathname\.startsWith\("\/api\/"\) return/);
+  // Non-rendition paths (which includes everything else the hub API
+  // serves) never enter respondWith.
   assert.match(worker, /if \(!url\.pathname\.includes\("\/renditions\/"\)\) return;/);
   // Only response.ok enters the store — a 401/5xx rendition response can
   // never poison the cache.
@@ -184,20 +187,25 @@ test("PORCH-051 ac-5: the shell consumes safe-area insets and the cover viewport
 
 // Executed worker simulation (ac-2): the real sw.js source runs in an
 // isolated context with a stubbed caches/fetch, and its fetch handler is
-// exercised directly — not a regex pin. Proves: /api/** is never
-// intercepted (no respondWith), and a non-2xx response is fetched through
-// but never cached.
-test("PORCH-051 ac-2 (executed): /api/** is never intercepted and non-2xx is never cached", async () => {
+// exercised directly — not a regex pin. Proves: /api/** other than the
+// rendition serve paths is never intercepted (no respondWith), an
+// /api/social rendition URL IS intercepted, authed, and cached on 2xx
+// (the PORCH-052 repair), and a non-2xx response is fetched through but
+// never cached.
+test("PORCH-051 ac-2, PORCH-052 (executed): live-data /api stays unintercepted; /api/social renditions are intercepted, authed, and cached on 2xx; non-2xx is never cached", async () => {
   const source = await src("public/sw.js");
   const listeners = {};
   const puts = [];
+  const authed = [];
   const cacheStub = {
     match: async () => undefined,
     put: async (request, _response) => { puts.push(String(request.url)); },
   };
+  const ogSrc = "https://hub.family/api/social/media/med_og/renditions/feed-thumb?v=" + "aa".repeat(32);
   const responsesByUrl = new Map([
     ["https://hub.family/api/social/feed", { status: 200, body: "secret feed" }],
     ["https://hub.family/renditions/feed-thumb?v=" + "ee".repeat(32), { status: 500, body: "explode" }],
+    [ogSrc, { status: 200, body: "og bytes" }],
   ]);
   const sandbox = {
     self: {
@@ -210,7 +218,10 @@ test("PORCH-051 ac-2 (executed): /api/** is never intercepted and non-2xx is nev
       keys: async () => [],
       delete: async () => true,
     },
-    fetch: async (request) => new Response(responsesByUrl.get(String(request.url))?.body ?? "x", { status: responsesByUrl.get(String(request.url))?.status ?? 200 }),
+    fetch: async (request) => {
+      if (request.headers.get("authorization")) authed.push(String(request.url));
+      return new Response(responsesByUrl.get(String(request.url))?.body ?? "x", { status: responsesByUrl.get(String(request.url))?.status ?? 200 });
+    },
     Request, Headers, URL, Response,
     setTimeout, clearTimeout,
   };
@@ -223,22 +234,37 @@ test("PORCH-051 ac-2 (executed): /api/** is never intercepted and non-2xx is nev
   assert.ok(relay, "sw.js registers the token relay");
   relay({ data: { type: "media-auth", tokensByOrigin: { "https://hub.family": "tok" } } });
 
-  // 1. /api/**: the handler must return without respondWith — the
-  // media-auth surface and live data are never intercepted or cache-served.
+  // 1. live data under /api: the handler must return without respondWith —
+  // the media-auth surface and live data are never intercepted or
+  // cache-served.
   const apiEvent = { request: new Request("https://hub.family/api/social/feed"), respondWith: () => { throw new Error("/api request was intercepted"); } };
   fetchHandler(apiEvent);
   assert.equal(puts.length, 0);
 
-  // 2. a non-2xx rendition response streams through to the media element
-  // and never enters the store.
+  // 2. the genuine og:image/rendition URL shape — /api/social/**/renditions
+  // — IS intercepted, rides the relayed Bearer token, and (2xx + v) enters
+  // the store.
   const responded = [];
+  const ogEvent = {
+    request: new Request(ogSrc),
+    respondWith: (p) => responded.push(p),
+  };
+  fetchHandler(ogEvent);
+  assert.equal(responded.length, 1, "the /api rendition URL is intercepted");
+  const ogResponse = await responded[0];
+  assert.equal(ogResponse.status, 200);
+  assert.deepEqual(authed, [ogSrc], "the rendition request rides the relayed token");
+  assert.deepEqual(puts, [ogSrc], "the content-addressed 2xx rendition entered the store");
+
+  // 3. a non-2xx rendition response streams through to the media element
+  // and never enters the store.
   const mediaEvent = {
     request: new Request("https://hub.family/renditions/feed-thumb?v=" + "ee".repeat(32)),
     respondWith: (p) => responded.push(p),
   };
   fetchHandler(mediaEvent);
-  assert.equal(responded.length, 1, "rendition requests are intercepted");
-  const response = await responded[0];
+  assert.equal(responded.length, 2, "rendition requests are intercepted");
+  const response = await responded[1];
   assert.equal(response.status, 500);
-  assert.equal(puts.length, 0, "the non-2xx response entered no cache");
+  assert.equal(puts.length, 1, "the non-2xx response entered no cache");
 });

@@ -118,10 +118,18 @@ export function LinkPreviewBlock({ preview, origin, compact = false }) {
       />
     );
   }
-  // Card class: the image always arrives from the hub's own origin (the
-  // media pipeline's content-addressed rendition) — no third-party image
-  // request ever leaves the member's browser (paired PRD privacy posture).
+  // Card class (Brian's Oct 10 report — previews must SHOW the image, not
+  // a collapsed side thumbnail): the image leads the card at card width —
+  // inside the 16px padding band, capped well below the media surfaces
+  // (no banner-scale breakout, no media dominance) — and the image always
+  // arrives from the hub's own origin (the media pipeline's
+  // content-addressed rendition) — no third-party image request ever
+  // leaves the member's browser (paired PRD privacy posture). A failed
+  // load never poisons the card: the image drops out and the text row
+  // carries title/site name/host.
   const og = preview.ogImage ?? null;
+  const [imageFailed, setImageFailed] = useState(false);
+  const src = og?.mediaId && !imageFailed ? renditionSrc(og, origin) : null;
   return (
     <Box
       component="a"
@@ -131,9 +139,7 @@ export function LinkPreviewBlock({ preview, origin, compact = false }) {
       aria-label={preview.title ? `Open ${preview.title}` : "Open shared link"}
       sx={{
         mt: 1,
-        display: "flex",
-        gap: 1,
-        alignItems: "center",
+        display: "block",
         maxWidth: "68ch",
         overflow: "hidden",
         p: 1,
@@ -145,39 +151,42 @@ export function LinkPreviewBlock({ preview, origin, compact = false }) {
         textDecoration: "none",
       }}
     >
-      {og?.mediaId && (
+      {src && (
         <Box
           component="img"
-          src={renditionSrc(og, origin) ?? undefined}
+          src={src}
           srcSet={og.renditions?.length ? renditionSrcset(og, origin) || undefined : undefined}
-          sizes={og.renditions?.length ? "96px" : undefined}
+          sizes="(max-width: 899px) calc(100vw - 32px), 68ch"
           alt={preview.title ?? preview.siteName ?? "Link preview"}
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
+          onError={() => setImageFailed(true)}
           sx={{
-            width: compact ? 48 : 96,
-            flexShrink: 0,
-            aspectRatio: og.width && og.height ? `${og.width} / ${og.height}` : "1 / 1",
-            maxHeight: compact ? 48 : 96,
+            display: "block",
+            width: "100%",
+            aspectRatio: og.width && og.height ? `${og.width} / ${og.height}` : "2 / 1",
             objectFit: "cover",
             borderRadius: 1,
             bgcolor: "background.paper",
+            maxHeight: compact ? 140 : 260,
           }}
         />
       )}
-      <Stack sx={{ minWidth: 0 }}>
-        {preview.title && (
-          <Typography variant="body2" fontWeight={600} fontSize={14} sx={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: compact ? 1 : 2, WebkitBoxOrient: "vertical" }}>
-            {preview.title}
-          </Typography>
-        )}
-        {preview.siteName && (
-          <Typography variant="caption" color="porchlight.muted">
-            {preview.siteName}
-          </Typography>
-        )}
-        <Chip label={hostOf(preview.url)} size="small" variant="outlined" sx={{ fontSize: "0.6875rem", height: "22px", alignSelf: "flex-start", mt: 0.25 }} />
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ pt: src ? 0.75 : 0 }}>
+        <Stack sx={{ minWidth: 0, flex: 1 }}>
+          {preview.title && (
+            <Typography variant="body2" fontWeight={600} fontSize={14} sx={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: compact ? 1 : 2, WebkitBoxOrient: "vertical" }}>
+              {preview.title}
+            </Typography>
+          )}
+          {preview.siteName && (
+            <Typography variant="caption" color="porchlight.muted">
+              {preview.siteName}
+            </Typography>
+          )}
+        </Stack>
+        <Chip label={hostOf(preview.url)} size="small" variant="outlined" sx={{ fontSize: "0.6875rem", height: "22px", flexShrink: 0 }} />
       </Stack>
     </Box>
   );
