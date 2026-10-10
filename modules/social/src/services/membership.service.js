@@ -6,6 +6,57 @@ export const REFRESH_TTL_SECONDS = 45 * 24 * 60 * 60;
 
 const ROLES = ["owner", "delegate", "member"];
 
+/**
+ * The capability ladder (PORCH-053) — the ONE capability table: every admin
+ * authorization rides `capabilitiesFor(role)`. Owner (=the network creator,
+ * founder-root rule) carries every console capability; a delegate carries
+ * the join-link and device-link lifecycle plus member removal; a plain
+ * member carries participation only (no console capability). Role changes
+ * (promote/demote) and permanent member deletion (the content cascade)
+ * are owner-only: no delegate capability reaches them.
+ *
+ * @param {string} role "owner" | "delegate" | "member"
+ * @returns {string[]} the console capabilities this role holds; empty for
+ *   "member" — participation itself needs no console capability.
+ */
+export function capabilityLadder(role) {
+  switch (role) {
+    case "owner":
+      return [
+        "members_read",
+        "invites_read",
+        "invite_issue",
+        "invite_revoke",
+        "device_links_read",
+        "device_link_issue",
+        "device_link_revoke",
+        "member_remove",
+        "member_role",
+        "member_purge",
+      ];
+    case "delegate":
+      return [
+        "members_read",
+        "invites_read",
+        "invite_issue",
+        "invite_revoke",
+        "device_links_read",
+        "device_link_issue",
+        "device_link_revoke",
+        "member_remove",
+      ];
+    default:
+      return [];
+  }
+}
+
+/** The published name of the ONE capability table. */
+export const capabilitiesFor = capabilityLadder;
+
+/** Plain-language refusal for the final-owner invariant (typed for the surface). */
+const LAST_OWNER_MESSAGE =
+  "The network always keeps an owner. Make someone else the owner first, then you can change or remove yours.";
+
 function isoPlus(date, seconds) {
   return new Date(date.getTime() + seconds * 1000).toISOString();
 }
@@ -75,6 +126,15 @@ export class MembershipService {
     this.authFailureSink = authFailureSink ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
+  }
+
+  /**
+   * The ONE capability table (PORCH-053), reachable on the service itself —
+   * every console guard (social + front door) authorizes through this; the
+   * table lives in exactly one place, the module-level `capabilitiesFor`.
+   */
+  capabilitiesFor(role) {
+    return capabilityLadder(role);
   }
 
   /**
@@ -476,11 +536,81 @@ export class MembershipService {
   }
 
   /**
-   * Instant member revocation (owner console): the membership goes inactive
-   * and every open membership session for it dies in the same write — the
-   * perimeter closes the moment the owner acts.
+   * Role change (PORCH-053, ac-2): promote member→delegate or demote
+   * delegate→member, OWNER-ONLY. The change lands immediately: the
+   * membership row's role drives every capability check at read time, so
+   * the acting member's capabilities move in the same write. Owner-role
+   * memberships are out of this endpoint's reach — the ladder fixes the
+   * owner to the network creator (founder-root rule), and "owner" is never
+   * a target of member↔delegate role actions.
+   *
+   * @param {{ networkId: string, memberId: string, to: "member"|"delegate", actor: object }} args
+   *   actor is the verified owner perimeter ({membership, session}).
    */
-  async revokeMember({ networkId, did, memberId } = {}) {
+  async setMemberRole({ networkId, memberId, to, actor } = {}) {
+    if (to !== "member" && to !== "delegate") {
+      throw typedError("E_ROLE_INVALID", "Roles are owner, delegate, and member — only member and delegate can be set.");
+    }
+    const membership = await this.memberships.findOne({ _id: memberId });
+    if (!membership || membership.networkId !== networkId || membership.state !== "active") {
+      throw typedError("E_MEMBER_NOT_FOUND", "No such member on this network.");
+    }
+    if (membership.role === "owner") {
+      // Final-owner invariant (ac-5): the ladder change from "owner" is
+      // refused server-side with the plain reason, before anything changes.
+      throw typedError("E_LAST_OWNER", LAST_OWNER_MESSAGE);
+    }
+    if (membership.role === to) {
+      throw typedError("E_ROLE_UNCHANGED", membership.role === "delegate"
+        ? "This member is already a delegate."
+        : "This member is already a plain member.");
+    }
+    // Owner-only enforcement rides the service too (defense in depth): the
+    // actor's LIVE membership must still be an owner at write time.
+    const actorMembership = await this.activeMembership({ networkId, did: actor?.session?.did ?? actor?.membership?.did });
+    if (!actorMembership || actorMembership.role !== "owner") {
+      throw typedError("E_FORBIDDEN", "Role changes belong to the network owner.");
+    }
+    const from = membership.role;
+    await this.memberships.updateOne({ _id: membership._id }, { $set: { role: to } });
+    await this.audit("member_role_change", {
+      networkId,
+      did: actorMembership.did,
+      detail: { memberId: membership._id, targetDid: membership.did, from, to },
+    });
+    return this.view({ ...membership, role: to });
+  }
+
+  /**
+   * Final-owner invariant (PORCH-053 ac-5), service-level: an action on
+   * `targetMembership` that would retire its owner role (removal, purge,
+   * demotion) fails with a typed plain-language error when it would leave
+   * the network with zero active owners. Enforced in the write path for
+   * EVERY caller — never only in the UI.
+   * @private
+   */
+  async #assertOwnerRemains({ networkId, excludeMembershipId } = {}) {
+    const owners = (await this.memberships.find({ networkId: String(networkId) })).filter(
+      (row) => row.state === "active" && row.role === "owner" && row._id !== excludeMembershipId,
+    );
+    if (!owners.length) {
+      throw typedError("E_LAST_OWNER", LAST_OWNER_MESSAGE);
+    }
+  }
+
+  /**
+   * Instant member revocation (owner console, PORCH-053 ac-3): the
+   * membership goes inactive and every open membership session for it dies
+   * in the same write — the perimeter closes the moment the action lands.
+   * The social-plane device registrations (per-network `device_keys`
+   * enrollments) cascade in the same pass: revocation, never resurrection —
+   * a removed member's device verifies against nothing on this network.
+   * Real-time subscriptions close through the same onRevoked hook. Authored
+   * content is untouched by default (remove-keeps-content; the destructive
+   * cascade is the separate owner-only purge). The final-owner invariant
+   * refuses removing the network's last owner with the plain reason.
+   */
+  async revokeMember({ networkId, did, memberId, actor } = {}) {
     const membership = memberId
       ? await this.memberships.findOne({ _id: memberId })
       : await this.activeMembership({ networkId, did });
@@ -490,6 +620,17 @@ export class MembershipService {
     if (membership.state !== "active") {
       return { revoked: false, membership: this.view(membership) };
     }
+    if (membership.role === "owner") {
+      // A delegate's removal capability never reaches an owner: removing an
+      // owner is an owner action (demote-plus-remove by any other reading).
+      if (actor && (actor.session?.did ?? actor.membership?.did) !== undefined) {
+        const actorMembership = await this.activeMembership({ networkId: membership.networkId, did: actor.session?.did ?? actor.membership?.did });
+        if (!actorMembership || actorMembership.role !== "owner") {
+          throw typedError("E_FORBIDDEN", "Removing that member belongs to the network owner.");
+        }
+      }
+      await this.#assertOwnerRemains({ networkId: membership.networkId, excludeMembershipId: membership._id });
+    }
     const revokedAt = new Date().toISOString();
     await this.memberships.updateOne({ _id: membership._id }, { $set: { state: "revoked", revokedAt } });
     const open = await this.membershipSessions.find({ membershipId: membership._id, status: "active" });
@@ -498,10 +639,18 @@ export class MembershipService {
       await this.membershipSessions.updateOne({ _id: session._id }, { $set: { status: "revoked" } });
       sessionIds.push(session._id);
     }
+    for (const enrollment of await this.deviceKeys.find({ networkId: membership.networkId, did: membership.did })) {
+      await this.deviceKeys.deleteOne({ _id: enrollment._id });
+    }
     // PORCH-047: the real-time surface learns the revocation in the same
     // write — live subscriptions close now, not at the member's next request.
     this.onRevoked?.({ membershipId: membership._id, networkId: membership.networkId, did: membership.did, sessionIds });
-    await this.audit("membership_revoke", { networkId: membership.networkId, did: membership.did, detail: { memberId: membership._id } });
+    const actorDid = actor?.session?.did ?? actor?.membership?.did ?? null;
+    await this.audit("membership_revoke", {
+      networkId: membership.networkId,
+      did: actorDid,
+      detail: { memberId: membership._id, targetDid: membership.did },
+    });
     return { revoked: true, membership: this.view({ ...membership, state: "revoked", revokedAt }) };
   }
 

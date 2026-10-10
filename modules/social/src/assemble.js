@@ -15,6 +15,7 @@ import { MediaService } from "./services/media.service.js";
 import { LinkPreviewService } from "./services/link-preview.service.js";
 import { ExportService } from "./services/export.service.js";
 import { AlbumService } from "./services/album.service.js";
+import { MemberAdminService } from "./services/member-admin.service.js";
 import { createMemoryMediaStore, createFileMediaStore, nodeDiskProbe } from "./services/media.store.js";
 import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
 import { ContentController } from "./controllers/content.controller.js";
@@ -258,6 +259,17 @@ export function assembleSocialModule(store, options = {}) {
     postsService: postService,
     audit,
   });
+  // Member administration (PORCH-053): the owner-only permanent deletion —
+  // the typed-confirmation gate plus the sovereignty purge (content sweep,
+  // media store cascade) over the same membership revocation path.
+  const memberAdminService = new MemberAdminService({
+    memberships,
+    membership: membershipService,
+    postsService: postService,
+    media: mediaService,
+    memberNames: options.memberNames ?? null,
+    audit,
+  });
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger, options.mintOwnerDeviceLink ?? null),
@@ -273,6 +285,7 @@ export function assembleSocialModule(store, options = {}) {
       groups: groupService,
       ranking: rankingService,
       media: mediaService,
+      memberAdmin: memberAdminService,
       system: options.system ?? null,
       hubUrl: options.hubUrl ?? null,
       log: options.log ?? null,
@@ -304,6 +317,7 @@ export function assembleSocialModule(store, options = {}) {
     linkPreviewService,
     exportService,
     albumService,
+    memberAdminService,
     controllers,
     api: createSocialRouter(controllers),
   };

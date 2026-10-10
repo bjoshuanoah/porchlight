@@ -11,9 +11,20 @@
  * themselves listed there as owner IS the owner — the SPA holds no other
  * owner signal, and a non-owner's failed console read falls back to empty. */
 export function viewerIsOwner(data) {
-  return (data?.members || []).some(
-    (entry) => entry?.did === data?.identity?.id && entry?.role === "owner",
-  );
+  return viewerRole(data) === "owner";
+}
+
+/** The viewer's ladder role from the directory row (PORCH-053): the same
+ * console read, read back from the self row — "owner" | "delegate" | null. */
+export function viewerRole(data) {
+  return (data?.members || []).find(
+    (entry) => entry?.did === data?.identity?.id && entry?.state !== "revoked",
+  )?.role ?? null;
+}
+
+/** Family-language role display: Member / Delegate / Owner. */
+export function roleLabel(role) {
+  return role === "owner" ? "Owner" : role === "delegate" ? "Delegate" : "Member";
 }
 
 /** Directory rows: owner first, then everyone by admission, ids breaking ties. */
@@ -23,7 +34,7 @@ export function directoryRows(members = [], identityDid = null) {
     .map((member) => ({
       id: idOf(member),
       name: member?.name || member?.displayName || "Member",
-      role: member?.role === "owner" ? "Owner" : "Member",
+      role: roleLabel(member?.role),
       // Join status straight from the membership row: active or removed.
       status: member?.state === "active" ? "Active" : "Removed",
       joined: member?.admittedAt || null,

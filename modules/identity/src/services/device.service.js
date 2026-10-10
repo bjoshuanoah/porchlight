@@ -166,6 +166,17 @@ export class DeviceService {
   }
 
   /**
+   * One grant row (any lifecycle state), no hashes — the accessor the
+   * network-scope authorization (PORCH-053) needs before a revoke: the
+   * console resolves the link's member and gates it against that network's
+   * live membership.
+   */
+  async getGrant({ grantId } = {}) {
+    if (!grantId) return null;
+    return this.deviceLinks.findOne({ _id: grantId });
+  }
+
+  /**
    * Continuity without a working device: binds the new device's key to the
    * UNCHANGED existing DID. Never mints a new identity — the did comes only
    * from the link row.

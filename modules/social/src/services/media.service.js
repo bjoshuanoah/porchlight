@@ -806,6 +806,42 @@ export class MediaService {
     return { ...ledger, assetRowsRemoved: rows.length };
   }
 
+  /**
+   * Member media purge (PORCH-053 ac-4): the STORE side of the owner-only
+   * permanent member deletion. The named member's authored asset originals
+   * at this origin network leave the archive, and every rendition derived
+   * from them (derived artifacts of the original) cascades the same way —
+   * asset rows, content-addressed blob bytes, and their quota ledger rows.
+   * Open upload sessions the member started die with their chunk bytes.
+   * The call is store-side only: the caller (member admin service) owns
+   * authorization, the final-owner invariant, and the typed confirmation.
+   */
+  async deleteMemberMedia({ networkId, did } = {}) {
+    const owned = await this.assets.find({ networkId: String(networkId), did });
+    const originals = owned.filter((row) => row.kind === "original");
+    const renditionRows = [];
+    for (const original of originals) {
+      renditionRows.push(...(await this.assets.find({ networkId: original.networkId, originalId: original._id, kind: "rendition" })));
+    }
+    const rows = [...owned, ...renditionRows].filter(
+      (row, index, all) => all.findIndex((other) => other._id === row._id) === index,
+    );
+    let bytesFreed = 0;
+    for (const row of rows) {
+      await this.assets.deleteOne({ _id: row._id });
+      await this.blobs.delete(row.blobKey);
+      await this.quota.removeArtifact(row._id);
+      bytesFreed += row.bytes ?? 0;
+    }
+    const openUploads = (await this.uploads.find({ networkId: String(networkId), did })).filter((row) => row.state === "open");
+    const chunkBlobsDeleted = openUploads.length;
+    for (const upload of openUploads) {
+      await this.blobsDeleteChunks(upload);
+      await this.uploads.updateOne({ _id: upload._id }, { $set: { state: "aborted" } });
+    }
+    return { assetRowsRemoved: rows.length, bytesFreed, openUploads: chunkBlobsDeleted };
+  }
+
   /* Internals */
 
   /** Upload admission disk gate (hard stop; soft warning passes through). */

@@ -54,6 +54,8 @@ export interface FrontDoorDeviceService {
   mintDeviceLink(options: { did: string; now?: () => Date }): Promise<{ grantId: string; token: string; expiresAt: string }>;
   revokeDeviceLink(options: { grantId: string; now?: () => Date }): Promise<{ revoked: boolean; grantId: string; revokedAt?: string; alreadyDead?: boolean }>;
   listDeviceLinks(options?: { now?: () => Date }): Promise<Array<{ _id: string; did: string; status: string; createdAt: string; expiresAt: string }>>;
+  /** PORCH-053: one grant row (any lifecycle state, no hash) — the revoke's network-scope check. */
+  getGrant(options: { grantId: string }): Promise<{ _id: string; did: string } | null>;
   listAllRegistrations(): Promise<Array<Record<string, unknown>>>;
   revokeRegistration(options: { registrationId: string }): Promise<{ revoked: string; supersededSessions: number }>;
 }
@@ -69,6 +71,8 @@ interface FrontDoorDeps {
     activeMembership(options: { networkId: string; did: string }): Promise<Record<string, unknown> | null>;
     /** PORCH-019: failing-step diagnosis for the 401 capture. */
     diagnoseAccessToken?(token: string, options?: { networkId?: string | null }): Promise<Record<string, unknown> | null>;
+    /** PORCH-053: the ONE capability table (owner + delegate ladder). */
+    capabilitiesFor?(role: string): string[];
   };
   audit(record: { networkId: string | null; did?: string | null; action: string; detail?: object }): Promise<unknown>;
   /** Identity account + device services (identity birth, continuity). */
@@ -88,8 +92,13 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
   const networkOf = async (): Promise<NetworkRow> =>
     (await networks.get()) as { _id: string; name?: string | null; hubUrl?: string | null } | null;
 
-  /** Owner perimeter, shaped identically to the social console's guard. */
-  async function requireOwner(
+  /**
+   * Perimeter pass sharing the social console's verification: Bearer token
+   * verified against THIS network only — 401 with plain member language and
+   * the PORCH-019 capture on any failure. Role/capability decisions ride
+   * the guards on top of it (requireOwner, requireDeviceCapability).
+   */
+  async function verifyPerimeter(
     req: { headers: { authorization?: string }; method?: string; originalUrl?: string; url?: string },
     res: { status(n: number): { json(b: object): unknown } },
   ): Promise<{ membership: Record<string, unknown> } | null> {
@@ -117,8 +126,48 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
       res.status(401).json({ error: "Open your membership before using the owner actions.", code: "E_SESSION_REQUIRED" });
       return null;
     }
+    return perimeter;
+  }
+
+  /** Owner perimeter, shaped identically to the social console's guard. */
+  async function requireOwner(
+    req: { headers: { authorization?: string }; method?: string; originalUrl?: string; url?: string },
+    res: { status(n: number): { json(b: object): unknown } },
+  ): Promise<{ membership: Record<string, unknown> } | null> {
+    const perimeter = await verifyPerimeter(req, res);
+    if (!perimeter) return null;
     if (perimeter.membership.role !== "owner") {
       res.status(403).json({ error: "The owner console belongs to the network owner.", code: "E_FORBIDDEN" });
+      return null;
+    }
+    return perimeter;
+  }
+
+  /** Family-language 403 copy for the delegate-ladder device-link capabilities. */
+  const DEVICE_CAPABILITY_COPY: Record<string, string> = {
+    device_links_read: "Device links belong to the network's owner and delegates.",
+    device_link_issue: "Device links belong to the network's owner and delegates.",
+    device_link_revoke: "Withdrawing device links belongs to the network's owner and delegates.",
+  };
+
+  /**
+   * Device-link capability guard (PORCH-053): the device-link console
+   * surfaces authorize through the ONE capability table — the owner or a
+   * delegate passes; a plain member is 403. Origin containment is unchanged:
+   * the perimeter already verifies against THIS network only.
+   */
+  async function requireDeviceCapability(
+    req: { headers: { authorization?: string }; method?: string; originalUrl?: string; url?: string },
+    res: { status(n: number): { json(b: object): unknown } },
+    capability: string,
+  ): Promise<{ membership: Record<string, unknown> } | null> {
+    const perimeter = await verifyPerimeter(req, res);
+    if (!perimeter) return null;
+    if (!membership.capabilitiesFor?.(perimeter.membership.role as string)?.includes(capability)) {
+      res.status(403).json({
+        error: DEVICE_CAPABILITY_COPY[capability] ?? "Device links belong to the network's owner and delegates.",
+        code: "E_FORBIDDEN",
+      });
       return null;
     }
     return perimeter;
@@ -157,11 +206,23 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
     })();
   });
 
-  /** GET /social/console/device-links — owner-visible device-link states. */
+  /** GET /social/console/device-links — device-link states for THIS network's members. */
   router.get("/social/console/device-links", (req, res) => {
     void (async () => {
-      if (!(await requireOwner(req, res))) return;
-      res.json({ deviceLinks: await deviceService.listDeviceLinks() });
+      if (!(await requireDeviceCapability(req, res, "device_links_read"))) return;
+      const network = await networkOf();
+      // Origin containment (PORCH-053 ac-6): the list is scoped to members
+      // of THIS network — a did with no active membership here renders as
+      // nobody's link.
+      const rows = network ? await deviceService.listDeviceLinks() : [];
+      const scoped: Array<{ _id: string; did: string; status: string; createdAt: string; expiresAt: string }> = [];
+      for (const row of rows) {
+        const member = network
+          ? await membership.activeMembership({ networkId: String(network._id), did: row.did })
+          : null;
+        if (member) scoped.push(row);
+      }
+      res.json({ deviceLinks: scoped });
     })();
   });
 
@@ -169,10 +230,13 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
    * POST /social/console/device-links {did} — mint the one-time, 24-hour,
    * identity-scoped device link for an ACTIVE member of THIS network and
    * return its shareable link (URL embeds the token, like join links).
+   * Rides the capability ladder: the owner OR a delegate (network-scope
+   * authorization) issues it; the audit records the actor.
    */
   router.post("/social/console/device-links", (req, res) => {
     void (async () => {
-      if (!(await requireOwner(req, res))) return;
+      const actor = await requireDeviceCapability(req, res, "device_link_issue");
+      if (!actor) return;
       const { did } = req.body ?? {};
       const network = await networkOf();
       if (!did || typeof did !== "string") {
@@ -185,9 +249,9 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
       const link = await deviceService.mintDeviceLink({ did });
       await audit({
         networkId: network ? String(network._id) : null,
-        did,
+        did: actor.membership.did as string | null,
         action: "device_link_issue",
-        detail: { grantId: link.grantId },
+        detail: { grantId: link.grantId, targetDid: did },
       }).catch(() => null);
       const base = (network?.hubUrl as string | undefined) ?? hubUrl() ?? "";
       const linkUrl = base ? `${base.replace(/\/+$/, "")}/device-link/${link.token}` : `/device-link/${link.token}`;
@@ -195,12 +259,36 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
     })();
   });
 
-  /** POST /social/console/device-links/revoke {grantId} — instant revocation. */
+  /**
+   * POST /social/console/device-links/revoke {grantId} — instant revocation,
+   * scoped to THIS network: the grant's member must hold an active membership
+   * here. Rides the capability ladder (the owner or a delegate); the audit
+   * records the actor.
+   */
   router.post("/social/console/device-links/revoke", (req, res) => {
     void (async () => {
-      if (!(await requireOwner(req, res))) return;
+      const actor = await requireDeviceCapability(req, res, "device_link_revoke");
+      if (!actor) return;
+      const network = await networkOf();
       try {
+        const grant = await deviceService.getGrant({ grantId: req.body?.grantId });
+        if (!grant) {
+          return res.status(404).json({ error: `no device link ${req.body?.grantId ?? ""}`, code: "E_DEVICE_LINK_UNKNOWN" });
+        }
+        // Origin containment (ac-6): a grant whose member is not live on
+        // THIS network is unreachable here — no cross-network revoke, and
+        // the unknown-grant answer is identical.
+        const member = network ? await membership.activeMembership({ networkId: String(network._id), did: grant.did }) : null;
+        if (!member) {
+          return res.status(404).json({ error: "That device link is not on this network.", code: "E_DEVICE_LINK_UNKNOWN" });
+        }
         const result = await deviceService.revokeDeviceLink({ grantId: req.body?.grantId });
+        await audit({
+          networkId: String(network?._id),
+          did: actor.membership.did as string | null,
+          action: "device_link_revoke",
+          detail: { grantId: req.body?.grantId, targetDid: grant.did },
+        }).catch(() => null);
         return res.json(result);
       } catch (error) {
         const typed = error as { code?: string; message?: string };

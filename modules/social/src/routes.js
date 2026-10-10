@@ -111,6 +111,11 @@ export function createSocialRouter(controllers) {
   router.post("/console/invites/revoke", ownerConsole.revokeInvite);
   router.get("/console/members", ownerConsole.listMembers);
   router.post("/console/members/revoke", ownerConsole.revokeMember);
+  // Member administration (PORCH-053): the promote/demote ladder change
+  // (owner-only) and the permanent member deletion — the owner-only
+  // destructive cascade behind the typed member-name confirmation.
+  router.patch("/console/members/role", ownerConsole.setMemberRole);
+  router.delete("/console/members/:memberId", ownerConsole.purgeMember);
   router.get("/console/limits", ownerConsole.getLimits);
   router.put("/console/limits", ownerConsole.setLimits);
   router.get("/console/audit", ownerConsole.listAudit);

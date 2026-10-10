@@ -95,7 +95,9 @@ test("console guard: an admitted non-owner session is 403 with owner-only langua
     assert.equal(getResponse.status, 403);
     const getBody = await getResponse.json();
     assert.equal(getBody.code, "E_FORBIDDEN");
-    assert.equal(getBody.error, "The owner console belongs to the network owner.");
+    // PORCH-053: the guard is the capability ladder now — a plain member is
+    // 403 on the delegate ladder's surfaces with the family-language copy.
+    assert.equal(getBody.error, "Invitations belong to the network's owner and delegates.");
 
     // A member token cannot write the network's limits either — and its
     // token is useless on the console even when valid on its own surface.

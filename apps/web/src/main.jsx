@@ -616,6 +616,24 @@ function App() {
       await reload();
       return result;
     },
+    // Role ladder (PORCH-053): promote/demote member↔delegate, owner-only
+    // at the hub; the server's plain-language refusals surface verbatim.
+    setMemberRole: async (member, role) => {
+      const result = await request(active, "social/console/members/role", {
+        method: "PATCH", body: JSON.stringify({ memberId: member._id || member.id, role }),
+      });
+      await reload();
+      return result;
+    },
+    // The destructive path (PORCH-053): permanent deletion behind the typed
+    // member-name confirmation; the confirmation rides the DELETE body.
+    purgeMember: async (member, confirmName) => {
+      const result = await request(active, `social/console/members/${encodeURIComponent(member._id || member.id)}`, {
+        method: "DELETE", body: JSON.stringify({ confirmName }),
+      });
+      await reload();
+      return result;
+    },
     // Owner-routed device continuity (PORCH-010): mint the one-time,
     // identity-scoped device link for a member, list grant states, revoke.
     sendDeviceLink: async (did) => {

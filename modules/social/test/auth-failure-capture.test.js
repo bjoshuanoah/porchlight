@@ -97,15 +97,29 @@ test("ac-1 capture: membership token failure names the failing step and session/
   assert.ok(expired.accessExpiresAt);
 
   // The membership-plane kill switch rides revoke: the step after expiry.
-  await f.membership.revokeMember({ networkId: "net_1", did: "did:porchlight:owner" });
-  const revoked = await f.membership.diagnoseAccessToken(token);
+  // The revocation target is a plain member — the final-owner invariant
+  // (PORCH-053) rightly refuses revoking the sole owner, so the fixture
+  // admits one and revokes THAT member for the step diagnosis.
+  const memberInvite = await f.invites.issue({ networkId: "net_1" });
+  const memberDevice = okp();
+  const memberAdmitted = await f.membership.admit({
+    code: memberInvite.token,
+    identityAccessToken: "did:porchlight:june",
+    deviceId: "dev_2",
+    devicePublicKeyJwk: memberDevice.publicKeyJwk,
+    signature: memberDevice.sign(`porchlight-join:${memberInvite.token}`).toString("base64url"),
+  });
+  await f.membership.revokeMember({ networkId: "net_1", did: "did:porchlight:june" });
+  const revoked = await f.membership.diagnoseAccessToken(memberAdmitted.accessToken);
   assert.equal(revoked.reason, "session_revoked");
   assert.equal(revoked.sessionStatus, "revoked");
+  assert.equal(revoked.did, "did:porchlight:june");
 
   // No token material in any diagnosis.
   for (const event of [...captured, unknown, expired, revoked]) {
     if (!event) continue;
     assert.ok(!JSON.stringify(event).includes(token));
+    assert.ok(!JSON.stringify(event).includes(memberAdmitted.accessToken));
   }
 });
 
