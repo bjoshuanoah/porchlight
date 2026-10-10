@@ -23,7 +23,7 @@ import { firstUrlIn } from "./link-preview.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { arrivalPollMs } from "./live.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
-import { registerMediaTransport, syncMediaTransport } from "./media-transport.js";
+import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
@@ -31,6 +31,10 @@ import { Lockup } from "./brand.jsx";
 // and its two surfaces (the Android custom CTA, the iOS guided card).
 import { consumeInstallPrompt, installSuppressed, isStandaloneLaunch, surfaceInstallKind, webkitClass } from "./install.js";
 import { InstallCta } from "./install.jsx";
+// PORCH-060: the notification settings card rides the Profile settings
+// shell; the push subscription flow (explicit Enable tap → VAPID-scoped
+// subscribe → hub-side registration) rides the pure module's injected flow.
+import { enablePush } from "./notifications.js";
 
 // PORCH-042: both modes' custom properties land in one static <style> block
 // before the first render — component CSS resolves from the token layer with
@@ -838,6 +842,39 @@ function App() {
     },
     groupMemberCandidates: (q = "") => fetchMentionCandidates(active, q),
     search: (query) => request(active, `social/search?q=${encodeURIComponent(query)}`),
+    // Notification settings (PORCH-060): the open identity's membership
+    // token authorizes the reads and writes; the hub stores the settings
+    // per identity and enforces them at send time (PORCH-059).
+    loadNotificationSettings: () => request(active, "social/push/settings"),
+    saveNotificationSettings: (settings) => request(active, "social/push/settings", {
+      method: "PUT", body: JSON.stringify({ enabled: settings.enabled, events: settings.events, mutes: settings.mutes }),
+    }),
+    // The Enable flow (PORCH-060 ac-3): the browser prompt can fire ONLY
+    // here, from the explicit tap — pushManager.subscribe is the prompt;
+    // nothing calls Notification.requestPermission at load or on
+    // navigation. The hub's VAPID public key scopes the subscription, and
+    // the descriptor registers hub-side under the open identity's session
+    // (the worker is the one already-registered rendition worker).
+    enableNotifications: async () => {
+      if (typeof window.PushManager !== "function") throw new Error("This browser cannot receive notifications.");
+      const registration = workerRegistration() || (navigator.serviceWorker ? await navigator.serviceWorker.getRegistration("/") : null);
+      if (!registration) throw new Error("Porchlight's notification channel is still starting up. Try again in a moment.");
+      const vapid = await request(active, "social/push/vapid");
+      if (!vapid?.available || !vapid?.publicKey) throw new Error("The hub is not sending notifications yet. Try again later.");
+      return enablePush({
+        pushManager: registration.pushManager,
+        vapidPublicKey: vapid.publicKey,
+        register: (descriptor) => request(active, "social/push/subscriptions", { method: "POST", body: JSON.stringify(descriptor) }),
+      });
+    },
+    // The iOS-not-installed handoff dismissal (ac-4) rides the install
+    // flow's established suppression window — same key, same period.
+    notificationsHandoffDismissed: () => installSuppressed(readLocal(stored, origin, "install-dismissed-at", 0)),
+    dismissNotificationsHandoff: () => {
+      const dismissedAt = Date.now();
+      writeLocal(stored, origin, "install-dismissed-at", dismissedAt);
+      setInstallDismissedAt(dismissedAt);
+    },
     // Rendition transport readiness (PORCH-044): true once the auth-relaying
     // rendition worker is live — surfaces then load rendition URLs directly
     // (srcset/sizes, video poster/src) and the browser cache answers repeats.
@@ -851,6 +888,10 @@ function App() {
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
     mediaRoot: owner.mediaRoot,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline, membershipEnded,
+    // PORCH-060: the home-screen display-mode fact (capability-first
+    // detection for the notification settings states; screen files never
+    // matchMedia — the mode-branch guardrail carries).
+    standalone: standaloneLaunch,
     // PORCH-055: the grant screens route consumption back to the front
     // state while this device is signed out — never into a half-open app.
     frontState: readSignedOut(stored, origin),
@@ -865,6 +906,21 @@ function App() {
   const deviceLinkRoute = route === "/device-link" || route.startsWith("/device-link/");
   const chooseIdentity = (sharedDevice || connections.some(hasLocalPin)) && !identity;
   const frontDoor = setupRoute || route === "/join" || route.startsWith("/join/") || route === "/pair" || deviceLinkRoute || route === "/who-is-here" || chooseIdentity || !connections.length;
+  useEffect(() => {
+    // PORCH-060 tap-through: the service worker's notificationclick focuses
+    // the existing client and hands it the payload's post reference; the
+    // app navigates to the origin-contained post detail under the identity
+    // already open on this device. No open identity: nothing navigates —
+    // the device's standard open flow (front state) governs who is
+    // speaking, exactly as any other open does.
+    if (!navigator.serviceWorker) return undefined;
+    const onWorkerMessage = (event) => {
+      const postId = event?.data?.type === "porchlight-open-post" ? event.data.postId : null;
+      if (postId && identity) navigate(`/posts/${encodeURIComponent(String(postId))}`);
+    };
+    navigator.serviceWorker.addEventListener("message", onWorkerMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onWorkerMessage);
+  }, [identity, navigate]);
   useEffect(() => {
     // PORCH-034 second round, once per app open: every device-connected
     // identity re-credentials quietly and its stored name heals to the
