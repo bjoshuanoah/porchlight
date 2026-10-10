@@ -61,7 +61,7 @@ function useOperation() {
   return { busy, error, setError, run };
 }
 
-function MediaItem({ id, post, actions }) {
+function MediaItem({ id, post, actions, detail = false }) {
   const [resource, setResource] = useState(null);
   const [loadError, setLoadError] = useState('');
   const operation = useOperation();
@@ -86,8 +86,8 @@ function MediaItem({ id, post, actions }) {
     return () => { active = false; if (url) URL.revokeObjectURL(url); };
   }, [id, getMedia, origin]);
   return <Box>
-    {resource && post.type === 'photo' && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy" sx={{ display: 'block', width: '100%', maxHeight: 440, objectFit: 'contain', borderRadius: 2, bgcolor: 'background.default' }} />}
-    {resource && post.type === 'video' && <Box component="video" src={resource.url} controls preload="metadata" sx={{ display: 'block', width: '100%', maxHeight: 440 }} />}
+    {resource && post.type === 'photo' && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy" sx={{ display: 'block', width: '100%', maxHeight: detail ? 720 : 440, objectFit: 'contain', borderRadius: 2, bgcolor: 'background.default' }} />}
+    {resource && post.type === 'video' && <Box component="video" src={resource.url} controls preload="metadata" sx={{ display: 'block', width: '100%', maxHeight: detail ? 720 : 440 }} />}
     {resource && post.type === 'audio' && <Box component="audio" src={resource.url} controls preload="none" sx={{ width: '100%' }} />}
     {!resource && !loadError && <CircularProgress size={20} aria-label="Loading media" />}
     {loadError && <Alert severity="error">{loadError}</Alert>}
@@ -105,13 +105,13 @@ function MediaItem({ id, post, actions }) {
   </Box>;
 }
 
-function Media({ post, actions }) {
+function Media({ post, actions, detail = false }) {
   const media = Array.isArray(post?.mediaRefs) ? post.mediaRefs : [];
   if (!media.length) return null;
   return <Stack spacing={1} sx={{ mt: 2 }}>
     {media.map((entry, index) => {
       const id = typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id;
-      return id ? <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} /> : null;
+      return id ? <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} detail={detail} /> : null;
     })}
   </Stack>;
 }
@@ -125,8 +125,14 @@ function Media({ post, actions }) {
 // adds it: change or clear, never an error (ac-2, ac-3). The row reflection
 // lives in the shared reactions module, so the timeline card and the post
 // detail reflect the same origin conversation through one routine (PORCH-038).
-function PresentReactions({ post, data, actions }) {
-  const [rows, setRows] = useState(null);
+function PresentReactions({ post, data, actions, reactionState }) {
+  // Controlled mode (PORCH-041 ac-4): the detail card and the conversation
+  // column reflect ONE origin conversation — when reactionState is provided
+  // both bars render the PostDetail owner's rows and every toggle lands in
+  // both columns from the same routine.
+  const [internalRows, setInternalRows] = useState(null);
+  const rows = reactionState?.rows ?? internalRows;
+  const setRows = reactionState?.setRows ?? setInternalRows;
   const [anchor, setAnchor] = useState(null);
   const operation = useOperation();
   const ownDid = data.identity ? String(data.identity.id) : '';
@@ -192,7 +198,7 @@ function PresentReactions({ post, data, actions }) {
   </Stack>;
 }
 
-function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
+function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState }) {
   const [localHidden, setLocalHidden] = useState(false);
   // Card-level reply (PORCH-038 ac-1): the affordance opens an inline
   // composer riding the same mention handling as the detail composer; the
@@ -205,7 +211,8 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
     <CardContent sx={{ p: "20px", "&:last-child": { pb: "20px" } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
         <Stack direction="row" spacing={1.5} alignItems="center">
-          <Avatar sx={{ width: 36, height: 36, fontSize: 15 }}>{(post.author?.name ?? post.authorName ?? memberName(post.authorId, data)).trim().charAt(0).toUpperCase()}</Avatar>
+          {/* Detail card treatment (PORCH-041 spec): 40px avatar header on the detail surface. */}
+          <Avatar sx={{ width: detail ? 40 : 36, height: detail ? 40 : 36, fontSize: detail ? 17 : 15 }}>{(post.author?.name ?? post.authorName ?? memberName(post.authorId, data)).trim().charAt(0).toUpperCase()}</Avatar>
           <Box>
             <Typography variant="body2" fontWeight={600} color="text.primary">{post.author?.name ?? post.authorName ?? memberName(post.authorId, data)}</Typography>
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
@@ -217,9 +224,9 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
         </Stack>
         <Button size="small" disabled={operation.busy} onClick={() => operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); })}>Hide</Button>
       </Stack>
-      {post.body && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 16, lineHeight: '25px' }}>{post.body}</Typography>}
-      {post.caption && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 16, lineHeight: '25px' }}>{post.caption}</Typography>}
-      <Media post={post} actions={actions} />
+      {post.body && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px' }}>{post.body}</Typography>}
+      {post.caption && <Typography sx={{ mt: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px' }}>{post.caption}</Typography>}
+      <Media post={post} actions={actions} detail={detail} />
       <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2 }}>
         <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'up'))}>Lift</Button>
         <Button size="small" disabled={operation.busy || data.offline} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'down'))}>Lower</Button>
@@ -237,7 +244,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide }) {
         actions={actions}
         onSubmit={(body, mentions) => invoke(actions, 'submitReply', post, body, null, mentions)}
       />}
-      <PresentReactions post={post} data={data} actions={actions} />
+      <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
     </CardContent>
   </Card>;
@@ -446,9 +453,20 @@ function Reply({ reply, depth, children, onReply, offline, data, post, actions, 
   </Box>;
 }
 
+// Post detail layout (PORCH-041, Brian Oct 14): post left, conversation
+// right — the layout of record from the UI Implementation Standard. The two
+// columns live inside the 1120px detail container with the 24px gap; below
+// 1000px the same container stacks vertically (post first, conversation
+// follows) with no horizontal scroll. The conversation column IS the page's
+// second half: reactions, the full nested reply thread, mentions, and the
+// composer all live in it, so no "open conversation" step exists.
 export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const selectedId = id ?? routeId;
   const [thread, setThread] = useState(null);
+  // One row source for both columns (ac-4): the detail card's bar and the
+  // conversation column's bar reflect the same origin conversation rows.
+  const [reactionRows, setReactionRows] = useState(null);
+  const reactionState = { rows: reactionRows, setRows: setReactionRows };
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   useEffect(() => {
@@ -489,19 +507,27 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
     nextSeen.add(identityOf(reply));
     return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} offline={data.offline} data={data} post={post} actions={actions} navigate={navigate} onReply={submit}>{renderReplies(identityOf(reply), depth + 1, nextSeen)}</Reply>;
   });
-  return <Box>
+  return <Box sx={{ maxWidth: 1120, mx: 'auto' }}>
     <Button onClick={() => navigate?.('/timeline')} sx={{ mb: 2 }}>Back to timeline</Button>
-    <Heading title="Conversation" />
     {loading && !data.offline && <CircularProgress aria-label="Loading conversation" />}
     {loadError && <Alert severity="error">{loadError}</Alert>}
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>The conversation cannot refresh while your family server is unreachable. Only a saved post, if available, is shown.</Alert>}
     {!loading && !loadError && (!post || !visibleAtOrigin(post, data)) && <Alert severity="info">This post is not available in your network.</Alert>}
-    {post && visibleAtOrigin(post, data) && !loadError && <Stack spacing={2}>
-      <PostCard post={post} data={data} actions={actions} navigate={navigate} detail onHide={() => navigate?.('/timeline')} />
-      <Typography variant="h6">Replies</Typography>
-      {!data.offline && (replies.length ? renderReplies() : <Typography color="text.secondary">Be the first to reply.</Typography>)}
-      {!data.offline && <ReplyForm label="Write a reply" post={post} actions={actions} onSubmit={(body, mentions) => submit(body, null, mentions)} />}
-    </Stack>}
+    {post && visibleAtOrigin(post, data) && !loadError && <Box sx={{
+      display: 'grid',
+      gap: '24px',
+      gridTemplateColumns: { xs: 'minmax(0, 1fr)' },
+      alignItems: 'start',
+      '@media (min-width: 1000px)': { gridTemplateColumns: 'minmax(0, 680fr) minmax(0, 420fr)' },
+    }}>
+      <PostCard post={post} data={data} actions={actions} navigate={navigate} detail reactionState={reactionState} onHide={() => navigate?.('/timeline')} />
+      <Box sx={{ minWidth: 0 }}>
+        <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />
+        <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Replies</Typography>
+        {!data.offline && (replies.length ? renderReplies() : <Typography color="text.secondary">Be the first to reply.</Typography>)}
+        {!data.offline && <ReplyForm label="Write a reply" post={post} actions={actions} onSubmit={(body, mentions) => submit(body, null, mentions)} />}
+      </Box>
+    </Box>}
   </Box>;
 }
 
