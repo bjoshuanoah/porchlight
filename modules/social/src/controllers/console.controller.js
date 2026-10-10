@@ -7,6 +7,15 @@
  */
 import { logAuthFailure } from "@porchlight/shared";
 
+/**
+ * The media-root edit copy (PORCH-054 ac-4): a root change never moves
+ * existing media — the owner runs the move and repoints, in that order.
+ * The console surfaces this sentence verbatim (plain family language; no
+ * security-dashboard styling).
+ */
+const MEDIA_ROOT_NO_MIGRATION_COPY =
+  "Changing the media root never moves existing media. Move the archive onto the new volume yourself, then repoint here — until the hub is repointed it keeps reading the root it served before.";
+
 export class ConsoleController {
   /**
    * @param {object} deps
@@ -332,6 +341,54 @@ export class ConsoleController {
       return res.json(await this.media.sweep({ networkId: network._id }));
     }
     res.json(await this.quota.sweep({ networkId: network._id }));
+  };
+
+  /** GET /console/media-root — the media-root setting (PORCH-054 ac-1):
+   *  the current root with its readiness state (ready / volume not ready),
+   *  plus the no-migration sentence the edit copy must carry plainly. */
+  getMediaRoot = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
+    if (!this.media) {
+      return res.status(501).json({ error: "The media pipeline is not wired into this deployment" });
+    }
+    res.json({ ...await this.media.volumeStatus(), note: MEDIA_ROOT_NO_MIGRATION_COPY });
+  };
+
+  /** PUT /console/media-root — the owner edit (PORCH-054 ac-4): the
+   *  proposed root runs the five startup checks; a failing path is refused
+   *  with the check's reason named; a passing edit re-points the pipeline
+   *  and never moves existing media (owner-run move and repoint). */
+  setMediaRoot = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
+    const network = await this.networks.get();
+    if (!network) {
+      return res.status(409).json({ error: "No network exists yet" });
+    }
+    if (!this.media) {
+      return res.status(501).json({ error: "The media pipeline is not wired into this deployment" });
+    }
+    try {
+      const before = await this.media.volumeStatus();
+      const status = await this.media.changeRoot({ root: req.body?.root });
+      await this.audit.record({
+        networkId: network._id,
+        action: "media_root_change",
+        detail: {
+          from: before.root,
+          to: status.root,
+          mediaMoved: false,
+          note: "No automatic migration: the owner runs the move and repoints.",
+        },
+      });
+      res.json({ ...status, note: MEDIA_ROOT_NO_MIGRATION_COPY });
+    } catch (error) {
+      const statusByCode = { E_MEDIA_ROOT_INVALID: 400, E_MEDIA_ROOT_REFUSED: 422, E_MEDIA_ROOT_UNAVAILABLE: 501 };
+      res.status(statusByCode[error.code] ?? 500).json({
+        error: error.message,
+        code: error.code ?? "E_INTERNAL",
+        check: error.check ?? null,
+      });
+    }
   };
 
   /**

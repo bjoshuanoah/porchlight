@@ -8,7 +8,7 @@ import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
-import { loadConfig } from "@porchlight/shared";
+import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
@@ -206,7 +206,23 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
         ? (did: string) => identityModule.deviceService.mintDeviceLink({ did })
         : undefined,
       media: {
-        mediaRoot: join(options.bootstrap.configDir, "media"),
+        // PORCH-054: the media root is runtime configuration — the config
+        // file's media.root (set at setup, editable post-install from the
+        // owner console); null keeps the hub data-directory default
+        // (created by the gate: the legitimate local install). The
+        // owner's edit persists through persistRoot — the config file
+        // stays the single source of truth — and re-points the running
+        // pipeline without moving any bytes.
+        mediaRoot: options.config.media.root ?? join(options.bootstrap.configDir, "media"),
+        mediaRootIsDefault: options.config.media.root == null,
+        persistRoot: (root: string) => {
+          const current = loadConfig(options.bootstrap.configDir);
+          if (!current) {
+            throw new Error("the hub runtime config could not be re-read for the media root edit");
+          }
+          saveConfig(options.bootstrap.configDir, { ...current, media: { ...current.media, root } });
+        },
+        volumePollIntervalMs: options.config.media.volumePollSeconds * 1000,
         // PORCH-044: the rendition ladder rungs are owner-readable config.
         renditions: options.config.media.renditions,
       },
@@ -220,6 +236,10 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       log: options.log ?? null,
     });
     router.use("/social", socialModule.api);
+    // PORCH-054 (ac-1): the health surface names the configured media root
+    // and its readiness state (ready / volume not ready) — late-bound to
+    // the social module's volume status, never a stale copy.
+    hub.setMediaStatus(() => socialModule!.mediaVolume.status());
   }
   if (identityModule && socialModule) {
     // PORCH-010: the SPA front door spans both domains (member identity

@@ -52,6 +52,18 @@ declare module "@porchlight/social" {
     postService: PostService;
     interactionService: InteractionService;
     notificationService: NotificationService;
+    /** PORCH-054: the media pipeline service (ingest/serving/disk guard). */
+    mediaService: unknown;
+    /** PORCH-054: the media root's readiness state machine (status/changeRoot). */
+    mediaVolume: {
+      status: () => Promise<{
+        root: string | null;
+        state: string;
+        check: string | null;
+        reason: string | null;
+        flag: string | null;
+      }>;
+    };
     /** PORCH-047: the real-time event surface (subscribe/catch-up/revoke). */
     realtimeService: unknown;
     controllers: unknown;
@@ -88,7 +100,14 @@ declare module "@porchlight/social" {
       /** PORCH-019: auth-failure capture sink. */
       log?: ((line: string) => void) | null;
       media?: {
+        /** PORCH-054: the configured media root (runtime configuration). */
         mediaRoot?: string;
+        /** PORCH-054: true when the root is the hub data-directory default. */
+        mediaRootIsDefault?: boolean;
+        /** PORCH-054: persists the owner's media-root edit into the config file. */
+        persistRoot?: (root: string) => void;
+        /** PORCH-054 [Assumed: 10s]: the ready-and-waiting poll interval. */
+        volumePollIntervalMs?: number;
         store?: {
           put: (key: string, bytes: Buffer) => Promise<string>;
           get: (key: string) => Promise<Buffer | null>;

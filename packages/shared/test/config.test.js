@@ -98,3 +98,41 @@ test("config round-trips through disk and re-normalizes on load (runtime config 
     rmSync(root, { recursive: true, force: true });
   }
 });
+test("config media.root (PORCH-054): null keeps the hub data-directory default; an absolute path is honored", () => {
+  const defaulted = normalizeConfig({ ...freshConfig() });
+  assert.equal(defaulted.media.root, null);
+  const nas = normalizeConfig({ ...freshConfig(), media: { root: "/Volumes/FamilyArchive" } });
+  assert.equal(nas.media.root, "/Volumes/FamilyArchive");
+});
+
+test("config media.root (PORCH-054): a relative path fails loudly, never a silently moving archive", () => {
+  assert.throws(() => normalizeConfig({ ...freshConfig(), media: { root: "relative/volume" } }), /absolute path/);
+  for (const bad of ["", "media", ".", "./archive", null]) {
+    if (bad === null) continue; // null is the default (legal)
+    assert.throws(() => normalizeConfig({ ...freshConfig(), media: { root: bad } }), /absolute path/, bad);
+  }
+});
+
+test("config media.volumePollSeconds (PORCH-054): the ready-and-waiting poll is an owner-readable value with sane bounds", () => {
+  assert.equal(normalizeConfig({ ...freshConfig() }).media.volumePollSeconds, 10);
+  assert.equal(normalizeConfig({ ...freshConfig(), media: { volumePollSeconds: 30 } }).media.volumePollSeconds, 30);
+  for (const bad of [0, -1, 1.5, 3601, "10", null]) {
+    assert.throws(
+      () => normalizeConfig({ ...freshConfig(), media: { volumePollSeconds: bad } }),
+      /volumePollSeconds/,
+      `bad value ${String(bad)} must fail`,
+    );
+  }
+});
+
+test("config media.root round-trips through disk (the owner console edit persists)", () => {
+  const root = mkdtempSync(join(tmpdir(), "porchlight-config-"));
+  try {
+    saveConfig(root, { ...freshConfig(), media: { root: "/Volumes/FamilyArchive" } });
+    const loaded = loadConfig(root);
+    assert.equal(loaded.media.root, "/Volumes/FamilyArchive");
+    assert.equal(loaded.media.volumePollSeconds, 10);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

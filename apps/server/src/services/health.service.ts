@@ -11,6 +11,20 @@ export interface HealthDoc {
   deps: DepsHealth;
   mode: { deploymentMode: string; socialServingEnabled: boolean; identityServingEnabled: boolean };
   hubUrl: string | null;
+  /**
+   * PORCH-054 (ac-1): the configured media root with its readiness state
+   * (ready / volume not ready) — wired late, after the social module
+   * assembles; null when no media pipeline is assembled.
+   */
+  media: MediaReadiness | null;
+}
+
+export interface MediaReadiness {
+  root: string | null;
+  state: string;
+  check: string | null;
+  reason: string | null;
+  flag: string | null;
 }
 
 /**
@@ -22,6 +36,7 @@ export class HealthService {
   private readonly probes: { mongo: Probe; redis: Probe };
   private readonly phase: { deploymentMode: string; socialServingEnabled: boolean; identityServingEnabled: boolean };
   private readonly hubUrl: () => string | null;
+  private mediaStatus: (() => Promise<MediaReadiness>) | null = null;
 
   constructor(
     probes: { mongo: Probe; redis: Probe },
@@ -31,6 +46,15 @@ export class HealthService {
     this.probes = probes;
     this.phase = phase;
     this.hubUrl = hubUrl;
+  }
+
+  /**
+   * Late-bound media readiness (PORCH-054 ac-1): apps/server wires the
+   * social module's volume status after assembly so the health surface
+   * always names the CURRENT configured root and its state.
+   */
+  setMediaStatus(provider: () => Promise<MediaReadiness>) {
+    this.mediaStatus = provider;
   }
 
   async getHealth(): Promise<HealthDoc> {
@@ -45,6 +69,7 @@ export class HealthService {
         identityServingEnabled: this.phase.identityServingEnabled,
       },
       hubUrl: this.hubUrl(),
+      media: this.mediaStatus ? await this.mediaStatus() : null,
     };
   }
 }

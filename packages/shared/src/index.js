@@ -106,6 +106,23 @@ export const DEFAULT_CONFIG = Object.freeze({
    * the whole ladder generation lands inside the ≤2–4x rendition budget.
    */
   media: {
+    /**
+     * Configurable media root (PORCH-054, Brian Oct 14, 2026): the mounted
+     * POSIX path the family's archive lives on (internal volume, DAS, or a
+     * NAS mount — the application never distinguishes protocols). Runtime
+     * configuration set at setup and editable later from the owner console;
+     * null = the hub's own data directory (the legitimate local install).
+     * A root change never moves existing media (owner-run move and repoint).
+     */
+    root: null,
+    /**
+     * Volume readiness poll interval (PORCH-054) [Assumed: 10s, tune at
+     * build]: a known-good root that dropped pauses media in the
+     * ready-and-waiting state and auto-resumes within one poll interval
+     * once the volume mounts again — poll-and-recover, never refuse-and-
+     * restart.
+     */
+    volumePollSeconds: 10,
     renditions: {
       image: { "feed-thumb": 640, album: 1080, detail: 1600 },
       video: { poster: 640, playable: 1280 },
@@ -158,6 +175,20 @@ export function normalizeConfig(raw) {
   const modes = ["self-hosted", "hosted", "identity-only"];
   if (!modes.includes(merged.mode.deploymentMode)) {
     throw new Error(`config mode.deploymentMode must be one of ${modes.join(", ")}`);
+  }
+  // Configurable media root (PORCH-054): null = the hub data directory
+  // default; otherwise it must be an absolute POSIX path the hub could
+  // write to — a relative or malformed root would resolve against the
+  // process cwd (a silently moving archive) so it fails loudly at boot.
+  if (merged.media.root != null) {
+    if (typeof merged.media.root !== "string" || !isAbsolute(merged.media.root)) {
+      throw new Error("config media.root must be an absolute path (or null for the hub data directory default)");
+    }
+  }
+  // Volume readiness poll (PORCH-054) [Assumed: 10s default]: the one
+  // poll-and-recover interval for a dropped known-good root.
+  if (!Number.isInteger(merged.media.volumePollSeconds) || merged.media.volumePollSeconds < 1 || merged.media.volumePollSeconds > 3600) {
+    throw new Error("config media.volumePollSeconds must be an integer number of seconds between 1 and 3600");
   }
   // Rendition ladder rungs (PORCH-044): the documented configuration values
   // — known kinds only, integer pixel widths inside the generation range.
