@@ -4,12 +4,16 @@ import {
   DialogContent, DialogTitle, Divider, Drawer, FormControl, IconButton, InputLabel, List, ListItemButton,
   ListItemText, MenuItem, Paper, Popover, Select, Stack, TextField, Typography,
 } from '@mui/material';
-import { AddReactionOutlined, ChevronLeft, ChevronRight, CloseOutlined } from '@mui/icons-material';
+import {
+  AddReactionOutlined, ChevronLeft, ChevronRight, CloseOutlined, FullscreenOutlined,
+  PauseOutlined, PlayArrowOutlined, ReplayOutlined, ShareOutlined,
+  VolumeOffOutlined, VolumeUpOutlined,
+} from '@mui/icons-material';
 import { cssVars } from './theme.js';
 import { adaptiveTrackHeight, carouselIndex, photoFirst } from './photo-first.js';
 import {
   renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
-  playableVideoUrl, posterUrl, rungKindForViewport, stampedAspect,
+  playableVideoUrl, posterUrl, rungKindForViewport, stampedAspect, mediaFileName,
 } from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
@@ -192,30 +196,109 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
   // rendition loads behind it.
   const videoPoster = meta ? posterUrl(meta, origin) : null;
   const videoPlayable = meta ? playableVideoUrl(meta, origin) : null;
-  // Family-video playback posture (PORCH-049 ac-3, superseding the Oct 9
-  // no-autoplay line for family media): the poster fills the reserved frame
-  // and playback begins inline with the sound off. A tap ON the media frame
-  // is the only way sound arrives — no player chrome and no sound exist
-  // before it. Third-party link-preview embeds keep their own tap-to-play
+  // Family-video playback posture (PORCH-049 ac-3, plus the Brian Oct 10
+  // user-testing turn): the poster fills the reserved frame and playback
+  // begins inline with the sound off — NO panel and no sound exist before
+  // the first tap on the media frame. That first tap is the door: sound
+  // arrives (the muted element property, not the attribute — autoplay only
+  // honors the property) and the playback panel opens with it. After it,
+  // the frame tap pauses/resumes and the panel owns mute, restart, and
+  // fullscreen. Third-party link-preview embeds keep their own tap-to-play
   // rule under the Link Previews pair; they render nowhere here.
   const [soundOn, setSoundOn] = useState(false);
-  const toggleSound = (event) => {
-    // Sound toggles on the element property, not the attribute: browsers
-    // autoplay only unmuted-by-property media, so the sync is load-bearing.
-    event.currentTarget.muted = soundOn;
-    setSoundOn(!soundOn);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [playing, setPlaying] = useState(true);
+  const videoRef = useRef(null);
+  const togglePlayback = (element) => {
+    if (!element) return;
+    if (element.paused) {
+      const resume = element.play();
+      if (resume?.catch) resume.catch(() => {});
+    } else element.pause();
+  };
+  const tapVideo = (event) => {
+    if (!panelOpen) {
+      setPanelOpen(true);
+      event.currentTarget.muted = false;
+      setSoundOn(true);
+      return;
+    }
+    togglePlayback(event.currentTarget);
   };
   // The muted property is re-asserted on every metadata load: React's muted
   // attribute handling does not always survive element remount (the
-  // boot-window retry remounts keyed by attempt), and autoplay requires it.
+  // boot-window retry remounts keyed by attempt), and autoplay requires it
+  // until the member's first tap.
   const syncMuted = (event) => {
     if (event.currentTarget) event.currentTarget.muted = !soundOn;
     if (!meta.width && event.target) setResource({ width: event.target.videoWidth, height: event.target.videoHeight });
   };
+  // Playback panel handlers (Brian, 10/10: pause, restart, un/mute, and
+  // full screen built in). Mute rides the element property like the first
+  // tap; restart replays from the top; fullscreen takes the standard
+  // element API with the iOS webkit fallback (iOS Safari exposes no
+  // element requestFullscreen for video).
+  const toggleMute = () => {
+    const element = videoRef.current;
+    if (!element) return;
+    element.muted = soundOn;
+    setSoundOn(!soundOn);
+  };
+  const restartVideo = () => {
+    const element = videoRef.current;
+    if (!element) return;
+    element.currentTime = 0;
+    togglePlayback(element);
+  };
+  const fullscreenVideo = () => {
+    const element = videoRef.current;
+    if (!element) return;
+    if (typeof element.requestFullscreen === 'function') element.requestFullscreen().catch(() => {});
+    else if (typeof element.webkitEnterFullscreen === 'function') element.webkitEnterFullscreen();
+  };
+  const watchPlayback = (event) => setPlaying(event.type === 'play');
+  // Sharing on media (Brian, 10/10: "sharing should be built in"): the
+  // share sheet carries the full-quality original bytes — the archival
+  // record — when the platform takes files; the image clipboard is the
+  // fallback; Get original stays the last resort. Member-initiated and
+  // member-targeted: nothing leaves the perimeter on its own (zero
+  // phone-home is the server contract; the share target is whatever the
+  // member picks in the sheet).
+  const shareMedia = () => operation.run(async () => {
+    const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
+    if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
+    const file = new File([blob], mediaFileName(id, blob), { type: blob.type || 'application/octet-stream' });
+    if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: post.caption || undefined });
+    } else if (post.type === 'photo' && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+    } else {
+      throw new Error('Your browser cannot share from here yet — Get original keeps the file.');
+    }
+  });
   // Rendition elements remount once for the boot-window retry: key=attempt
   // re-issues the same content-addressed request after the window settles.
   const directImg = post.type === 'photo' && direct;
   const directVideo = post.type === 'video' && direct;
+  // The playback panel (post-first-tap chrome): a compact paper chip riding
+  // the frame's bottom edge — the carousel's arrow treatment — so palette
+  // tokens only, no literals (Display Modes token contract). The overlay
+  // passes taps through (pointerEvents none; the chip takes its own), so
+  // the frame stays the tap surface for pause/resume.
+  const playbackPanel = panelOpen && <Box aria-label="Playback panel"
+    sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', display: 'flex', alignItems: 'flex-end', p: 1 }}>
+    <Stack direction="row" spacing={0.25} sx={{ pointerEvents: 'auto', bgcolor: 'background.paper',
+      borderRadius: 9999, border: '1px solid', borderColor: 'divider', px: 0.5, py: 0.25, boxShadow: 2 }}>
+      <IconButton aria-label={playing ? 'Pause' : 'Play'} size="small" onClick={() => togglePlayback(videoRef.current)}>
+        {playing ? <PauseOutlined fontSize="small" /> : <PlayArrowOutlined fontSize="small" />}
+      </IconButton>
+      <IconButton aria-label="Restart" size="small" onClick={restartVideo}><ReplayOutlined fontSize="small" /></IconButton>
+      <IconButton aria-label={soundOn ? 'Mute' : 'Unmute'} size="small" onClick={toggleMute}>
+        {soundOn ? <VolumeUpOutlined fontSize="small" /> : <VolumeOffOutlined fontSize="small" />}
+      </IconButton>
+      <IconButton aria-label="Full screen" size="small" onClick={fullscreenVideo}><FullscreenOutlined fontSize="small" /></IconButton>
+    </Stack>
+  </Box>;
   useEffect(() => {
     if ((!directImg && !directVideo) || retriedRef.current) return undefined;
     if (!loadError) return undefined;
@@ -233,32 +316,43 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
       sx={{ ...mediaSx, ...fitSx }} />}
     {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
       sx={{ ...mediaSx, ...fitSx }} />}
-    {directVideo && <Box key={`vid-${attempt}`} component="video" src={videoPlayable} poster={videoPoster}
-      autoPlay muted playsInline preload="metadata" onClick={toggleSound}
-      ref={(el) => { if (el) el.muted = true; }}
-      onLoadedMetadata={syncMuted}
-      onError={() => setLoadError('Your hub did not return the media.')}
-      sx={{ ...mediaSx, ...fitSx, cursor: 'pointer' }} />}
-    {post.type === 'video' && !direct && resource && <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined}
-      autoPlay muted playsInline onClick={toggleSound}
-      ref={(el) => { if (el) el.muted = true; }}
-      onError={() => setLoadError('Your hub did not return the media.')}
-      sx={{ ...mediaSx, ...fitSx, cursor: 'pointer' }} />}
+    {directVideo && <Box key={`vid-${attempt}`} sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
+      <Box component="video" src={videoPlayable} poster={videoPoster}
+        autoPlay muted playsInline preload="metadata" onClick={tapVideo}
+        ref={(el) => { videoRef.current = el; if (el) el.muted = true; }}
+        onLoadedMetadata={syncMuted} onPlay={watchPlayback} onPause={watchPlayback}
+        onError={() => setLoadError('Your hub did not return the media.')}
+        sx={{ display: 'block', width: '100%', cursor: 'pointer' }} />
+      {playbackPanel}
+    </Box>}
+    {post.type === 'video' && !direct && resource && <Box sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
+      <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined}
+        autoPlay muted playsInline onClick={tapVideo}
+        ref={(el) => { videoRef.current = el; if (el) el.muted = true; }}
+        onLoadedMetadata={syncMuted} onPlay={watchPlayback} onPause={watchPlayback}
+        onError={() => setLoadError('Your hub did not return the media.')}
+        sx={{ display: 'block', width: '100%', cursor: 'pointer' }} />
+      {playbackPanel}
+    </Box>}
     {post.type === 'audio' && <Box component="audio" src={resource?.url} controls preload="none" sx={{ width: '100%' }} />}
     {!resource && !direct && post.type !== 'audio' && !loadError && (reserved)
       ? <Box role="status" aria-label="Loading media" sx={{ ...mediaSx, ...fitSx }} />
       : !resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" sx={slideRailSx} />}
     {loadError && <Alert severity="error" sx={slideRailSx}>{loadError}</Alert>}
-    <Button size="small" disabled={operation.busy} onClick={() => operation.run(async () => {
-      const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
-      if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `${id}`;
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    })} sx={{ ...(slide ? slideRailSx : {}), mt: 1, px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Get original</Button>
+    <Stack direction="row" spacing={1} sx={{ ...(slide ? slideRailSx : {}), mt: 1 }} aria-label="Media actions">
+      <Button size="small" disabled={operation.busy} onClick={() => operation.run(async () => {
+        const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
+        if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `${id}`;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      })} sx={{ px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Get original</Button>
+      <Button size="small" disabled={operation.busy} onClick={shareMedia} startIcon={<ShareOutlined />}
+        sx={{ px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Share</Button>
+    </Stack>
     {operation.error && <Alert severity="error" sx={slideRailSx}>{operation.error}</Alert>}
   </Box>;
 }

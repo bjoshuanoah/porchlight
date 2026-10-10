@@ -85,6 +85,23 @@ export function stampedAspect(meta) {
 }
 
 /**
+ * The share-sheet file name (PORCH-049 turn): content-typed extension, the
+ * media id for stability. The original blob carries its MIME; the table
+ * maps the common family-media types and the video/image catch-all keeps
+ * every platform's share sheet from filing an extension-less blob.
+ */
+export function mediaFileName(mediaId, blob) {
+  const extByType = {
+    "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif",
+    "image/webp": "webp", "image/heic": "heic", "image/heif": "heif",
+    "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov",
+  };
+  const type = String(blob?.type ?? "").split(";")[0];
+  const ext = extByType[type] ?? (type.startsWith("video/") ? "mp4" : type.startsWith("image/") ? "jpg" : "bin");
+  return `${mediaId}.${ext}`;
+}
+
+/**
  * Blob-loader fallback (insecure HTTP origins, where the auth-relaying
  * service worker can't register). Video posts ride their playable
  * rendition; images take the rung nearest the viewport's device pixels,
