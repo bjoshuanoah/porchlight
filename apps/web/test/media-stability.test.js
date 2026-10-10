@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { stampedAspect } from "../src/media-rung.js";
+import { stampedAspect, mediaFileName } from "../src/media-rung.js";
 import { photoFirst } from "../src/photo-first.js";
 import { lightTokens, darkTokens } from "../src/theme.js";
 
@@ -54,24 +54,56 @@ test("PORCH-049 ac-2: media elements reserve the stamped box before and after lo
   assert.doesNotMatch(mediaItem, /animation:|keyframes/);
 });
 
-test("PORCH-049 ac-3: family video plays the way an image loads — muted inline autoplay, tap for sound", () => {
+test("PORCH-049 ac-3 + Brian's Oct 10 turn: no panel before the first tap, then pause, restart, mute, fullscreen", () => {
   // The direct rendition element and the blob-loader element share the
   // posture: playback begins with the sound off, inline, poster filling
   // the reserved frame.
   assert.match(social, /autoPlay muted playsInline/);
   assert.match(social, /component="video" src=\{videoPlayable\} poster=\{videoPoster\}/);
-  // No player chrome and no sound precede the tap: the video carries no
-  // controls at all (audio keeps its transport).
+  // No native chrome ever, and nothing of the panel before the first tap:
+  // no `controls` attribute on any video element, and the playback panel
+  // renders only behind the panelOpen gate (initially false).
   const videoElement = social.slice(social.indexOf('directVideo && <Box'), social.indexOf('{post.type === \'audio\''));
-  assert.ok(!videoElement.includes("controls"));
-  // Sound arrives only from a tap ON the media frame — toggling the muted
-  // property (property, not attribute: autoplay reads the property).
-  assert.match(social, /onClick=\{toggleSound\}/);
-  assert.match(social, /event\.currentTarget\.muted = soundOn;/);
+  assert.ok(!/\bcontrols\b/.test(videoElement));
+  assert.match(social, /const \[panelOpen, setPanelOpen\] = useState\(false\);/);
+  assert.match(social, /const playbackPanel = panelOpen && </);
+  // The first tap on the media frame is the only door: sound arrives by
+  // the muted element property (property, not attribute: autoplay reads
+  // the property) and the panel opens with it.
+  assert.match(social, /onClick=\{tapVideo\}/);
+  assert.match(social, /event\.currentTarget\.muted = false;/);
+  assert.match(social, /setPanelOpen\(true\);/);
   // The muted property is load-bearing at mount and re-asserted on
   // metadata load (the boot-window retry remounts the element).
   assert.match(social, /if \(el\) el\.muted = true;/);
   assert.match(social, /event\.currentTarget\.muted = !soundOn;/);
+  // After the first tap the panel owns the playback (Brian, 10/10: pause,
+  // restart, un/mute, full screen built in): pause/resume truth rides the
+  // element's play/pause events, restart replays from the top, mute rides
+  // the property, fullscreen takes the standard API with the iOS webkit
+  // fallback.
+  assert.match(social, /onPlay=\{watchPlayback\} onPause=\{watchPlayback\}/);
+  assert.match(social, /element\.currentTime = 0;/);
+  assert.match(social, /element\.muted = soundOn;/);
+  assert.match(social, /element\.requestFullscreen/);
+  assert.match(social, /webkitEnterFullscreen/);
+});
+
+test("PORCH-049 turn: sharing is built in — the share sheet carries the original, clipboard then Get original fall back", () => {
+  // The share sheet takes the full-quality original bytes when the
+  // platform can share files; the image clipboard is the fallback; the
+  // last resort names Get original (the button it sits beside).
+  assert.match(social, /navigator\.canShare\(\{ files: \[file\] \}\)/);
+  assert.match(social, /await navigator\.share\(\{ files: \[file\]/);
+  assert.match(social, /new ClipboardItem\(\{ \[blob\.type\]: blob \}\)/);
+  assert.match(social, />Share<\/Button>/);
+  // The share file is named from its content type (stable, extensionless
+  // blobs never reach the sheet).
+  assert.equal(mediaFileName("abc123", { type: "video/mp4" }), "abc123.mp4");
+  assert.equal(mediaFileName("abc123", { type: "image/jpeg;charset=utf-8" }), "abc123.jpg");
+  assert.equal(mediaFileName("abc123", { type: "video/x-matroska" }), "abc123.mp4");
+  assert.equal(mediaFileName("abc123", { type: "image/avif" }), "abc123.jpg");
+  assert.equal(mediaFileName("abc123", { type: "" }), "abc123.bin");
 });
 
 test("PORCH-049 ac-2: legacy media without stamps never gets a reserved box", () => {
