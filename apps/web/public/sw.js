@@ -104,9 +104,22 @@ function relayPublication(timeoutMs = 5000) {
 }
 
 function authedRequest(request, token) {
-  const headers = new Headers(request.headers);
-  if (token) headers.set("authorization", `Bearer ${token}`);
-  return new Request(request, { headers });
+  if (!token) return request;
+  // PORCH-050: the intercepted <img>/<video> request is mode "no-cors", and
+  // re-issuing it with a merged header rides the request-no-cors headers
+  // guard — a guard not required to carry non-safelisted values, and
+  // Authorization is not safelisted. Engines disagree (Safari drops the
+  // value), so a merged-header re-issue can leave the hub unanswered with
+  // 401s for every rendition while the same media loads elsewhere (the
+  // reported desktop album-401 signature). Rebuild the request from its URL
+  // in cors mode, where the header always carries: same-origin needs no
+  // preflight and runs no CORS check, and credentials stay same-origin like
+  // the original.
+  const headers = new Headers();
+  const accept = request.headers.get("accept");
+  if (accept) headers.set("accept", accept);
+  headers.set("authorization", `Bearer ${token}`);
+  return new Request(new URL(request.url), { method: "GET", mode: "cors", credentials: "same-origin", headers });
 }
 
 self.addEventListener("fetch", (event) => {

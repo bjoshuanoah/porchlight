@@ -14,6 +14,7 @@ import { fullName } from "./setup-state.js";
 import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
+import { reCredentialPlanes } from "./session-credentials.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
 import { resolveStoredNames } from "./name-heal.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
@@ -82,6 +83,12 @@ function App() {
   const [ranked, setRanked] = useState([]);
   const [hidden, setHidden] = useState(() => localIdentities.length === 1 ? hiddenPosts(stored, `${origin}:${localIdentities[0]}`) : new Set());
   const [offline, setOffline] = useState(false);
+  // PORCH-050 ac-4: a genuinely dead credential (401 after recovery tried) is
+  // NOT an unreachable hub — it names its own state and recovery route
+  // instead of masquerading as an outage while the polls keep failing.
+  const [membershipEnded, setMembershipEnded] = useState(false);
+  const membershipEndedRef = useRef(false);
+  const identityEndedRef = useRef(false);
   const [notice, setNotice] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [identity, setIdentity] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? initialConnections[0].identity || null : null);
@@ -91,6 +98,7 @@ function App() {
   const [networkLoaded, setNetworkLoaded] = useState(false);
   const [newDevices, setNewDevices] = useState([]);
   const active = identity ? connections.find((item) => item.identity?.id === identity.id) : null;
+  const activeIdentityId = active?.identity?.id ?? null;
   const identityConnections = identity ? connections.filter((item) => item.identity?.id === identity.id && item.token) : [];
   const renewRef = useRef(null);
   const signedOut = useRef(false);
@@ -174,55 +182,25 @@ function App() {
     // skip the supersession and let that tab's publication ride adoption.
     if (Date.now() - (target.renewedAt || 0) < renewFreshMs) return false;
     const next = { ...target };
+    // PORCH-050: refresh first, restore on failure — a dead membership
+    // credential re-credentials with the freshly minted identity token
+    // instead of leaving `token` expired (and every recovery pass unstamping
+    // renewedAt while the feed, devices poll, and renditions 401 in a loop).
     let membershipFailed = false;
     try {
-      const identitySession = await openDeviceSession(next, { did: next.identity.id, deviceId: next.deviceId }, request);
-      next.identityToken = identitySession.accessToken;
-      next.identityRefreshToken = identitySession.refreshToken;
-      const membershipRefreshToken = next.refreshToken ?? next.membershipRefreshToken;
-      if (membershipRefreshToken) {
-        try {
-          const membership = await request({ url: next.url }, "social/session/refresh", {
-            method: "POST", body: JSON.stringify({ refreshToken: membershipRefreshToken }),
-          });
-          next.token = membership.accessToken;
-          next.refreshToken = membership.refreshToken ?? next.refreshToken;
-        } catch {
-          // Membership refresh failed; the identity tokens are still live, so
-          // publish them but leave renewedAt unstamped so the next renewal can
-          // re-credential the membership plane too.
-          membershipFailed = true;
-        }
-      }
-      // Founder binding rides restore (PORCH-018): a connection without a
-      // membership token yet — a fresh owner connection, or any hub where
-      // the owner was bootstrapped before binding existed — re-credentials
-      // silently with the device key and comes back holding network tokens.
-      if (!next.token && next.deviceId) {
-        try {
-          const restored = await request({ url: next.url }, "social/session/restore", {
-            method: "POST", body: JSON.stringify({ identityAccessToken: next.identityToken, deviceId: next.deviceId }),
-          });
-          const first = restored?.sessions?.[0];
-          if (first) {
-            next.token = first.accessToken;
-            next.refreshToken = first.refreshToken;
-            next.networkId = first.networkId;
-            // PORCH-034 second round: the name rides every restore, so a
-            // renewed founder connection heals device-local naming too.
-            if (first.name) next.identity.name = first.name;
-          }
-        } catch { /* no membership row yet: the plain notice below names it */ }
-      }
-      next.renewedAt = membershipFailed ? undefined : Date.now();
-      const revised = live.map((item) => item.identity?.id === target.identity.id ? next : item);
-      saveConnections(stored, origin, revised);
-      setConnections(revised);
-      return true;
+      const { connection: reCredentialed, membershipFailed: failed } = await reCredentialPlanes(next, request, { openDeviceSession });
+      Object.assign(next, reCredentialed);
+      membershipFailed = failed;
     } catch {
       setOffline(true);
       return false;
     }
+    next.renewedAt = membershipFailed ? undefined : Date.now();
+    const revised = live.map((item) => item.identity?.id === target.identity.id ? next : item);
+    saveConnections(stored, origin, revised);
+    setConnections(revised);
+    if (!membershipFailed) { setMembershipEnded(false); membershipEndedRef.current = false; identityEndedRef.current = false; }
+    return true;
   }, [identity]);
   useEffect(() => { renewRef.current = renew; }, [renew]);
   useEffect(() => {
@@ -242,11 +220,18 @@ function App() {
   // the merge paints, so arriving content never repositions the reader.
   const applyFeeds = useCallback((result, { notice: noticeText } = {}) => {
     const before = captureFeedAnchor();
-    setOffline(result.failures.length > 0);
+    // PORCH-050: a 401 that survives custody recovery is a genuinely dead
+    // credential — its own honest state, never an "unreachable" claim. A
+    // non-401 failure (fetch throw: hub unreachable, TLS, DNS) stays offline.
+    const deadSession = result.failures.some((failure) => failure.status === 401);
+    const unreachable = result.failures.some((failure) => failure.status !== 401);
+    setOffline(unreachable);
+    setMembershipEnded(deadSession);
+    membershipEndedRef.current = deadSession;
     if (!result.failures.length) {
       setPosts(result.posts);
       saveTimeline(stored, `${origin}:${identity?.id}`, result.posts);
-    } else if (noticeText) setNotice(noticeText);
+    } else if (noticeText && unreachable) setNotice(noticeText);
     setRanked(result.ranked);
     if (before) {
       requestAnimationFrame(() => {
@@ -300,13 +285,18 @@ function App() {
   useEffect(() => {
     // First load waits for the silent renewal: an expired access token must
     // re-credential BEFORE reads, or the page would render failure states.
+    // PORCH-050 ac-3: this effect keys on the active identity's ID, not the
+    // connections object — a token renewal adopts fresh credentials in state
+    // without re-running a full feed reload, so a renewal cannot cadence the
+    // timeline into a loading loop.
     void (async () => {
       if (active?.identity?.id && !signedOut.current) {
         try { await custody.renew(); } catch { /* renew sets offline state itself */ }
       }
       await reload();
     })();
-  }, [reload, active, renew]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reload, activeIdentityId, renew]);
   useEffect(() => {
     const online = () => void reload();
     window.addEventListener("online", online);
@@ -324,6 +314,11 @@ function App() {
     if (!identity?.id) return undefined;
     const arrived = async () => {
       if (document.hidden || document.visibilityState !== "visible" || arrivingRef.current) return;
+      // PORCH-050: while a dead credential names its recovery route, the
+      // arrival loop pauses — a poll that only re-renders the same 401s is
+      // console spam, never progress. A renewal that re-credentials clears
+      // the flag (renew/applyFeeds), and the loop resumes.
+      if (membershipEndedRef.current) return;
       arrivingRef.current = true;
       try {
         const live = readConnections(stored, origin);
@@ -360,11 +355,20 @@ function App() {
   useEffect(() => {
     if (!active?.identityToken) return undefined;
     const check = async () => {
+      // PORCH-050: a revoked registration or genuinely dead identity session
+      // cannot be fixed by polling — recovery runs through the owner-routed
+      // device link. Pause the 15s poll in that state instead of writing the
+      // same 401 into the console every tick; a successful renewal (fresh
+      // mint) or an identity switch clears the flag and the poll resumes.
+      if (identityEndedRef.current) return;
       try {
         const result = await request({ ...active, token: active.identityToken }, "identity/devices");
         observeDevices(result.registrations || [], active);
         setOwner((current) => ({ ...current, devices: result.registrations || [], availability: { ...current.availability, devices: true } }));
-      } catch { setOwner((current) => ({ ...current, availability: { ...current.availability, devices: false } })); }
+      } catch (error) {
+        if (error?.status === 401) identityEndedRef.current = true;
+        setOwner((current) => ({ ...current, availability: { ...current.availability, devices: false } }));
+      }
     };
     const timer = setInterval(() => void check(), 15_000);
     return () => clearInterval(timer);
@@ -519,6 +523,7 @@ function App() {
       const next = connections.find((item) => item.identity?.id === id);
       if (!next) throw new Error("This person is not connected on this device.");
       const session = await openDeviceSession(next, { did: id, deviceId: next.deviceId }, request);
+      identityEndedRef.current = false;
       // PORCH-034 follow-up: the hub resolves the member's family-facing
       // name at re-credential, healing any device-local stale naming.
       let hubName = null;
@@ -732,7 +737,7 @@ function App() {
     identity, members: owner.members, devices: owner.devices, settings: owner.settings,
     invites: owner.invites, audit: owner.audit, disk: owner.disk, availability: owner.availability,
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
-    server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline,
+    server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline, membershipEnded,
   };
   // The Profile appearance control is bound to the stored *preference*
   // (modePref), never the resolved mode: choosing System must stick as the
@@ -821,6 +826,9 @@ function App() {
     </AppBar>}
     <Container maxWidth={false} sx={{ maxWidth: 1180, px: { xs: 2, lg: 4 }, pt: 4, pb: frontDoor ? 4 : { xs: 13, lg: 6 } }}>
       {offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Saved moments may be out of date.</Alert>}
+      {!offline && membershipEnded && <Alert severity="warning" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/profile")}>Open Profile</Button>}>
+        This device's connection ended. Saved moments remain on this device. Ask your family's owner for a device link — opening it here reconnects this device.
+      </Alert>}
       {!frontDoor && networkLoaded && !network && identity && <Alert severity="info" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/setup")}>Continue</Button>}>Porch setup is not finished on this hub yet.</Alert>}
       {sharedDevice && !frontDoor && <Button size="small" onClick={() => navigate("/who-is-here")}>Switch person</Button>}
       {page}

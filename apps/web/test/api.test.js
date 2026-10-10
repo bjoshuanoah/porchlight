@@ -34,7 +34,25 @@ test("one unreachable origin remains visible as a failure while healthy origin s
   };
   const result = await loadFeeds([{ url: "https://home.example", token: "home" }, { url: "https://unreachable.example", token: "away" }]);
   assert.equal(result.posts[0].origin, "https://home.example");
-  assert.deepEqual(result.failures, [{ origin: "https://unreachable.example", message: "Hub unreachable" }]);
+  assert.deepEqual(result.failures, [{ origin: "https://unreachable.example", message: "Hub unreachable", status: null, code: null }]);
+});
+
+test("a 401 that survives recovery is carried as a dead session, not a network failure (PORCH-050 ac-4)", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  setUnauthorizedHandler(async () => null); // recovery has nothing to offer
+  globalThis.fetch = async (url) => {
+    if (url.toString().includes("home")) return { ok: true, json: async () => ({ posts: [{ _id: "here", createdAt: "2026-01-01" }] }) };
+    return { ok: false, status: 401, json: async () => ({ error: "Your session has ended.", code: "E_SESSION_REQUIRED" }) };
+  };
+  const result = await loadFeeds([{ url: "https://home.example", token: "home" }, { url: "https://dead.example", token: "dead" }]);
+  assert.equal(result.posts.length, 1);
+  assert.deepEqual(result.failures, [{
+    origin: "https://dead.example",
+    message: "Your session has ended.",
+    status: 401,
+    code: "E_SESSION_REQUIRED",
+  }]);
 });
 
 test("a 401 retries once through the recovery handler and succeeds (PORCH-028)", async (t) => {
