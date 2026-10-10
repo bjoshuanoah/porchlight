@@ -54,6 +54,33 @@ export const photoFirst = {
     endToDivider: 16,
   },
 };
+// PORCH-045 (Brian, Oct 10, 2026 user-testing note): as the member swipes
+// between slides of differing aspect ratios, the page slides into the
+// right size — the track height interpolates between the two bounding
+// slides' heights from the scroll fraction instead of holding the tallest
+// slide's space. Slides are never cropped to it: each keeps its natural
+// photo-first height and only the visible window adapts. Unmeasurable
+// slides (not yet laid out) carry the nearest measured neighbor; anything
+// unmeasurable at both ends leaves the track at its natural height (null).
+export function adaptiveTrackHeight(heights, slidePosition) {
+  const clean = (Array.isArray(heights) ? heights : []).map((height) =>
+    Number.isFinite(height) && height > 0 ? height : null,
+  );
+  if (!clean.length) return null;
+  const position = Math.min(clean.length - 1, Math.max(0, Number.isFinite(slidePosition) ? slidePosition : 0));
+  const lower = Math.floor(position);
+  // Each boundary resolves to the nearest measurable slide height; a slide
+  // whose box is not laid out yet carries its measured neighbor until its
+  // real box resolves (legacy media without stamped geometry, mid-load).
+  let from = null;
+  for (let index = lower; index >= 0 && from == null; index -= 1) from = clean[index];
+  for (let index = lower + 1; index < clean.length && from == null; index += 1) from = clean[index];
+  if (from == null) return null;
+  const next = Math.min(clean.length - 1, lower + 1);
+  const to = clean[next] ?? from;
+  return Math.round(from + (to - from) * (position - lower));
+}
+
 // PORCH-045 (Brian, Oct 14, 2026): the carousel's position math. The
 // scroll-snap track's slide is the one nearest the scroll offset — release
 // snapping to the nearest slide is the contract (ac-2), so position derives
