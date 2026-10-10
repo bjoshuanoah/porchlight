@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createClient, type RedisClientType } from "redis";
-import { createRedisEventPlane } from "../src/services/event-plane.redis.js";
+import { createRedisEventPlane, type RealtimeEnvelope } from "../src/services/event-plane.redis.js";
 
 const REDIS_URL = process.env.PORCHLIGHT_TEST_REDIS_URL ?? null;
 
@@ -37,7 +37,8 @@ test("redis event plane: append/readSince/publish round-trip (env-gated, real da
   const seqs = [];
   const arrivals: string[] = [];
   plane.onInbound((networkId, envelope) => {
-    arrivals.push(`${networkId}:${envelope.content?.body}`);
+    const body = (envelope.content as { body?: string }).body ?? "";
+    arrivals.push(`${networkId}:${body}`);
   });
   for (const body of ["one", "two", "three", "four"]) {
     const result = await plane.append("net_x", { type: "post.created", networkId: "net_x", postId: null, createdAt: new Date().toISOString(), content: { body } });
@@ -57,15 +58,16 @@ test("redis event plane: append/readSince/publish round-trip (env-gated, real da
   // modules/social/test/realtime.service.test.js.)
   const atFour = await plane.readSince("net_x", null);
   assert.equal(atFour.stale, false);
+  const bodyOf = (row: RealtimeEnvelope): string => (row.content as { body?: string }).body ?? "";
   assert.deepEqual(
-    atFour.events.map((row: { content: { body: string } }) => row.content.body),
+    atFour.events.map(bodyOf),
     ["one", "two", "three", "four"],
   );
   assert.equal(atFour.cursor, seqs[3]);
   const atTwo = await plane.readSince("net_x", seqs[1]);
   assert.equal(atTwo.stale, false);
   assert.deepEqual(
-    atTwo.events.map((row: { content: { body: string } }) => row.content.body),
+    atTwo.events.map(bodyOf),
     ["three", "four"],
   );
   assert.equal(atTwo.cursor, seqs[3]);
