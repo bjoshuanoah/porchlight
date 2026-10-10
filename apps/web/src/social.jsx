@@ -229,10 +229,13 @@ const carouselTrackSx = {
   overflowX: 'auto',
   scrollSnapType: 'x mandatory',
   // One slide per horizontal gesture (ac-2): scroll-snap-stop always halts
-  // momentum at the adjacent slide and release snaps to the nearest one,
-  // while near-vertical drags keep scrolling the timeline because the
-  // track's pan is horizontal-only.
-  touchAction: 'pan-y',
+  // momentum at the adjacent slide and release snaps to the nearest one.
+  // The track pan is touch-scrollable in both axes: horizontal drags swipe
+  // the native overflow-x track, and near-vertical drags chain to the
+  // timeline because the track itself has no vertical overflow. Any
+  // touch-action restricting the horizontal pan (e.g. pan-y alone) starves
+  // the swipe gesture entirely.
+  touchAction: 'pan-x pan-y',
   overscrollBehaviorX: 'contain',
   alignItems: 'flex-start',
   scrollbarWidth: 'none',
