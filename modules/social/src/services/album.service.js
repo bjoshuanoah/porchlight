@@ -271,6 +271,12 @@ export class AlbumService {
         entries.push({
           mediaId: described.mediaId,
           contentType: described.contentType,
+          // The media-geometry stamp (PORCH-049 ac-1): the album's media
+          // list states the geometry the reserved frame reserves from.
+          width: described.width,
+          height: described.height,
+          aspect: described.aspect,
+          durationMs: described.durationMs,
           renditionKinds: described.renditions,
           defaultRendition: ALBUM_DEFAULT_RENDITION,
         });

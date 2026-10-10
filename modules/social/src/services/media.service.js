@@ -576,9 +576,9 @@ export class MediaService {
       contentType: asset.contentType,
       bytes: asset.bytes,
       sha256: asset.sha256,
-      width: asset.width ?? null,
-      height: asset.height ?? null,
-      durationSeconds: asset.durationSeconds ?? null,
+      // The media-geometry stamp (PORCH-049 ac-1): display width, height,
+      // computed aspect ratio, durationMs for video.
+      ...mediaGeometry(asset),
       renditions:
         asset.kind === "original"
           ? Object.keys(rungsForContentType(this.renditionRungs, asset.contentType))
@@ -587,14 +587,16 @@ export class MediaService {
   }
 
   /**
-   * Feed/post view hydration (PORCH-044 ac-2): every post view that
-   * carries mediaRefs carries `mediaMeta` — per media id the original's
-   * display dimensions and the rendition set of record (kind, sha256,
-   * width, height, bytes; the poster frame riding the `poster` field for
-   * video). Clients build srcset/sizes and the video poster/src from this;
-   * no rendition metadata is fetched per item on the wire. Only
-   * format-v2 rows count as the set of record: pre-format archives
-   * self-heal above before their rows are ever reported.
+   * Feed/post view hydration (PORCH-044 ac-2, PORCH-049 ac-1): every post
+   * view that carries mediaRefs carries `mediaMeta` — per media id the
+   * geometry stamp (the original's display width and height plus the
+   * computed aspect ratio; durationMs for video) and the rendition set of
+   * record (kind, sha256, width, height, bytes; the poster frame riding
+   * the `poster` field for video). Clients reserve the final frame from
+   * the stamp before any byte arrives and build srcset/sizes and the video
+   * poster/src from this; no rendition metadata is fetched per item on the
+   * wire. Only format-v2 rows count as the set of record: pre-format
+   * archives self-heal above before their rows are ever reported.
    */
   async withMediaMeta(views, networkId) {
     const ids = [...new Set(views.flatMap((view) => (Array.isArray(view.mediaRefs) ? view.mediaRefs : [])))];
@@ -617,16 +619,17 @@ export class MediaService {
       (row) => ids.includes(row._id) || (row.kind === "rendition" && row.format === RENDITION_FORMAT_V2 && ids.includes(row.originalId)),
     );
     const meta = new Map(
-      ids.map((id) => [id, { mediaId: id, contentType: null, width: null, height: null, poster: null, renditions: [] }]),
+      // The geometry stamp initializes with the payload's null-shape so a
+      // ref with no readable archive still states geometry honestly (nulls)
+      // and legacy surfaces fall back to intrinsic sizing (PORCH-049 ac-2).
+      ids.map((id) => [id, { mediaId: id, contentType: null, width: null, height: null, aspect: null, durationMs: null, poster: null, renditions: [] }]),
     );
     for (const row of relevant) {
       if (row.kind === "original") {
         const entry = meta.get(row._id);
         if (!entry) continue;
         entry.contentType = row.contentType;
-        entry.width = row.width ?? null;
-        entry.height = row.height ?? null;
-        entry.durationSeconds = row.durationSeconds ?? null;
+        Object.assign(entry, mediaGeometry(row));
       } else {
         const entry = meta.get(row.originalId);
         if (!entry) continue;
@@ -908,6 +911,25 @@ export function rungsForContentType(rungs, contentType) {
 
 /** Video rendition kinds (poster + playable). */
 export const RENDITION_KINDS_VIDEO = new Set(["poster", "playable"]);
+
+/**
+ * The media-geometry stamp of a media ref (PORCH-049 ac-1, media-optimization
+ * ruling): the ORIGINAL's display width, height, and computed aspect ratio,
+ * with durationMs for video — the exact geometry the payload states and the
+ * client reserves the final frame from before any byte arrives. The aspect
+ * is rounded to 4 decimals so the serialized stamp is byte-stable; derived
+ * always from the display dims, never from a rendition rung.
+ * @param {{ width?: number | null, height?: number | null, durationSeconds?: number | null, contentType?: string }} asset
+ */
+export function mediaGeometry(asset) {
+  const width = asset?.width ?? null;
+  const height = asset?.height ?? null;
+  const aspect = width && height && width > 0 && height > 0 ? Math.round((width / height) * 10000) / 10000 : null;
+  const isVideo = typeof asset?.contentType === "string" && asset.contentType.startsWith("video/");
+  const durationMs =
+    isVideo && asset?.durationSeconds != null && asset.durationSeconds >= 0 ? Math.round(asset.durationSeconds * 1000) : null;
+  return { width, height, aspect, durationMs };
+}
 
 function chunkKey(uploadId, index) {
   return `${uploadId}/${index}`;
