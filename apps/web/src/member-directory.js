@@ -5,6 +5,17 @@
  * without a DOM.
  */
 
+/** Whether the viewer is the network's owner (PORCH-029 gating; reused for the
+ * owner-console navigation entry, PORCH-040 user-testing follow-up). The
+ * console members response is owner-only at the hub, so the viewer seeing
+ * themselves listed there as owner IS the owner — the SPA holds no other
+ * owner signal, and a non-owner's failed console read falls back to empty. */
+export function viewerIsOwner(data) {
+  return (data?.members || []).some(
+    (entry) => entry?.did === data?.identity?.id && entry?.role === "owner",
+  );
+}
+
 /** Directory rows: owner first, then everyone by admission, ids breaking ties. */
 export function directoryRows(members = [], identityDid = null) {
   return [...(members || [])]
