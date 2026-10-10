@@ -57,8 +57,12 @@ export class MembershipService {
    *   directory (PORCH-029): DIDs in, family-facing display fields out.
    *   Null on assemblies that don't wire it — the directory renders without
    *   names rather than failing.
+   * @param {(event: { membershipId: string, networkId: string, did: string, sessionIds: string[] }) => void} [deps.onRevoked]
+   *   PORCH-047: invoked the moment a member's sessions die at revocation —
+   *   the real-time surface closes the member's live subscriptions in the
+   *   same instant (revocation is active, not "at next request").
    */
-  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey, authFailureSink, memberNames }) {
+  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey, authFailureSink, memberNames, onRevoked }) {
     this.memberships = memberships;
     this.membershipSessions = membershipSessions;
     this.deviceKeys = deviceKeys;
@@ -67,6 +71,7 @@ export class MembershipService {
     this.networks = networks ?? null;
     this.registeredDeviceKey = registeredDeviceKey ?? null;
     this.memberNames = memberNames ?? null;
+    this.onRevoked = onRevoked ?? null;
     this.authFailureSink = authFailureSink ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
@@ -470,9 +475,14 @@ export class MembershipService {
     const revokedAt = new Date().toISOString();
     await this.memberships.updateOne({ _id: membership._id }, { $set: { state: "revoked", revokedAt } });
     const open = await this.membershipSessions.find({ membershipId: membership._id, status: "active" });
+    const sessionIds = [];
     for (const session of open) {
       await this.membershipSessions.updateOne({ _id: session._id }, { $set: { status: "revoked" } });
+      sessionIds.push(session._id);
     }
+    // PORCH-047: the real-time surface learns the revocation in the same
+    // write — live subscriptions close now, not at the member's next request.
+    this.onRevoked?.({ membershipId: membership._id, networkId: membership.networkId, did: membership.did, sessionIds });
     await this.audit("membership_revoke", { networkId: membership.networkId, did: membership.did, detail: { memberId: membership._id } });
     return { revoked: true, membership: this.view({ ...membership, state: "revoked", revokedAt }) };
   }

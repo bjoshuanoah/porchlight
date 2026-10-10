@@ -48,6 +48,10 @@ export function createSocialRouter(controllers) {
   router.delete("/posts/:postId", content.deletePost);
   router.delete("/me/content", content.sweepMemberContent);
   router.get("/notifications", content.inbox);
+  // Real-time catch-up (PORCH-047): the returning device's REST fallback —
+  // the replayed per-origin delta since its own cursor, stale-flagged when
+  // the gap predates the replay window.
+  router.get("/events", content.catchUp);
   router.get("/mentions/candidates", content.mentionCandidates);
 
   // Feed assembly (PORCH-007): base timeline, group timelines, and the

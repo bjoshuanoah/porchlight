@@ -101,7 +101,7 @@ export class PostService {
    *   per item (PORCH-044 ac-2).
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
    */
-  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit }) {
+  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -112,6 +112,7 @@ export class PostService {
     this.groups = groups;
     this.membership = membership;
     this.media = media;
+    this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
   }
@@ -144,6 +145,15 @@ export class PostService {
     const post = await this.#buildPost({ networkId, did: session.did, payload, signature });
     await this.posts.insertOne(post);
     await this.audit("post_create", { networkId, did: session.did, detail: { postId: post._id, type: post.type } });
+    // PORCH-047: the origin's live timeline learns the post the moment the
+    // commit lands — post.created, content-only payload (postView), to the
+    // origin room only.
+    await this.realtime?.published({
+      networkId,
+      type: "post.created",
+      postId: post._id,
+      content: postView(post),
+    });
     return { post: (await this.memberViews([post], networkId))[0], did: session.did };
   }
 

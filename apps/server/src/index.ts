@@ -1,15 +1,21 @@
 import type { Server } from "node:http";
-import type { Express } from "express";
+import * as http from "node:http";
+import type { Server as SocketIOServer } from "socket.io";
+import type { ExpressWithRealtime } from "./router.js";
 import { connectDependencies, type Dependencies } from "./dependencies.js";
 import { mongoStore } from "./store-adapter.js";
 import { createServer } from "./router.js";
+import { attachRealtimeGateway } from "./realtime-gateway.js";
+import { createRedisEventPlane } from "./services/event-plane.redis.js";
 import { BootstrapService } from "./services/bootstrap.service.js";
 import { homePaths, loadConfig } from "@porchlight/shared";
 
 export interface BootResult {
-  app: Express;
+  app: ExpressWithRealtime;
   deps: Dependencies;
   listen: () => Promise<Server>;
+  /** The attached real-time socket gateway (PORCH-047); null when social serving is off. */
+  gateway: SocketIOServer | null;
 }
 
 /**
@@ -30,21 +36,39 @@ export async function bootServer(): Promise<BootResult> {
   const deps = await connectDependencies(config);
   const store = mongoStore(deps.db);
   const bootstrap = new BootstrapService(store, config, home.root);
+  // PORCH-047: the Redis-backed real-time event plane — fan-out rides the
+  // hub's own Redis (pub/sub class) and the replay window rides a Redis
+  // stream (stream class), one per origin network.
+  const eventPlane = await createRedisEventPlane(deps.redis, { maxLength: 5000 });
   // The update surface's restart hook is late-bound in start(): the hub owns
   // the graceful shutdown the supervisor respawns after an owner-applied
   // update (PORCH-040).
-  const app = createServer({ store, readiness: deps.readiness, config, bootstrap, homeRoot: home.root });
+  const app = createServer({
+    store,
+    readiness: deps.readiness,
+    config,
+    bootstrap,
+    homeRoot: home.root,
+    eventPlane,
+  });
   const httpPort = config.hub.httpPort;
   // Operator bind address (hub.host; PORCH-025). "0.0.0.0" adds LAN
   // reachability beside the tunnel; one app pipeline serves every interface,
   // so membership-token enforcement is unchanged on the LAN boundary.
   const host = config.hub.host;
+  // The real-time gateway (PORCH-047) attaches to the hub's own HTTP
+  // server: socket.io's path is intercepted before the Express pipeline,
+  // so the SPA fallback and every REST surface are untouched. The gateway
+  // closes exactly like the HTTP server at the same graceful shutdown.
+  const httpServer = http.createServer(app);
+  const io = app.realtime ? attachRealtimeGateway(httpServer, { realtime: app.realtime }) : null;
   return {
     app,
     deps,
+    gateway: io,
     listen: () =>
       new Promise<Server>((resolve, reject) => {
-        const server: Server = app.listen(httpPort, host, () => resolve(server));
+        const server: Server = httpServer.listen(httpPort, host, () => resolve(server));
         server.on("error", reject);
       }),
   };
@@ -76,6 +100,13 @@ export async function start(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     server.close();
+    // PORCH-047: every live real-time channel disconnects with the hub —
+    // the socket gateway (and its origin channels) die exactly like the
+    // HTTP listener, never lingering past process exit.
+    if (boot.gateway) {
+      boot.gateway.close();
+      boot.app.realtime?.close();
+    }
     // The redis client can already be closed/reconnecting — quitting must
     // never turn a clean shutdown into a crash report.
     await deps.redis.quit().catch(() => {});

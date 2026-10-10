@@ -64,13 +64,14 @@ export class MediaService {
    *           chunkSize?: number, uploadTtlSeconds?: number,
    *           renditionRungs?: { image?: Record<string, number>, video?: Record<string, number> }} [options]
    */
-  constructor({ uploads, assets, artifacts, membership, quota, blobs, diskProbe, audit }, options = {}) {
+  constructor({ uploads, assets, artifacts, membership, quota, blobs, diskProbe, audit, realtime }, options = {}) {
     this.uploads = uploads;
     this.assets = assets;
     this.artifacts = artifacts;
     this.membership = membership;
     this.quota = quota;
     this.blobs = blobs;
+    this.realtime = realtime ?? null;
     this.diskProbe = diskProbe ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
@@ -299,6 +300,15 @@ export class MediaService {
       networkId: upload.networkId,
       did: upload.did,
       detail: { mediaId, bytes: asset.bytes, renditions: renditions.map((row) => row.kind) },
+    });
+    // PORCH-047: media.attached to the origin's room the moment the ingest
+    // commits — a media reference, never an original renderable anywhere
+    // else; content-only payload (renditions keep the timeline light).
+    await this.realtime?.published({
+      networkId: upload.networkId,
+      type: "media.attached",
+      postId: null,
+      content: { mediaId: asset._id, contentType: asset.contentType, kind: "original", createdAt: asset.createdAt },
     });
     return {
       mediaId,

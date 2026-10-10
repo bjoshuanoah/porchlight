@@ -111,6 +111,15 @@ export const DEFAULT_CONFIG = Object.freeze({
       video: { poster: 640, playable: 1280 },
     },
   },
+  /**
+   * Real-time event delivery (PORCH-047): the bounded per-origin replay
+   * window held server-side (Redis stream class) behind the reconnect
+   * catch-up. Owner-readable configuration value; beyond the window the
+   * client falls back to REST with the freshness note.
+   */
+  realtime: {
+    replayHours: 24,
+  },
 });
 
 export function configPath(root) {
@@ -130,6 +139,7 @@ export function normalizeConfig(raw) {
   merged.quota = { ...merged.quota, ...src.quota };
   merged.hub = { ...merged.hub, ...src.hub, tunnel: { ...merged.hub.tunnel, ...src.hub?.tunnel } };
   merged.identity = { ...merged.identity, ...src.identity };
+  merged.realtime = { ...merged.realtime, ...src.realtime };
   merged.media = {
     ...merged.media,
     ...src.media,
@@ -169,6 +179,12 @@ export function normalizeConfig(raw) {
     if (!Number.isInteger(value) || value <= 0 || value > 65535) {
       throw new Error(`config ${name} must be an integer TCP port`);
     }
+  }
+  // Real-time replay window (PORCH-047): an owner-readable configuration
+  // value; a non-integer or absurd window fails loudly at boot rather than
+  // degrading reconnect catch-up silently.
+  if (!Number.isInteger(merged.realtime.replayHours) || merged.realtime.replayHours < 1 || merged.realtime.replayHours > 720) {
+    throw new Error("config realtime.replayHours must be an integer number of hours between 1 and 720");
   }
   // hub.host is the operator bind address (PORCH-025). Like the ports, it is
   // validated at normalize time — a value that could never be a bind host
