@@ -1,5 +1,14 @@
 // IndexedDB structured-clones non-extractable CryptoKeys. Only the public JWK
 // crosses the network; no private material is serialized into browser storage.
+// The Ed25519 boundary (secure-context subtle, or the pure-JS fallback on the
+// plain-http LAN addresses hubs actually serve) rides device-crypto.js.
+
+// Insecure origins cannot mint non-extractable CryptoKeys (crypto.subtle is
+// absent), so their vault rows carry the private seed as opaque base64url.
+// Still device-local — the seed never leaves this browser — but script-readable
+// on its own device; the tradeoff accepted so join works at every hub address.
+import { createKeypair, randomDeviceId, signMessage } from "./device-crypto.js";
+
 function openVault() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("porchlight-devices", 1);
@@ -32,12 +41,11 @@ function asRecord(value) {
 }
 
 export async function createDeviceRegistration(origin, consume) {
-  const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
-  const deviceId = crypto.randomUUID();
-  const publicKeyJwk = await crypto.subtle.exportKey("jwk", keys.publicKey);
+  const { privateKey, publicKeyJwk } = await createKeypair();
+  const deviceId = randomDeviceId();
   const result = await consume({ deviceId, label: "Browser", publicKeyJwk });
   const registration = result.registration;
-  await saveRegistration(origin, registration.did, deviceId, keys.privateKey, publicKeyJwk);
+  await saveRegistration(origin, registration.did, deviceId, privateKey, publicKeyJwk);
   return registration;
 }
 
@@ -71,7 +79,7 @@ export async function openDeviceSession(connection, registration, request) {
   const privateKey = await getDeviceKey(hub, registration.did, registration.deviceId);
   if (!privateKey) throw new Error("This device cannot open that identity. Ask for a fresh device link.");
   const challenge = await request(connection, "identity/session/challenge", { method: "POST", body: JSON.stringify({ did: registration.did }) });
-  const raw = await crypto.subtle.sign("Ed25519", privateKey, new TextEncoder().encode(challenge.nonce));
+  const raw = await signMessage(privateKey, new TextEncoder().encode(challenge.nonce));
   const bytes = new Uint8Array(raw);
   let value = "";
   for (const byte of bytes) value += String.fromCharCode(byte);
@@ -81,7 +89,7 @@ export async function openDeviceSession(connection, registration, request) {
 
 /** Ed25519 signature over a raw message string (base64url), device-held key only. */
 export async function signDeviceMessage(privateKey, message) {
-  const raw = await crypto.subtle.sign("Ed25519", privateKey, new TextEncoder().encode(message));
+  const raw = await signMessage(privateKey, new TextEncoder().encode(message));
   return btoa(String.fromCharCode(...new Uint8Array(raw))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
@@ -126,6 +134,6 @@ function canonical(value) {
 export async function signDevicePayload(origin, did, deviceId, payload) {
   const privateKey = await getDeviceKey(origin, did, deviceId);
   if (!privateKey) throw new Error("This device is no longer connected. Ask for a fresh device link.");
-  const bytes = await crypto.subtle.sign("Ed25519", privateKey, new TextEncoder().encode(JSON.stringify(canonical(payload))));
+  const bytes = await signMessage(privateKey, new TextEncoder().encode(JSON.stringify(canonical(payload))));
   return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
