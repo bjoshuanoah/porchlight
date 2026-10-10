@@ -1,4 +1,5 @@
 import express, { Router } from "express";
+import type { Express } from "express-serve-static-core";
 import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,16 @@ import { UpdateService, npmInstaller, npmRegistry } from "./services/update.serv
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
 import type { BootstrapService, BootstrapStep } from "./services/bootstrap.service.js";
 import type { Probe } from "./dependencies.js";
+import type { RealtimeEndpointLike } from "./realtime-gateway.js";
+
+/**
+ * The running hub's Express app carries its assembled real-time surface so
+ * the boot attaches the socket gateway exactly once, to the hub's own
+ * HTTP server (PORCH-047). Undefined when social serving is disabled.
+ */
+export interface ExpressWithRealtime extends Express {
+  realtime?: RealtimeEndpointLike;
+}
 
 export interface ServerOptions {
   store: StoreLike | null;
@@ -42,6 +53,14 @@ export interface ServerOptions {
    * hub child's stdout into logs/hub.log).
    */
   log?: ((line: string) => void) | null;
+  /**
+   * Real-time event plane (PORCH-047): the Redis-backed fan-out + replay
+   * window adapter, created from deps.redis by the boot. Optional —
+   * tests and daemon-less runs leave it unset and the social module's
+   * in-memory plane serves (an event plane is never required to run the
+   * REST hub: the degrade path IS the REST reads).
+   */
+  eventPlane?: unknown;
 }
 
 const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
@@ -57,7 +76,7 @@ const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
  * module routers so bootstrap progress is recorded without any module
  * depending on the system layer.
  */
-export function createServerRouter(options: ServerOptions): { api: Router; wellKnown: Router | null } {
+export function createServerRouter(options: ServerOptions): { api: Router; wellKnown: Router | null; realtime: unknown } {
   const router: Router = Router();
   // Auth-scoped JSON is never cacheable: a browser-conditional revalidation
   // (304) carries no body, and a member's cached read would otherwise
@@ -191,6 +210,12 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
         // PORCH-044: the rendition ladder rungs are owner-readable config.
         renditions: options.config.media.renditions,
       },
+      // PORCH-047: the real-time event plane (Redis-backed in the hub
+      // runtime) plus the replay window from the owner-readable config.
+      realtime: {
+        plane: options.eventPlane ?? null,
+        replayHours: options.config.realtime.replayHours,
+      },
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,
     });
@@ -213,7 +238,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     });
     router.use("/", frontDoor);
   }
-  return { api: router, wellKnown };
+  return { api: router, wellKnown, realtime: socialModule?.realtimeService ?? null };
 }
 
 function readTunnelUrl(options: ServerOptions): () => string | null {
@@ -240,9 +265,12 @@ const SERVER_PACKAGE_VERSION: string | null = (() => {
 
 /** App factory. Null store/readiness = system surfaces only (dependency-less use). */
 export function createServer(options: ServerOptions) {
-  const app = express();
+  const app = express() as ExpressWithRealtime;
   app.use(express.json());
   const routers = createServerRouter(options);
+  // PORCH-047: the assembled real-time surface rides the app so the boot
+  // (index.ts) attaches the socket gateway to the hub's own HTTP server.
+  app.realtime = (routers.realtime as RealtimeEndpointLike | null) ?? undefined;
   if (routers.wellKnown) {
     // RFC-style discovery paths live at the host root, not under /api.
     app.use("/", routers.wellKnown);

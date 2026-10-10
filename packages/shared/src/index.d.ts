@@ -28,6 +28,10 @@ export interface PorchlightConfig {
       video: Record<string, number>;
     };
   };
+  /** PORCH-047: the bounded per-origin replay window (owner-readable configuration). */
+  realtime: {
+    replayHours: number;
+  };
 }
 
 export declare const DEFAULT_CONFIG: Readonly<PorchlightConfig>;

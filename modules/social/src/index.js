@@ -1,6 +1,7 @@
 export * from "./services/post.service.js";
 export * from "./services/interaction.service.js";
 export * from "./services/notification.service.js";
+export * from "./services/realtime.service.js";
 export * from "./services/group.service.js";
 export * from "./services/ranking.service.js";
 export * from "./services/feed.service.js";

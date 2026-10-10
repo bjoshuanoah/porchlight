@@ -15,11 +15,15 @@ export class ContentController {
    * @param {import("../services/post.service.js").PostService} deps.posts
    * @param {import("../services/interaction.service.js").InteractionService} deps.interactions
    * @param {import("../services/notification.service.js").NotificationService} deps.notifications
+   * @param {import("../services/realtime.service.js").RealtimeService} [deps.realtime]
+   *   PORCH-047: the real-time surface (REST catch-up read). Absent on
+   *   assemblies built before an assembled realtime service exists.
    */
-  constructor({ posts, interactions, notifications }) {
+  constructor({ posts, interactions, notifications, realtime }) {
     this.posts = posts;
     this.interactions = interactions;
     this.notifications = notifications;
+    this.realtime = realtime ?? null;
   }
 
   /** POST /posts — signed post creation (ac-1; cross-post via crossPostRef, ac-2). */
@@ -107,6 +111,23 @@ export class ContentController {
   /** GET /notifications — the member's content-free inbox (ac-3). */
   inbox = async (req, res) => {
     return this.#delegate(res, () => this.notifications.inbox({ accessToken: this.bearer(req) }));
+  };
+
+  /**
+   * GET /events?since=<cursor> — PORCH-047 REST catch-up: the returning
+   * device's missed deltas replayed since its own cursor; `stale: true`
+   * when the delta predates the replay window (the client falls back to
+   * the plain REST reads with the freshness note). Events carry content
+   * only — the payload-privacy contract holds on this surface too.
+   */
+  catchUp = async (req, res) => {
+    return this.#delegate(res, () =>
+      this.realtime
+        ? this.realtime.catchUp({ accessToken: this.bearer(req), since: req.query?.since ?? null })
+        : Promise.reject(
+            Object.assign(new Error("Real-time delivery is not assembled on this hub."), { code: "E_NOT_PERMITTED" }),
+          ),
+    );
   };
 
   /**

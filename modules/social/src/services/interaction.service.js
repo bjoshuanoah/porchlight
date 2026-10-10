@@ -38,13 +38,14 @@ export class InteractionService {
    * @param {import("./notification.service.js").NotificationService} deps.notifications
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
    */
-  constructor({ posts, comments, reactions, votes, membership, notifications, audit }) {
+  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
     this.votes = votes;
     this.membership = membership;
     this.notifications = notifications;
+    this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
   }
@@ -88,6 +89,15 @@ export class InteractionService {
       networkId,
       did: session.did,
       detail: { postId: payload.postId, commentId: comment._id },
+    });
+    // PORCH-047: reply.created to the origin room — content-only payload
+    // (the comment view; parentId rides it for nested replies). No vote
+    // writes emit events: votes modulate prominence internally only.
+    await this.realtime?.published({
+      networkId,
+      type: "reply.created",
+      postId: payload.postId,
+      content: InteractionService.commentView(comment),
     });
     return { comment: (await this.#withAttribution([InteractionService.commentView(comment)], networkId))[0] };
   }
@@ -133,6 +143,14 @@ export class InteractionService {
       networkId,
       did: session.did,
       detail: { postId: payload.postId, reactionId: reaction._id },
+    });
+    // PORCH-047: reaction.applied to the origin room — the as-authored emoji
+    // view only (open vocabulary is content, always).
+    await this.realtime?.published({
+      networkId,
+      type: "reaction.applied",
+      postId: payload.postId,
+      content: InteractionService.reactionView(reaction),
     });
     return { reaction: InteractionService.reactionView(reaction) };
   }

@@ -7,6 +7,7 @@ import { AuditService } from "./services/audit.service.js";
 import { PostService } from "./services/post.service.js";
 import { InteractionService } from "./services/interaction.service.js";
 import { NotificationService } from "./services/notification.service.js";
+import { RealtimeService, createMemoryEventPlane } from "./services/realtime.service.js";
 import { GroupService } from "./services/group.service.js";
 import { RankingService, normalizeRankingConfig } from "./services/ranking.service.js";
 import { FeedService } from "./services/feed.service.js";
@@ -68,6 +69,15 @@ import { createSocialRouter } from "./routes.js";
  *       The rendition ladder rungs (PORCH-044), forwarded from the hub
  *       config (owner-readable configuration values, packages/shared).
  *   },
+ *   realtime?: {
+ *     plane?: object,
+ *       PORCH-047: the injected event plane for live fan-out + the replay
+ *       window (Redis-backed in the hub runtime, apps/server); defaults
+ *       to the in-memory plane (tests, daemon-less runs).
+ *     replayHours?: number,
+ *       The bounded replay window behind the REST catch-up (24h, config
+ *       value `realtime.replayHours`, packages/shared).
+ *   },
  * }} [options]
  */
 export function assembleSocialModule(store, options = {}) {
@@ -111,11 +121,27 @@ export function assembleSocialModule(store, options = {}) {
     // (default console.log — the supervisor pipes it into logs/hub.log).
     authFailureSink: (event) => logAuthFailure(event, options.log ?? undefined),
     networks,
+    // PORCH-047: the real-time surface closes the revoked member's live
+    // subscriptions in the same write that kills the sessions (late-bound
+    // ref — the realtime service is assembled after the membership service).
+    onRevoked: (event) => realtimeService?.killMembership(event.membershipId),
     audit,
   });
   const quotaService = new QuotaService({ artifacts, networks, audit });
   const groupService = new GroupService({ groups, memberships, membership: membershipService });
   const notificationService = new NotificationService({ notifications, membership: membershipService });
+  // Real-time event delivery (PORCH-047): the event plane is injected by
+  // the hub runtime (Redis-backed fan-out + replay window) and defaults to
+  // the in-memory plane (tests, daemon-less runs). The service needs only
+  // the membership perimeter (subscribe/catch-up verification) and is
+  // constructed before the write services so the injection is live from
+  // the first write; the revocation kill rides the membership service
+  // through the same late-bound ref (membership assembles first).
+  const realtimeService = new RealtimeService({
+    membership: membershipService,
+    plane: options.realtime?.plane ?? createMemoryEventPlane(),
+    replayHours: options.realtime?.replayHours ?? 24,
+  });
   // Media pipeline (PORCH-008): the blob store is content-addressed —
   // filesystem-backed for the real hub (mediaRoot), memory for tests and
   // daemon-less runs. The disk probe reads the live filesystem unless a
@@ -137,6 +163,7 @@ export function assembleSocialModule(store, options = {}) {
       blobs,
       diskProbe,
       audit,
+      realtime: realtimeService,
     },
     {
       softUsedRatio: mediaConfig.softUsedRatio,
@@ -157,6 +184,7 @@ export function assembleSocialModule(store, options = {}) {
     membership: membershipService,
     media: mediaService,
     audit,
+    realtime: realtimeService,
   });
   const interactionService = new InteractionService({
     posts,
@@ -166,6 +194,7 @@ export function assembleSocialModule(store, options = {}) {
     membership: membershipService,
     notifications: notificationService,
     audit,
+    realtime: realtimeService,
   });
   const rankingService = new RankingService({ config: options.rankingConfig ? normalizeRankingConfig(options.rankingConfig) : undefined });
   const feedService = new FeedService({
@@ -201,7 +230,7 @@ export function assembleSocialModule(store, options = {}) {
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger, options.mintOwnerDeviceLink ?? null),
-    content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService }),
+    content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService, realtime: realtimeService }),
     feed: new FeedController({ feed: feedService }),
     membership: new MembershipController(membershipService, networkService, options.log ?? null),
     console: new ConsoleController({
@@ -237,6 +266,7 @@ export function assembleSocialModule(store, options = {}) {
     postService,
     interactionService,
     notificationService,
+    realtimeService,
     rankingService,
     feedService,
     mediaService,

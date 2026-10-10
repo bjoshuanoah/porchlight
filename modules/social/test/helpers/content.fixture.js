@@ -9,6 +9,7 @@ import { PostService } from "../../src/services/post.service.js";
 import { NotificationService } from "../../src/services/notification.service.js";
 import { InteractionService } from "../../src/services/interaction.service.js";
 import { GroupService } from "../../src/services/group.service.js";
+import { RealtimeService, createMemoryEventPlane } from "../../src/services/realtime.service.js";
 import { canonicalJson } from "../../src/services/membership.service.js";
 
 export { canonicalJson };
@@ -49,6 +50,10 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
   };
 
   const invites = new InviteService(collections.invites);
+  // PORCH-047: the fixture mirrors the module assembly — the real-time
+  // service rides the same memory event plane, and the revocation kill
+  // goes through the same hook (late-bound; membership assembles first).
+  let realtime = null;
   const membership = new MembershipService({
     memberships: collections.memberships,
     membershipSessions: collections.membershipSessions,
@@ -57,6 +62,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     verifyMemberIdToken: (token) => (token ? { did: token } : null),
     memberNames,
     networks: collections.networks,
+    onRevoked: (event) => realtime?.killMembership(event.membershipId),
     audit,
   });
   const quota = new QuotaService({ artifacts: collections.artifacts, networks: collections.networks, audit });
@@ -74,6 +80,8 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
   });
   const groups = new GroupService({ groups: collections.groups, memberships: collections.memberships });
   const notifications = new NotificationService({ notifications: collections.notifications, membership });
+  const plane = createMemoryEventPlane();
+  realtime = new RealtimeService({ membership, plane });
   const posts = new PostService({
     posts: collections.posts,
     comments: collections.comments,
@@ -86,6 +94,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     membership,
     media,
     audit,
+    realtime,
   });
   const interactions = new InteractionService({
     posts: collections.posts,
@@ -95,6 +104,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     membership,
     notifications,
     audit,
+    realtime,
   });
 
   for (const networkId of networkIds) {
@@ -120,5 +130,5 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     return admitted;
   };
 
-  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, audit: { events: collections.auditEvents }, admit, device };
+  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, realtime, realtimePlane: plane, audit: { events: collections.auditEvents }, admit, device };
 }

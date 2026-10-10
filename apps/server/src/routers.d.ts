@@ -52,6 +52,8 @@ declare module "@porchlight/social" {
     postService: PostService;
     interactionService: InteractionService;
     notificationService: NotificationService;
+    /** PORCH-047: the real-time event surface (subscribe/catch-up/revoke). */
+    realtimeService: unknown;
     controllers: unknown;
     api: import("express").Router;
   }
@@ -100,8 +102,24 @@ declare module "@porchlight/social" {
         /** PORCH-044: the rendition ladder rungs (owner-readable config). */
         renditions?: { image?: Record<string, number>; video?: Record<string, number> };
       };
+      /** PORCH-047: the real-time event plane + replay window (hub runtime wiring). */
+      realtime?: {
+        plane?: unknown | null;
+        replayHours?: number;
+      };
     },
   ): SocialModule;
+  export function createMemoryEventPlane(options?: { maxEntries?: number }): {
+    append(networkId: string, event: Record<string, unknown>): Promise<{ seq: string }>;
+    readSince(networkId: string, cursor: string | null): Promise<{
+      events: Record<string, unknown>[];
+      stale: boolean;
+      cursor: string | null;
+    }>;
+    publish(networkId: string, envelope: Record<string, unknown>): Promise<void>;
+    onInbound(handler: (networkId: string, envelope: Record<string, unknown>) => void): () => void;
+    close(): void;
+  };
   export class PostService {
     create(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ post: Record<string, unknown> }>;
     get(options?: { accessToken?: string | null; postId?: string }): Promise<{ post: Record<string, unknown> }>;
