@@ -452,15 +452,52 @@ export class MediaService {
   }
 
   /**
+   * Read-time archive self-heal (PORCH-044): one upgrade path for
+   * pre-format-v2 archives. The original's display geometry is probed and
+   * stamped ONCE (pre-044 rows predate the media-geometry stamp, and the
+   * never-upscale rung clamp plus the client's layout reserve need it),
+   * then generateRenditions replaces the stale byte-derivative rows with
+   * the codec-backed set of record. Never throws to its callers: an
+   * archive that cannot upgrade degrades to the rows it already has
+   * instead of breaking a read surface. Returns true when it healed.
+   */
+  async #selfHealArchive(original) {
+    if (!original || original.kind !== "original") return false;
+    try {
+      if (original.width == null || original.height == null) {
+        const bytes = await this.blobs.get(original.blobKey);
+        if (bytes === null) return false;
+        const shape = await this.#probeOriginal(bytes, original.contentType);
+        if (shape) {
+          const stamp = { width: shape.width, height: shape.height };
+          if (shape.durationSeconds != null) stamp.durationSeconds = shape.durationSeconds;
+          await this.assets.updateOne({ _id: original._id }, { $set: stamp });
+          Object.assign(original, stamp);
+        }
+      }
+      await this.generateRenditions(original._id);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The original's rendition rows: every format, for the staleness check. */
+  async #renditionRows(networkId, mediaId) {
+    return this.assets.find({ networkId, originalId: mediaId, kind: "rendition" });
+  }
+
+  /**
    * Default serving path (ac-3): serve and share render from RENDITIONS.
    * Reads never consult the disk guard (reads continue at every
-   * threshold).
+   * threshold). A pre-format-v2 archive upgrades in place on first read
+   * through the self-heal below, before its bytes are served.
    */
   async serveRendition({ accessToken, mediaId, renditionKind }) {
     const session = await this.#requireSession(accessToken);
     // The origin-asset lookup IS the containment check (throws when the
     // media does not exist at this token's origin).
-    const _original = await this.#originAsset(mediaId, session);
+    const original = await this.#originAsset(mediaId, session);
     if (!RENDITION_KINDS.includes(renditionKind)) {
       throw typedError("E_RENDITION_KIND_UNKNOWN", MESSAGES.E_RENDITION_KIND_UNKNOWN);
     }
@@ -470,12 +507,16 @@ export class MediaService {
       kind: "rendition",
       renditionKind,
     });
-    if (rendition && rendition.format !== RENDITION_FORMAT_V2) {
-      // Archive self-heal (PORCH-044): pre-format-v2 renditions are the
-      // byte-derivative set of record's earlier shape — not renderable in a
-      // browser. The read regeneration upgrades the archive once; the next
-      // lookup finds the renderable rendition.
-      await this.generateRenditions(mediaId);
+    // Archive self-heal (PORCH-044): a pre-format-v2 archive carries the
+    // byte-derivative rows of record's earlier shape — not renderable in a
+    // browser, and the current kind vocabulary may not exist in it at all
+    // (videos predate the poster/playable set). One read upgrades the
+    // archive: stale rows are replaced, missing kinds (poster, playable)
+    // generate, and the next lookup finds the renderable rendition.
+    const staleRow = (await this.#renditionRows(session.networkId, mediaId))
+      .some((row) => row.format !== RENDITION_FORMAT_V2);
+    if (staleRow) {
+      await this.#selfHealArchive(original);
       rendition = await this.assets.findOne({
         networkId: session.networkId,
         originalId: mediaId,
@@ -551,14 +592,29 @@ export class MediaService {
    * display dimensions and the rendition set of record (kind, sha256,
    * width, height, bytes; the poster frame riding the `poster` field for
    * video). Clients build srcset/sizes and the video poster/src from this;
-   * no rendition metadata is fetched per item on the wire.
+   * no rendition metadata is fetched per item on the wire. Only
+   * format-v2 rows count as the set of record: pre-format archives
+   * self-heal above before their rows are ever reported.
    */
   async withMediaMeta(views, networkId) {
     const ids = [...new Set(views.flatMap((view) => (Array.isArray(view.mediaRefs) ? view.mediaRefs : [])))];
     if (ids.length === 0) return views;
+    // Archive self-heal at hydration (PORCH-044): a pre-format-v2 archive
+    // must upgrade BEFORE the set of record reports — the stale
+    // byte-derivative rows are not renderable, and hydrating them would
+    // give every surface content addresses that 404 (the URL names bytes
+    // the heal replaces). One heal per original; a failing upgrade degrades
+    // to whatever the archive holds instead of breaking the feed.
+    const originals = (await this.assets.find({ networkId }))
+      .filter((row) => row.kind === "original" && ids.includes(row._id));
+    for (const original of originals) {
+      if ((await this.#renditionRows(networkId, original._id)).some((row) => row.format !== RENDITION_FORMAT_V2)) {
+        await this.#selfHealArchive(original);
+      }
+    }
     const assets = await this.assets.find({ networkId });
     const relevant = assets.filter(
-      (row) => ids.includes(row._id) || (row.kind === "rendition" && ids.includes(row.originalId)),
+      (row) => ids.includes(row._id) || (row.kind === "rendition" && row.format === RENDITION_FORMAT_V2 && ids.includes(row.originalId)),
     );
     const meta = new Map(
       ids.map((id) => [id, { mediaId: id, contentType: null, width: null, height: null, poster: null, renditions: [] }]),

@@ -41,7 +41,13 @@ export async function registerMediaTransport() {
   }
   try {
     const controller = await readyController(3000);
-    controller?.postMessage({ type: "media-auth", tokensByOrigin: pendingTokens ?? {} });
+    // Relay only a token set the app has actually synced (syncMediaTransport
+    // ran): posting the empty default here would defeat the worker's
+    // bounded relay wait — rendition requests fired by the first direct
+    // render would 401 and the media elements never retry.
+    if (pendingTokens !== null) {
+      controller?.postMessage({ type: "media-auth", tokensByOrigin: pendingTokens });
+    }
     return Boolean(controller);
   } catch {
     return false;

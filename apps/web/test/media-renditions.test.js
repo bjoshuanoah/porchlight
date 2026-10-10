@@ -100,6 +100,34 @@ test("PORCH-044 ac-3: the rendition worker cache-firsts content-addressed URLs o
   assert.match(worker, /"media-auth"/);
   assert.match(worker, /porchlight-renditions-v1/);
   assert.doesNotMatch(worker, /\/original/);
+  // Boot race: a rendition request that starts before the token relay
+  // reaches the worker waits for the relay (bounded) instead of fetching
+  // unauthenticated — a 401 to an <img> is a permanent media failure (the
+  // element never retries).
+  assert.match(worker, /const token = await tokenFor\(url\.origin\)/);
+  assert.match(worker, /tokenWaiters/);
+  assert.match(worker, /timeoutMs = 3000/);
+  // A PRESENT-but-rejected token (boot-window credential churn) parks the
+  // request and retries with each renewed-token publication until one
+  // answers or the park budget expires; a genuinely unauthenticated request
+  // surfaces its 401 immediately.
+  assert.match(worker, /response\.status === 401 && token/);
+  assert.match(worker, /while \(response\.status === 401 && Date\.now\(\) < deadline\)/);
+  assert.match(worker, /PARK_BUDGET_MS = 8000/);
+  assert.match(worker, /authedRequest\(request, tokensByOrigin\[url\.origin\]\)/);
+  // The boot-time sync can publish the SAME token the park just failed on;
+  // only a changed token set wakes parked requests — otherwise the park
+  // retries the identical stale-token request and 401s again.
+  assert.match(worker, /tokensByOrigin\[origin\] !== incoming\[origin\]/);
+  assert.match(worker, /if \(changed\)/);
+  // An empty relay (the boot-time sync can publish none) must not resolve a
+  // waiting rendition request; only a credential-bearing publication wakes.
+  assert.match(worker, /Object\.values\(incoming\)\.some\(\(token\) => Boolean\(token\)\)/);
+  // The registration relay posts only a synced token set — an empty default
+  // relay would resolve the wait unauthenticated and 401 first-load media.
+  const transport = await src("src/media-transport.js");
+  assert.match(transport, /if \(pendingTokens !== null\)/);
+  assert.doesNotMatch(transport, /pendingTokens \?\? \{\}/);
 });
 
 test("PORCH-044 ac-3: originals resolve with no-store from the client action", async () => {
@@ -124,4 +152,29 @@ test("PORCH-044 ac-1/ac-2: member surfaces render the ladder, originals stay exp
   // rides only the explicit download action and the pre-PORCH-044 legacy
   // payload fallback.
   assert.ok(!/getMedia\(id, 'original', origin\);\s*\n\s*\}\)\.then\(async \(blob\) => [\s\S]*component="img"/.test(social));
+  // The fallback loader answers cadence-driven repeats from the
+  // identity-cache (media-blob.js): a cache hit re-serves the SAME object
+  // URL and returns before any network read or revoke — the page-visible
+  // reload churn (Brian's report) cannot come back through this path.
+  assert.match(social, /readMediaBlob\(identity\)/);
+  assert.match(social, /putMediaBlob\(identity, \{ url, blob, shape \}\)/);
+  // Object URLs are owned by the cache: the effect cleanup revokes nothing.
+  assert.doesNotMatch(social, /revokeObjectURL\(url\);\s*\n?\s*if \(posterUrlObj\) URL\.revokeObjectURL\(posterUrlObj\)/);
+});
+
+test("PORCH-044: the fallback blob cache owns fallback URLs by content identity", async () => {
+  const cache = await import("../src/media-blob.js");
+  const key = cache.mediaBlobKey({ origin: "https://hub", mediaId: "m", kind: "detail", version: null });
+  assert.equal(cache.readMediaBlob(key), null, "an unloaded identity misses");
+
+  const first = cache.putMediaBlob(key, { url: "blob:one", blob: Buffer.alloc(4) });
+  assert.equal(cache.readMediaBlob(key).url, first.url, "the repeat request re-serves the same URL without refetch");
+  const replaced = cache.putMediaBlob(key, {
+    url: "blob:two",
+    blob: Buffer.alloc(4),
+    shape: { width: 1600, height: 1067 },
+  });
+  assert.equal(replaced.url, "blob:two");
+  assert.equal(cache.readMediaBlob(key).blob, replaced.blob);
+  cache.clearMediaBlobs();
 });
