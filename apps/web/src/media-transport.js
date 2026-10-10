@@ -62,3 +62,12 @@ export function syncMediaTransport(tokensByOrigin) {
     controller.postMessage({ type: "media-auth", tokensByOrigin });
   }
 }
+
+/**
+ * The existing worker's Registration (PORCH-060): the notification
+ * settings screen's push subscription rides this same registration —
+ * one worker by contract, never a second registration.
+ */
+export function workerRegistration() {
+  return registration;
+}

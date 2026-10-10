@@ -165,3 +165,60 @@ self.addEventListener("fetch", (event) => {
     })(),
   );
 });
+/* Device notifications (PORCH-060): push delivery and tap-through ride this
+ * SAME single worker — additive listeners only; none of the handlers below
+ * ever intercepts or caches a request (the fetch boundary above is
+ * untouched, so no /api/** request can ever be fulfilled from a cache and
+ * no non-2xx response can enter a cache). Payloads are content-only by the
+ * hub contract (type, postId, commentId, authorName, networkName, excerpt —
+ * PORCH-059); no badge machinery of any kind exists in V1 (push
+ * only; no badge API calls and no badge property anywhere). */
+
+// The content-only whitelist, decoded defensively: malformed, oversized, or
+// off-list values are dropped on the floor, never surfaced.
+const PUSH_FIELDS = ["type", "postId", "commentId", "authorName", "networkName", "excerpt"];
+
+self.addEventListener("push", (event) => {
+  event.waitUntil((async () => {
+    let payload = {};
+    try {
+      const text = event.data ? await event.data.text() : "";
+      const parsed = text ? JSON.parse(text) : {};
+      payload = Array.isArray(parsed) ? {} : parsed;
+    } catch { payload = {}; }
+    const data = {};
+    for (const field of PUSH_FIELDS) {
+      if (typeof payload[field] === "string" && payload[field].length > 0 && payload[field].length <= 300) data[field] = payload[field];
+    }
+    const title = data.authorName || data.networkName || "Porchlight";
+    const body = data.excerpt
+      || (data.authorName && data.networkName ? `${data.authorName} in ${data.networkName}` : "A new moment from your family.");
+    await self.registration.showNotification(title, {
+      body,
+      icon: "/icon-192.png",
+      tag: data.postId ? `porchlight-${data.postId}` : undefined,
+      data,
+    });
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const data = (event.notification && typeof event.notification.data === "object" && !Array.isArray(event.notification.data)) ? event.notification.data : {};
+    // The origin-contained target (ac-5): the member's post detail surface
+    // under the currently open identity; with no client open, the SPA's
+    // own standard open flow runs first (front state → opened identity).
+    const target = data.postId ? `/posts/${encodeURIComponent(data.postId)}` : "/";
+    const existing = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const client = existing[0];
+    if (client) {
+      await client.focus();
+      // A focused client is pointed at the target: the app navigates to
+      // the origin-contained post detail under the open identity.
+      if (data.postId) client.postMessage({ type: "porchlight-open-post", postId: String(data.postId) });
+      return;
+    }
+    await self.clients.openWindow(target);
+  })());
+});

@@ -12,6 +12,7 @@ import { consoleTabs } from './console-tabs.js';
 import { formatStorage, formatStorageMb, ceilingMbToGb, ceilingGbToMb } from './storage-format.js';
 import { Lockup, LampMark } from './brand.jsx';
 import { cssVars } from './theme.js';
+import { NotificationSettings } from './notifications.jsx';
 
 /** Removal capability on the ladder (PORCH-053): the owner removes anyone
  * (the final-owner invariant guards the last one); a delegate removes
@@ -660,6 +661,12 @@ export function Profile({ data, actions, navigate, mode }) {
         : undefined}><ListItemText primary={item.replace(/^https?:\/\//, '')} secondary="Hidden on this device" /></ListItem>)}</List>
         : <Typography color="text.secondary" sx={{ mt: 1 }}>Nothing is hidden on this device.</Typography>}
     </CardContent></Card>
+    {/* PORCH-060: the Notifications control room — master switch, per-event
+        toggles, per-network mutes, the explicit-tap permission flow, and the
+        truthful capability states. Rendered for an opened identity with a
+        live session; the wiring rides the actions set. */}
+    {typeof actions?.loadNotificationSettings === 'function' && typeof actions?.saveNotificationSettings === 'function'
+      && <NotificationSettings data={data} actions={actions} />}
     {/* PORCH-042 appearance setting: Light / Dark / System, System the
         default. The choice is device-level (client-local per origin, carried
         by no server write) — the wording says so plainly. */}
