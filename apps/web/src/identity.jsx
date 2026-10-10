@@ -726,6 +726,55 @@ function invitationUrl(invite, data) {
   catch { return invite.joinUrl; }
 }
 
+export const AUDIT_PAGE = 50;
+
+/**
+ * Recent activity (PORCH-058 ac-3): the console's audit log renders newest
+ * first, with forward/back paging controls riding the hub's paginated read
+ * — later pages load without reloading the console. The boot-loaded page is
+ * page one; paging re-fetches through `actions.loadAuditPage(offset)` on the
+ * same console surface.
+ */
+function RecentActivity({ audit, actions }) {
+  // `paged` holds the fetched page once the owner turns past page one;
+  // while it stays null the card renders the boot-loaded first page.
+  const [paged, setPaged] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const entries = paged && Array.isArray(paged.events) ? paged.events : audit;
+  const offset = paged?.offset ?? 0;
+  const more = paged ? Boolean(paged.hasMore) : typeof actions?.loadAuditPage === 'function';
+
+  async function page(next) {
+    if (busy || typeof actions?.loadAuditPage !== 'function' || next < 0) return;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await actions.loadAuditPage(next);
+      if (Array.isArray(result?.events)) {
+        setPaged({ events: result.events, offset: result.offset ?? next, hasMore: Boolean(result.hasMore) });
+      }
+    } catch (cause) {
+      setError(cause?.body?.error || cause?.message || 'The activity page is not available right now.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Card><CardContent><Typography variant="h6" gutterBottom>Recent activity</Typography>
+    {entries === null ? <Typography color="text.secondary">Activity status is not available from this hub.</Typography>
+      : entries.length ? <>
+        <List dense>{entries.map((entry, index) => <ListItem key={idOf(entry) || index} divider><ListItemText primary={entry.action || 'Activity'} secondary={[entry.did, displayDate(entry.createdAt)].filter(Boolean).join(' · ')} /></ListItem>)}</List>
+        {typeof actions?.loadAuditPage === 'function' && <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', alignItems: 'center', mt: 1 }}>
+          {error && <Typography variant="body2" color="error">{error}</Typography>}
+          <Button size="small" disabled={busy || offset <= 0} onClick={() => void page(offset - AUDIT_PAGE)}>Newer</Button>
+          <Button size="small" disabled={busy || more === false} onClick={() => void page(offset + AUDIT_PAGE)}>Older</Button>
+        </Box>}
+      </>
+      : <Typography color="text.secondary">No activity is recorded here yet.</Typography>}
+  </CardContent></Card>;
+}
+
 export function OwnerConsole({ data, actions, navigate }) {
   const operation = useOperation(actions);
   const [issued, setIssued] = useState('');
@@ -745,7 +794,6 @@ export function OwnerConsole({ data, actions, navigate }) {
   const [draftRoot, setDraftRoot] = useState(null);
   const members = available(data, 'members') ? data?.members || [] : null;
   const invites = available(data, 'invites') ? data?.invites || [] : null;
-  const audit = available(data, 'audit') ? data?.audit || [] : null;
   const disk = available(data, 'disk') ? data?.disk : null;
   const settings = available(data, 'settings') ? data?.settings : null;
   const availability = data?.availability || {};
@@ -927,11 +975,7 @@ export function OwnerConsole({ data, actions, navigate }) {
     </CardContent></Card>
     </div>
     <div role="tabpanel" id="owner-tabpanel-activity" aria-labelledby="owner-tab-activity" hidden={tab !== 'activity'}>
-    <Card><CardContent><Typography variant="h6" gutterBottom>Recent activity</Typography>
-      {audit === null ? <Typography color="text.secondary">Activity status is not available from this hub.</Typography>
-        : audit.length ? <List dense>{audit.map((entry, index) => <ListItem key={idOf(entry) || index} divider><ListItemText primary={entry.action || 'Activity'} secondary={[entry.did, displayDate(entry.createdAt)].filter(Boolean).join(' · ')} /></ListItem>)}</List>
-          : <Typography color="text.secondary">No activity is recorded here yet.</Typography>}
-    </CardContent></Card>
+    <RecentActivity audit={available(data, 'audit') ? data?.audit || [] : null} actions={actions} />
     </div>
     <Dialog open={Boolean(linking)} onClose={() => { setLinking(null); setIssuedDeviceLink(''); }} fullWidth maxWidth="xs">
       <DialogTitle>Send a device link to {linking?.name || 'this member'}?</DialogTitle>
