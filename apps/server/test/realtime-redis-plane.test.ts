@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createClient, type RedisClientType } from "redis";
 import { createRedisEventPlane } from "../src/services/event-plane.redis.js";
-import { createMemoryEventPlane } from "@porchlight/social";
 
 const REDIS_URL = process.env.PORCHLIGHT_TEST_REDIS_URL ?? null;
 
@@ -79,13 +78,4 @@ test("redis event plane: append/readSince/publish round-trip (env-gated, real da
   assert.equal(foreign.stale, true);
   assert.deepEqual(foreign.events, []);
 
-  void createMemoryEventPlane;
 });
-
-/** Wait until `wanted` arrivals landed or a bounded budget elapsed. */
-async function settleForArrivals(wanted: number, current: () => number): Promise<void> {
-  const deadline = Date.now() + 5000;
-  while (current() < wanted && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
