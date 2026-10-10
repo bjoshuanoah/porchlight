@@ -14,6 +14,7 @@ import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } f
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
+import { resolveStoredNames } from "./name-heal.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
@@ -155,6 +156,9 @@ function App() {
             next.token = first.accessToken;
             next.refreshToken = first.refreshToken;
             next.networkId = first.networkId;
+            // PORCH-034 second round: the name rides every restore, so a
+            // renewed founder connection heals device-local naming too.
+            if (first.name) next.identity.name = first.name;
           }
         } catch { /* no membership row yet: the plain notice below names it */ }
       }
@@ -606,6 +610,28 @@ function App() {
   const deviceLinkRoute = route === "/device-link" || route.startsWith("/device-link/");
   const chooseIdentity = (sharedDevice || connections.some(hasLocalPin)) && !identity;
   const frontDoor = setupRoute || route === "/join" || route.startsWith("/join/") || route === "/pair" || deviceLinkRoute || route === "/who-is-here" || chooseIdentity || !connections.length;
+  useEffect(() => {
+    // PORCH-034 second round, once per app open: every device-connected
+    // identity re-credentials quietly and its stored name heals to the
+    // hub-resolved family-facing name — no rebind, no manual step, shared
+    // devices included (the WhoIsHere chooser reads these rows). Rows that
+    // fail stay untouched and heal on the next open.
+    if (initialConnections.length === 0) return undefined;
+    let stale = false;
+    void (async () => {
+      const live = readConnections(stored, origin);
+      const updates = await resolveStoredNames(live, { openDeviceSession, request });
+      if (stale || !updates.length) return;
+      const byId = new Map(updates.map((item) => [item.id, item.name]));
+      const current = readConnections(stored, origin);
+      const revised = current.map((item) => byId.has(item.identity?.id)
+        ? { ...item, identity: { ...item.identity, name: byId.get(item.identity.id) } }
+        : item);
+      saveConnections(stored, origin, revised);
+      setConnections(revised);
+    })();
+    return () => { stale = true; };
+  }, []);
   useEffect(() => {
     // Signed-out-but-registered device: a fresh app open re-credentials
     // silently into the timeline (no wall). An explicit sign-out keeps the
