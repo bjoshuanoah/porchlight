@@ -193,7 +193,7 @@ test("PORCH-051 ac-2 (executed): /api/** is never intercepted and non-2xx is nev
   const puts = [];
   const cacheStub = {
     match: async () => undefined,
-    put: async (request, response) => { puts.push(String(request.url)); },
+    put: async (request, _response) => { puts.push(String(request.url)); },
   };
   const responsesByUrl = new Map([
     ["https://hub.family/api/social/feed", { status: 200, body: "secret feed" }],
