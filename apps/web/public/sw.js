@@ -126,6 +126,13 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
   const url = new URL(request.url);
+  // Install boundary (PORCH-051): /api/** is never intercepted and never
+  // cache-served — the media-auth surface and every live-data call stay
+  // uncached by contract, so a cache-first pass can never wall off auth
+  // rejections or stale hub data into a poisoned cache. (The rendition
+  // filter below already scopes interception to media, but the boundary is
+  // carried as its own guard so the contract reads and audits explicitly.)
+  if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return;
   // Renditions only: rungs, the video poster, and the playable rendition —
   // every one of them under /renditions/. Originals bypass (no pre-cache).
   if (!url.pathname.includes("/renditions/")) return;

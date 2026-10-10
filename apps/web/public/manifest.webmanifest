@@ -2,10 +2,11 @@
   "name": "Porchlight",
   "short_name": "Porchlight",
   "description": "A place for family",
-  "start_url": "./",
+  "start_url": "/?",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#10243A",
+  "orientation": "portrait-primary",
+  "background_color": "#F7F5F0",
   "theme_color": "#F7F5F0",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
