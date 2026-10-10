@@ -11,6 +11,7 @@ import { assembleSocialModule } from "@porchlight/social";
 import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
+import { loadVapidKeys } from "./services/push-keys.js";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
 import type { BootstrapService, BootstrapStep } from "./services/bootstrap.service.js";
 import type { Probe } from "./dependencies.js";
@@ -172,6 +173,10 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       adoptionEnabled: options.config.identity.adoptionEnabled,
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,
+      // PORCH-059: device notifications observe every owner-routed
+      // device-link mint; the social push pipeline resolves downstream
+      // (late-bound — social assembles after identity).
+      onDeviceLinkMinted: (event) => socialModule?.pushService.notifyDeviceLink(event),
     });
     identityModule = identity;
     router.use("/identity", identity.api);
@@ -232,6 +237,11 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
         plane: options.eventPlane ?? null,
         replayHours: options.config.realtime.replayHours,
       },
+      // PORCH-059: the hub's VAPID material — generated at first run by the
+      // runtime setup, held in hub server state (never committed). Every
+      // push carries the same VAPID identity across restarts, so member
+      // subscriptions never churn per boot.
+      push: { vapid: loadVapidKeys(options.homeRoot ?? null, options.log ?? undefined) },
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,
     });

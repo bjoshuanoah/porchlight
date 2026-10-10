@@ -95,6 +95,9 @@ export class PostService {
    * @param {import("@porchlight/shared").CollectionLike} deps.artifacts
    * @param {import("@porchlight/shared").CollectionLike} deps.groups
    * @param {import("./membership.service.js").MembershipService} deps.membership
+   * @param {import("./push.service.js").PushService} [deps.push]
+   *   PORCH-059: group posts fan out to the group's members through the
+   *   send pipeline (the member-controlled groupPost toggle gates them).
    * @param {import("./media.service.js").MediaService} deps.media
    *   The media pipeline: member views hydrate `mediaMeta` (rendition set
    *   of record, display dims) so clients never fetch rendition metadata
@@ -104,7 +107,7 @@ export class PostService {
    *   Link previews (PORCH-052) — compose-time attach validation, view
    *   hydration, and the deletion cascade for ingested og:image artifacts.
    */
-  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime, previews }) {
+  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime, previews, push }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -115,6 +118,7 @@ export class PostService {
     this.groups = groups;
     this.membership = membership;
     this.media = media;
+    this.push = push ?? null;
     this.previews = previews ?? null;
     this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
@@ -159,6 +163,21 @@ export class PostService {
       postId: post._id,
       content: { ...postView(post), preview: this.previewPayload(preview) },
     });
+    // PORCH-059: group posts fan out to the group's own members through the
+    // push send pipeline (subset-of-network membership holds); the
+    // member-controlled groupPost toggle gates every recipient at send
+    // time. The author never receives their own post.
+    if (post.groupId) {
+      const group = await this.groups.findOne({ _id: post.groupId });
+      await this.push?.notify({
+        networkId,
+        type: "groupPost",
+        targetDids: Array.isArray(group?.members) ? group.members : [],
+        postId: post._id,
+        actorDid: session.did,
+        excerpt: post.caption ?? post.body ?? null,
+      });
+    }
     return { post: (await this.memberViews([post], networkId))[0], did: session.did };
   }
 

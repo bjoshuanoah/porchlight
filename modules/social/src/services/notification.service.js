@@ -17,10 +17,15 @@ export class NotificationService {
    * @param {object} deps
    * @param {import("@porchlight/shared").CollectionLike} deps.notifications
    * @param {import("./membership.service.js").MembershipService} deps.membership
+   * @param {import("./push.service.js").PushService} [deps.push]
+   *   PORCH-059: the push send pipeline — the mention/reply triggers below
+   *   fan out to Web Push beside the content-free inbox row (read-side
+   *   behavior unchanged).
    */
-  constructor({ notifications, membership }) {
+  constructor({ notifications, membership, push }) {
     this.notifications = notifications;
     this.membership = membership;
+    this.push = push ?? null;
     this.models = socialModels;
   }
 
@@ -56,6 +61,10 @@ export class NotificationService {
         postId: comment.postId,
         commentId: comment._id,
         actorDid: comment.authorDid,
+        // The recipient authored the target (their comment was replied to):
+        // the bounded excerpt of the triggering reply rides the PUSH
+        // plaintext only (ac-3) — the inbox row below stays content-free.
+        excerpt: comment.body,
       });
     }
   }
@@ -63,9 +72,11 @@ export class NotificationService {
   /**
    * Insert one content-free notification row for the recipient. Refuses
    * non-member targeting (ac-2): the recipient must hold an active
-   * membership in the origin network, or nothing is composed.
+   * membership in the origin network, or nothing is composed. `excerpt`
+   * (optional) rides the PUSH plaintext only — the stored row stays
+   * content-free (ids and type only).
    */
-  async record({ networkId, memberId, type, postId, commentId = null, actorDid = null }) {
+  async record({ networkId, memberId, type, postId, commentId = null, actorDid = null, excerpt = null }) {
     if (!networkId || !memberId || !type || !postId) {
       const error = new Error("networkId, memberId, type, postId required");
       error.code = "E_NOTIFICATION_REQUIRED";
@@ -86,6 +97,18 @@ export class NotificationService {
       createdAt: new Date().toISOString(),
     };
     await this.notifications.insertOne(row);
+    // PORCH-059: beside the content-free row, the same trigger fans out to
+    // Web Push through the send pipeline (live membership + settings at
+    // send time; pipeline errors never surface here — log-only there).
+    await this.push?.notify({
+      networkId,
+      type,
+      targetDids: [memberId],
+      postId,
+      commentId,
+      actorDid,
+      excerpt,
+    });
     return row;
   }
 

@@ -464,6 +464,70 @@ export const socialModels = {
       createdAt: { type: "string" },
     },
   },
+  /**
+   * Push subscription (PORCH-059): identity-scoped, per device. The
+   * subscription binds to the identity the session speaks for, so a shared
+   * tablet carries one subscription per member (the shared-device rulings).
+   * The endpoint is the opaque browser-issued push URL; `keys` carries the
+   * subscription's own encryption keys, so the vendor relay ships only
+   * ciphertext it cannot read. No membership scope is stored as a
+   * permission here: target resolution reads live membership at send time.
+   */
+  pushSubscription: {
+    type: "object",
+    required: ["_id", "identityId", "endpoint", "keys", "createdAt", "lastSeen"],
+    properties: {
+      _id: { type: "string" },
+      /** The identity (did) the session spoke for at registration time. */
+      identityId: { type: "string" },
+      /** Opaque browser-issued push URL (the vendor relay endpoint). */
+      endpoint: { type: "string" },
+      /** RFC 8291 client key material; the server holds the public halves. */
+      keys: {
+        type: "object",
+        required: ["p256dh", "auth"],
+        properties: {
+          p256dh: { type: "string" },
+          auth: { type: "string" },
+        },
+      },
+      /** The session's device, for per-device re-registration replacement. */
+      deviceId: { type: ["string", "null"] },
+      createdAt: { type: "string" },
+      lastSeen: { type: "string" },
+    },
+  },
+  /**
+   * Push settings (PORCH-059): hub-enforced member controls read at send
+   * time, never cached — one global switch, a toggle per event type, a
+   * mute per network. The send pipeline consults this row on every send;
+   * no permission decision is ever cached.
+   */
+  pushSettings: {
+    type: "object",
+    required: ["_id", "identityId", "enabled", "events", "mutes", "updatedAt"],
+    properties: {
+      _id: { type: "string" },
+      identityId: { type: "string" },
+      /** The global switch: false silences every push for the member. */
+      enabled: { type: "boolean" },
+      /** Per-event toggles; missing keys resolve to the shipped defaults. */
+      events: {
+        type: "object",
+        properties: {
+          reply: { type: "boolean" },
+          reaction: { type: "boolean" },
+          mention: { type: "boolean" },
+          groupPost: { type: "boolean" },
+          joined: { type: "boolean" },
+          deviceLink: { type: "boolean" },
+        },
+      },
+      /** Per-network mutes: origin network ids the member pushed a stop to. */
+      mutes: { type: "array", items: { type: "string" } },
+      updatedAt: { type: "string" },
+    },
+  },
 };
 
 export default socialModels;

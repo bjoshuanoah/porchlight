@@ -7,6 +7,7 @@ import { MediaService } from "../../src/services/media.service.js";
 import { createMemoryMediaStore } from "../../src/services/media.store.js";
 import { PostService } from "../../src/services/post.service.js";
 import { NotificationService } from "../../src/services/notification.service.js";
+import { PushService } from "../../src/services/push.service.js";
 import { InteractionService } from "../../src/services/interaction.service.js";
 import { GroupService } from "../../src/services/group.service.js";
 import { RealtimeService, createMemoryEventPlane } from "../../src/services/realtime.service.js";
@@ -30,7 +31,7 @@ export function device(deviceId) {
  * post/interaction/notification/group path wired per the contract, with
  * admit helpers that return real membership tokens.
  */
-export function fixture({ networkIds = ["net_family", "net_other"], audit = async () => {}, memberNames = null } = {}) {
+export function fixture({ networkIds = ["net_family", "net_other"], audit = async () => {}, memberNames = null, pushVapid = null, pushSender = null } = {}) {
   const store = createMemoryStore();
   const collections = {
     networks: store.collection("networks"),
@@ -47,13 +48,19 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     notifications: store.collection("notifications"),
     derivedData: store.collection("derived_data"),
     groups: store.collection("groups"),
+    pushSubscriptions: store.collection("push_subscriptions"),
+    pushSettings: store.collection("push_settings"),
   };
 
   const invites = new InviteService(collections.invites);
   // PORCH-047: the fixture mirrors the module assembly — the real-time
   // service rides the same memory event plane, and the revocation kill
   // goes through the same hook (late-bound; membership assembles first).
+  // PORCH-059: the push surface wires the same way — onJoined rides in the
+  // same admission write, and the groupPost/reaction triggers ride their
+  // write services.
   let realtime = null;
+  let push = null;
   const membership = new MembershipService({
     memberships: collections.memberships,
     membershipSessions: collections.membershipSessions,
@@ -63,6 +70,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     memberNames,
     networks: collections.networks,
     onRevoked: (event) => realtime?.killMembership(event.membershipId),
+    onJoined: (event) => push?.notifyNewMember(event),
     audit,
   });
   const quota = new QuotaService({ artifacts: collections.artifacts, networks: collections.networks, audit });
@@ -79,7 +87,16 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     audit,
   });
   const groups = new GroupService({ groups: collections.groups, memberships: collections.memberships });
-  const notifications = new NotificationService({ notifications: collections.notifications, membership });
+  push = new PushService({
+    subscriptions: collections.pushSubscriptions,
+    settings: collections.pushSettings,
+    memberships: collections.memberships,
+    networks: collections.networks,
+    membership,
+    vapid: pushVapid,
+    sender: pushSender,
+  });
+  const notifications = new NotificationService({ notifications: collections.notifications, membership, push });
   const plane = createMemoryEventPlane();
   realtime = new RealtimeService({ membership, plane });
   const posts = new PostService({
@@ -95,6 +112,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     media,
     audit,
     realtime,
+    push,
   });
   const interactions = new InteractionService({
     posts: collections.posts,
@@ -105,6 +123,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     notifications,
     audit,
     realtime,
+    push,
   });
 
   for (const networkId of networkIds) {
@@ -130,5 +149,5 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     return admitted;
   };
 
-  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, realtime, realtimePlane: plane, audit: { events: collections.auditEvents }, admit, device };
+  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, realtime, realtimePlane: plane, push, audit: { events: collections.auditEvents }, admit, device };
 }
