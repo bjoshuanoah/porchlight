@@ -34,9 +34,12 @@ async function saveRegistration(origin, did, deviceId, privateKey, publicKeyJwk)
 }
 
 /** Legacy vault rows stored the bare private CryptoKey before PORCH-010. */
+// The CryptoKey global itself only exists on secure contexts (PORCH-039):
+// insecure (plain-http LAN) origins never store CryptoKey rows — they store
+// seed strings — so the instanceof check is guarded, not bare.
 function asRecord(value) {
   if (!value) return null;
-  if (value instanceof CryptoKey) return { privateKey: value, publicKeyJwk: null };
+  if (typeof CryptoKey !== "undefined" && value instanceof CryptoKey) return { privateKey: value, publicKeyJwk: null };
   return value.privateKey ? value : null;
 }
 

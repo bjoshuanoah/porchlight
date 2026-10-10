@@ -42,13 +42,20 @@ test("secure-context path keeps the non-extractable CryptoKey vault contract", a
   assert.equal(await hubVerifies(publicKeyJwk, message, signature), true);
 });
 
-test("PORCH-039 regression: an insecure context (no crypto.subtle, no randomUUID) still mints a working device key instead of throwing TypeError", async (t) => {
-  // Simulate the http://<LAN-IP> environment: subtle and randomUUID gone.
+test("PORCH-039 regression: an insecure context (no crypto.subtle, no randomUUID, no CryptoKey global) still mints a working device key instead of throwing TypeError", async (t) => {
+  // Measured on Chromium over plain http LAN origins (e.g. the reported
+  // http://192.168.1.31:8710): crypto.subtle, crypto.randomUUID AND the
+  // CryptoKey global are all undefined; getRandomValues and IndexedDB work.
   const original = globalThis.crypto;
-  t.after(() => { Object.defineProperty(globalThis, "crypto", { value: original }); });
+  const originalCryptoKey = globalThis.CryptoKey;
+  t.after(() => {
+    Object.defineProperty(globalThis, "crypto", { value: original });
+    Object.defineProperty(globalThis, "CryptoKey", { value: originalCryptoKey });
+  });
   Object.defineProperty(globalThis, "crypto", {
     value: { getRandomValues: original.getRandomValues.bind(original) },
   });
+  Object.defineProperty(globalThis, "CryptoKey", { value: undefined });
   assert.equal(hasSubtle(), false);
   const { privateKey, publicKeyJwk } = await createKeypair();
   assert.ok(privateKey, "keypair resolves rather than throwing pre-network");
