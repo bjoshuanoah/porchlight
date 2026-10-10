@@ -186,7 +186,11 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       mintOwnerDeviceLink: identityModule
         ? (did: string) => identityModule.deviceService.mintDeviceLink({ did })
         : undefined,
-      media: { mediaRoot: join(options.bootstrap.configDir, "media") },
+      media: {
+        mediaRoot: join(options.bootstrap.configDir, "media"),
+        // PORCH-044: the rendition ladder rungs are owner-readable config.
+        renditions: options.config.media.renditions,
+      },
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,
     });

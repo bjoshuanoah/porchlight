@@ -322,7 +322,12 @@ async function mongoCounts(mongoPort) {
 }
 
 async function uploadMemberMedia(base, member, token) {
-	const bytes = Buffer.alloc(512 * 1024, 7);
+	// PORCH-044: the commit probe accepts only renderable media — a real
+	// (decodable) 48×32 PNG fixture rides every seeded upload.
+	const bytes = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAASUlEQVRYhe2WAQkAQAwCF8dYRruoH2PPOFgAET03NF/drCtAQdGhmiFsWdbxg2CMDtUMYcuyDiF80KJDNUPYssihCMY6HRwe1weRi/BbpNIMlwAAAABJRU5ErkJggg==",
+		"base64",
+	);
 	const sha = createHash("sha256").update(bytes).digest("hex");
 	const beginPayload = { scope: "media-upload", size: bytes.length, contentType: "image/png" };
 	const begin = await call(base, "/api/social/media/uploads", {

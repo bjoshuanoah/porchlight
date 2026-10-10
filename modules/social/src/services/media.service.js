@@ -1,6 +1,14 @@
 import { socialModels } from "../models.js";
 import { sha256 } from "../util/crypto.js";
 import { sha256Hex } from "./media.store.js";
+import {
+  RENDITION_FORMAT_V2,
+  imageMetadata,
+  videoMetadata,
+  encodeImageRendition,
+  encodeVideoPlayable,
+  encodeVideoPoster,
+} from "./rendition.encoder.js";
 
 /**
  * Media pipeline service (PORCH-008, Porchlight Server TS 5 + the media
@@ -15,11 +23,17 @@ import { sha256Hex } from "./media.store.js";
  *   chunks → POST complete, status read for resume), with server-side
  *   integrity verification (declared sha256 + size) before commit and
  *   scheduled/idempotent garbage collection of incomplete uploads.
- * - Rendition sets (feed-thumb, detail, album) are generated on the hub
- *   at ingest, idempotent per media item, counted against the same
- *   owner-set storage ceiling as originals (quantity-only limits rule).
+ * - Rendition sets are generated on the hub at ingest, idempotent per
+ *   media item, counted against the same owner-set storage ceiling as
+ *   originals (quantity-only limits rule): image rungs (feed-thumb,
+ *   album, detail — width rungs of the responsive ladder) as WebP plus
+ *   the video poster + playable set (PORCH-044, codec-backed encoders in
+ *   rendition.encoder.js).
  * - Serving defaults to renditions; original-quality retrieval is an
- *   explicit member action against the archive.
+ *   explicit member action against the archive. Rendition responses are
+ *   content-addressed (the URL carries the rendition's sha256) and serve
+ *   with a long-lived private, immutable Cache-Control (PORCH-044 ac-3);
+ *   originals serve with no-store and are never pre-cached.
  * - Disk guard: soft threshold warns the owner console, hard stop halts
  *   NEW uploads before corruption conditions; reads continue at both
  *   thresholds ([Assumed: 90% soft / 95% hard, tune at build] — named
@@ -48,7 +62,7 @@ export class MediaService {
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
    * @param {{ softUsedRatio?: number, hardUsedRatio?: number,
    *           chunkSize?: number, uploadTtlSeconds?: number,
-   *           renditionScales?: Record<string, number> }} [options]
+   *           renditionRungs?: { image?: Record<string, number>, video?: Record<string, number> }} [options]
    */
   constructor({ uploads, assets, artifacts, membership, quota, blobs, diskProbe, audit }, options = {}) {
     this.uploads = uploads;
@@ -64,7 +78,14 @@ export class MediaService {
     this.hardUsedRatio = options.hardUsedRatio ?? 0.95;
     this.chunkSize = options.chunkSize ?? 4 * 1024 * 1024;
     this.uploadTtlSeconds = options.uploadTtlSeconds ?? 24 * 60 * 60;
-    this.renditionScales = options.renditionScales ?? { "feed-thumb": 0.15, album: 0.3, detail: 0.5 };
+    // Rendition ladder rungs (PORCH-044, media pipeline TS 5): pixel-width
+    // rungs for the photo-first treatments (full-bleed mobile, contained
+    // desktop card, detail view) — owner-readable configuration values,
+    // validated + defaulted by normalizeConfig (packages/shared). Image
+    // rungs render WebP; video posts get their poster/playable set.
+    this.renditionRungs = normalizeRenditionRungs(
+      options.renditionRungs ?? structuredClone(DEFAULT_RENDITION_RUNGS),
+    );
   }
 
   /**
@@ -226,6 +247,13 @@ export class MediaService {
       throw typedError("E_COMMIT_SHA_MISMATCH", MESSAGES.E_COMMIT_SHA_MISMATCH);
     }
 
+    // Probe the original hub-side BEFORE anything is stored (PORCH-044):
+    // the rendition set can only be generated from decodable pixels. An
+    // undecodable upload would strand every member-facing surface on
+    // original bytes (the exact defect PORCH-044 exists to remove), so the
+    // commit rejects rather than admitting unrenderable media.
+    const sourceMeta = await this.#probeOriginal(assembled, upload.contentType);
+
     // Re-admission with the ACTUAL bytes (an over-declared begin cannot be
     // raced into an over-filled network) before anything is stored.
     await this.quota.admitUpload({ networkId: upload.networkId, bytes: assembled.length, kind: "original" });
@@ -242,6 +270,10 @@ export class MediaService {
       blobKey,
       sha256: payload.sha256,
       bytes: assembled.length,
+      // Hub-side probe (portrait/landscape effective dims; null for audio).
+      width: sourceMeta?.width ?? null,
+      height: sourceMeta?.height ?? null,
+      durationSeconds: sourceMeta?.durationSeconds ?? null,
       immutable: true,
       // The device-signed commit rides the asset: it is the authorship
       // signature an export manifest cites per media item, verifiable over
@@ -277,14 +309,18 @@ export class MediaService {
   }
 
   /**
-   * Rendition generation (ac-2): the hub produces the rendition set
-   * (feed thumb, detail, album) ON THE SERVER — never a device — from the
-   * immutable original. Idempotent per media item: existing rendition
-   * kinds are skipped, a crash mid-set re-runs and completes the rest.
-   * The built-in transforms are deterministic byte-budget derivatives
-   * (documented in renditionBytes) landing the set's overhead inside the
-   * ≤2–4x storage budget; renditions count against the same quota
-   * ceiling as the original.
+   * Rendition generation (ac-2/ac-4): the hub produces the rendition set
+   * ON THE SERVER — never a device — from the immutable original: the
+   * image rungs (feed-thumb, album, detail — width rungs clamped to the
+   * original) for image content, the poster + playable set for video, and
+   * no rendition rows for audio (audio renders in the original's stream).
+   * Idempotent per media item: rendition kinds already at the current
+   * format are skipped, a crash mid-set re-runs and completes the rest,
+   * and rendition rows left by an older format are regenerated (the
+   * pre-PORCH-044 byte-derivative set was not renderable by a browser).
+   * The set lands inside the ≤2–4x storage budget (guarded per rung for
+   * images, per set for video with a codec-overhead floor); renditions
+   * count against the same quota ceiling as the original.
    */
   async generateRenditions(mediaId, { retentionDays = null } = {}) {
     const original = await this.assets.findOne({ _id: mediaId });
@@ -292,25 +328,38 @@ export class MediaService {
       throw typedError("E_MEDIA_NOT_FOUND", MESSAGES.E_MEDIA_NOT_FOUND);
     }
     const existing = await this.assets.find({ networkId: original.networkId, originalId: mediaId, kind: "rendition" });
-    const existingKinds = new Set(existing.map((row) => row.renditionKind));
     const originalBytes = await this.blobs.get(original.blobKey);
     if (originalBytes === null) {
       throw typedError("E_ORIGINAL_BYTES_MISSING", MESSAGES.E_ORIGINAL_BYTES_MISSING, { mediaId });
     }
+    // Format upgrade: rendition rows not at the current format are removed
+    // (blob + asset + ledger row) before regeneration — the archive self-
+    // heals to the rendering set of record.
+    const stale = existing.filter((row) => row.format !== RENDITION_FORMAT_V2);
+    for (const row of stale) {
+      await this.blobs.delete(row.blobKey);
+      await this.assets.deleteOne({ _id: row._id });
+      await this.quota.removeArtifact(row._id);
+    }
+    const existingKinds = new Set(
+      existing.filter((row) => row.format === RENDITION_FORMAT_V2).map((row) => row.renditionKind),
+    );
+    const rungs = rungsForContentType(this.renditionRungs, original.contentType);
     const generated = [];
-    for (const [renditionKind, scale] of Object.entries(this.renditionScales)) {
+    for (const [renditionKind, targetWidth] of Object.entries(rungs)) {
       if (existingKinds.has(renditionKind)) continue;
-      const rendered = renditionBytes(originalBytes, renditionKind, scale);
-      if (original.bytes >= RENDITION_BUDGET_FLOOR_BYTES && rendered.length > original.bytes * 4) {
-        // Rendition budget guard (TS 5: renditions ≤ 4x originals): a
-        // runaway transform never lands in storage. The fixed derivative
-        // header is a constant few hundred bytes, so originals smaller
-        // than that floor are exempt — the budget applies at archive
-        // scale, not to micro test fixtures.
-        throw typedError("E_RENDITION_BUDGET_EXCEEDED", MESSAGES.E_RENDITION_BUDGET_EXCEEDED, { renditionKind });
+      const rendered = await this.#renderRung(original, originalBytes, renditionKind, targetWidth);
+      // Rendition budget guard (TS 5: the ladder stays inside the ≤2–4x
+      // storage budget). Image rungs guard per rung at the byte floor;
+      // video guards per set from the video floor up (codec overhead on
+      // tiny clips is not archive-scale storage). A runaway transform
+      // never lands in storage.
+      const floor = RENDITION_KINDS_VIDEO.has(renditionKind) ? VIDEO_BUDGET_FLOOR_BYTES : RENDITION_BUDGET_FLOOR_BYTES;
+      if (original.bytes >= floor) {
+        this.#assertRenditionBudget(original, existing, renditionKind, rendered.bytes.length);
       }
-      const blobKey = sha256Hex(rendered);
-      await this.blobs.put(blobKey, rendered);
+      const blobKey = sha256Hex(rendered.bytes);
+      await this.blobs.put(blobKey, rendered.bytes);
       const renditionId = `rnd_${crypto.randomUUID()}`;
       await this.assets.insertOne({
         _id: renditionId,
@@ -318,22 +367,25 @@ export class MediaService {
         did: original.did,
         kind: "rendition",
         renditionKind,
+        format: RENDITION_FORMAT_V2,
         originalId: mediaId,
-        contentType: original.contentType,
+        contentType: rendered.contentType,
         blobKey,
         sha256: blobKey,
-        bytes: rendered.length,
+        bytes: rendered.bytes.length,
+        width: rendered.width ?? null,
+        height: rendered.height ?? null,
         immutable: true,
         createdAt: new Date().toISOString(),
       });
       await this.quota.recordArtifact({
         networkId: original.networkId,
         kind: "rendition",
-        bytes: rendered.length,
+        bytes: rendered.bytes.length,
         retentionDays,
         sourceId: renditionId,
       });
-      generated.push({ kind: renditionKind, renditionId, bytes: rendered.length });
+      generated.push({ kind: renditionKind, renditionId, bytes: rendered.bytes.length });
     }
     if (generated.length > 0) {
       await this.audit("renditions_generate", {
@@ -343,6 +395,50 @@ export class MediaService {
       });
     }
     return generated;
+  }
+
+  /** Decode/probe the original's pixels (image dims; video dims; audio null). */
+  async #probeOriginal(bytes, contentType) {
+    if (String(contentType).startsWith("image/")) {
+      return imageMetadata(bytes);
+    }
+    if (String(contentType).startsWith("video/")) {
+      return videoMetadata(bytes);
+    }
+    return null;
+  }
+
+  /** One rung through the right encoder family. */
+  async #renderRung(original, originalBytes, renditionKind, targetWidth) {
+    const source = {
+      width: original.width ?? 2,
+      height: original.height ?? 2,
+      durationSeconds: original.durationSeconds ?? 0,
+    };
+    if (renditionKind === "poster") {
+      return encodeVideoPoster(originalBytes, source, targetWidth);
+    }
+    if (renditionKind === "playable") {
+      return encodeVideoPlayable(originalBytes, source, targetWidth);
+    }
+    return encodeImageRendition(originalBytes, targetWidth);
+  }
+
+  /** The set-level ≤4x guard (video renditions; per-rung guard for images). */
+  #assertRenditionBudget(original, existing, renditionKind, renderedBytes) {
+    if (!RENDITION_KINDS_VIDEO.has(renditionKind)) {
+      if (renderedBytes > original.bytes * 4) {
+        throw typedError("E_RENDITION_BUDGET_EXCEEDED", MESSAGES.E_RENDITION_BUDGET_EXCEEDED, { renditionKind });
+      }
+      return;
+    }
+    const currentVideoBytes =
+      existing
+        .filter((row) => RENDITION_KINDS_VIDEO.has(row.renditionKind))
+        .reduce((total, row) => total + row.bytes, 0) + renderedBytes;
+    if (currentVideoBytes > original.bytes * 4) {
+      throw typedError("E_RENDITION_BUDGET_EXCEEDED", MESSAGES.E_RENDITION_BUDGET_EXCEEDED, { renditionKind });
+    }
   }
 
   /**
@@ -358,12 +454,25 @@ export class MediaService {
     if (!RENDITION_KINDS.includes(renditionKind)) {
       throw typedError("E_RENDITION_KIND_UNKNOWN", MESSAGES.E_RENDITION_KIND_UNKNOWN);
     }
-    const rendition = await this.assets.findOne({
+    let rendition = await this.assets.findOne({
       networkId: session.networkId,
       originalId: mediaId,
       kind: "rendition",
       renditionKind,
     });
+    if (rendition && rendition.format !== RENDITION_FORMAT_V2) {
+      // Archive self-heal (PORCH-044): pre-format-v2 renditions are the
+      // byte-derivative set of record's earlier shape — not renderable in a
+      // browser. The read regeneration upgrades the archive once; the next
+      // lookup finds the renderable rendition.
+      await this.generateRenditions(mediaId);
+      rendition = await this.assets.findOne({
+        networkId: session.networkId,
+        originalId: mediaId,
+        kind: "rendition",
+        renditionKind,
+      });
+    }
     if (!rendition) {
       throw typedError("E_RENDITION_NOT_FOUND", MESSAGES.E_RENDITION_NOT_FOUND);
     }
@@ -376,6 +485,8 @@ export class MediaService {
       renditionKind,
       contentType: rendition.contentType,
       sha256: rendition.sha256,
+      width: rendition.width ?? null,
+      height: rendition.height ?? null,
       bytes,
     };
   }
@@ -414,8 +525,70 @@ export class MediaService {
       contentType: asset.contentType,
       bytes: asset.bytes,
       sha256: asset.sha256,
-      renditions: asset.kind === "original" ? RENDITION_KINDS : [],
+      width: asset.width ?? null,
+      height: asset.height ?? null,
+      durationSeconds: asset.durationSeconds ?? null,
+      renditions:
+        asset.kind === "original"
+          ? Object.keys(rungsForContentType(this.renditionRungs, asset.contentType))
+          : [],
     };
+  }
+
+  /**
+   * Feed/post view hydration (PORCH-044 ac-2): every post view that
+   * carries mediaRefs carries `mediaMeta` — per media id the original's
+   * display dimensions and the rendition set of record (kind, sha256,
+   * width, height, bytes; the poster frame riding the `poster` field for
+   * video). Clients build srcset/sizes and the video poster/src from this;
+   * no rendition metadata is fetched per item on the wire.
+   */
+  async withMediaMeta(views, networkId) {
+    const ids = [...new Set(views.flatMap((view) => (Array.isArray(view.mediaRefs) ? view.mediaRefs : [])))];
+    if (ids.length === 0) return views;
+    const assets = await this.assets.find({ networkId });
+    const relevant = assets.filter(
+      (row) => ids.includes(row._id) || (row.kind === "rendition" && ids.includes(row.originalId)),
+    );
+    const meta = new Map(
+      ids.map((id) => [id, { mediaId: id, contentType: null, width: null, height: null, poster: null, renditions: [] }]),
+    );
+    for (const row of relevant) {
+      if (row.kind === "original") {
+        const entry = meta.get(row._id);
+        if (!entry) continue;
+        entry.contentType = row.contentType;
+        entry.width = row.width ?? null;
+        entry.height = row.height ?? null;
+        entry.durationSeconds = row.durationSeconds ?? null;
+      } else {
+        const entry = meta.get(row.originalId);
+        if (!entry) continue;
+        const shape = {
+          kind: row.renditionKind,
+          sha256: row.sha256,
+          width: row.width ?? null,
+          height: row.height ?? null,
+          bytes: row.bytes,
+        };
+        if (RENDITION_KINDS_VIDEO.has(row.renditionKind)) {
+          if (row.renditionKind === "poster") entry.poster = shape;
+          else entry.renditions = [shape];
+        } else {
+          entry.renditions.push(shape);
+        }
+      }
+    }
+    // Image rungs sort narrowest→widest so srcset descriptors ascend.
+    for (const entry of meta.values()) {
+      entry.renditions.sort((a, b) => (a.width ?? 0) - (b.width ?? 0));
+    }
+    for (const view of views) {
+      if (Array.isArray(view.mediaRefs) && view.mediaRefs.length > 0) {
+        view.mediaMeta = Object.fromEntries(view.mediaRefs.filter((id) => meta.has(id)).map((id) => [id, meta.get(id)]));
+      }
+    }
+    return views;
   }
 
   /**
@@ -603,41 +776,72 @@ export class MediaService {
   }
 }
 
-export const RENDITION_KINDS = ["feed-thumb", "detail", "album"];
+export const RENDITION_KINDS = ["feed-thumb", "album", "detail", "poster", "playable"];
+
+/**
+ * Rendition ladder rungs of record (PORCH-044, media pipeline TS 5): the
+ * rungs are owner-readable configuration values (packages/shared
+ * DEFAULT_CONFIG.media). Image rungs are pixel widths for the photo-first
+ * treatments (full-bleed mobile feed, contained desktop cards, the detail
+ * view); video posts carry the poster + playable set. Widths clamp to the
+ * original at generation (never upscaled).
+ */
+export const DEFAULT_RENDITION_RUNGS = Object.freeze({
+  image: Object.freeze({ "feed-thumb": 640, album: 1080, detail: 1600 }),
+  video: Object.freeze({ poster: 640, playable: 1280 }),
+});
 
 /** Budget guard floor: at/above this original size the ≤4x budget is enforced. */
 export const RENDITION_BUDGET_FLOOR_BYTES = 1024;
 
+/** Video budget floor: codec overhead on tiny clips is not archive-scale storage. */
+export const VIDEO_BUDGET_FLOOR_BYTES = 64 * 1024;
+
 /**
- * Deterministic hub-side rendition transforms (TS 5). The transform surface
- * is the seam a codec-backed encoder plugs into; the built-in encoders are
- * deterministic byte-budget derivatives: a framed derivative header
- * (kind, scale, source sha, sampled-byte count) plus a fixed-stride
- * sampling of the original bytes whose coverage is uniform, so any
- * consumer can reconstruct the same derivative from the same original —
- * resumable/idempotent by content address, and sized to keep the whole
- * rendition set inside the ≤2–4x overhead budget (scales 0.15 + 0.3 +
- * 0.5 = 0.95x).
+ * Validate + default the owner-readable rung configuration. Kinds are
+ * fixed (the ladder of record is the set above); an unknown kind or a
+ * non-integer out-of-range width fails loudly instead of silently
+ * shrinking the ladder.
  */
-export function renditionBytes(originalBytes, renditionKind, scale) {
-  const sourceSha = sha256Hex(originalBytes);
-  const stride = Math.max(1, Math.floor(1 / scale));
-  const sampled = Buffer.alloc(Math.ceil(originalBytes.length / stride));
-  for (let offset = 0, writeAt = 0; offset < originalBytes.length; offset += stride, writeAt += 1) {
-    sampled[writeAt] = originalBytes[offset];
+export function normalizeRenditionRungs(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const merged = {
+    image: { ...DEFAULT_RENDITION_RUNGS.image, ...(src.image ?? {}) },
+    video: { ...DEFAULT_RENDITION_RUNGS.video, ...(src.video ?? {}) },
+  };
+  for (const group of ["image", "video"]) {
+    for (const kind of Object.keys(src?.[group] ?? {})) {
+      if (!(kind in DEFAULT_RENDITION_RUNGS[group])) {
+        throw typedError(
+          "E_RENDITION_RUNG_INVALID",
+          `config media.renditions.${group}.${kind} is not a rendition kind of record (${Object.keys(DEFAULT_RENDITION_RUNGS[group]).join(", ")}).`,
+        );
+      }
+    }
+    for (const [kind, width] of Object.entries(merged[group])) {
+      if (!Number.isInteger(width) || width < 16 || width > 8192) {
+        throw typedError(
+          "E_RENDITION_RUNG_INVALID",
+          `config media.renditions.${group}.${kind} must be an integer width between 16 and 8192 (got ${width}).`,
+        );
+      }
+    }
   }
-  const header = Buffer.from(
-    JSON.stringify({
-      format: "porchlight-rendition/1",
-      renditionKind,
-      scale,
-      sourceSha256: sourceSha,
-      sampledBytes: sampled.length,
-    }) + "\n",
-    "utf8",
-  );
-  return Buffer.concat([header, sampled]);
+  return merged;
 }
+
+/** The rungs that apply to one content type: image rungs, the video set, or none. */
+export function rungsForContentType(rungs, contentType) {
+  const type = String(contentType ?? "");
+  if (type.startsWith("video/")) return rungs.video;
+  if (type.startsWith("image/")) return rungs.image;
+  // Audio (and any future media kind) renders without renditions — the
+  // original stream plays as stored; no ladder rung applies.
+  return {};
+}
+
+/** Video rendition kinds (poster + playable). */
+export const RENDITION_KINDS_VIDEO = new Set(["poster", "playable"]);
 
 function chunkKey(uploadId, index) {
   return `${uploadId}/${index}`;
@@ -666,6 +870,7 @@ export const MESSAGES = {
   E_RENDITION_BUDGET_EXCEEDED: "A rendition exceeded the storage budget and was not stored.",
   E_ORIGINAL_BYTES_MISSING: "The original's stored bytes are unreadable.",
   E_BLOB_MISSING: "The stored media bytes are unreadable.",
+  E_MEDIA_UNDECODABLE: "The hub cannot decode this upload's pixels — nothing was stored. Photos arrive as JPEG/PNG/WebP/HEIC, videos as MP4/WebM/MOV.",
 };
 
 // The media store re-exports live here so the media service is the one

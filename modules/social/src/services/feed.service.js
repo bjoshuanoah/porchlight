@@ -38,13 +38,18 @@ export class FeedService {
    * @param {import("@porchlight/shared").CollectionLike} deps.groups
    * @param {import("./membership.service.js").MembershipService} deps.membership
    * @param {import("./ranking.service.js").RankingService} deps.ranking
+   * @param {import("./media.service.js").MediaService} deps.media
+   *   Post views hydrate `mediaMeta` — the rendition set of record + display
+   *   dims — so every feed surface carries what the client's srcset/sizes
+   *   and the video poster need (PORCH-044 ac-2).
    */
-  constructor({ posts, derivedData, groups, membership, ranking }) {
+  constructor({ posts, derivedData, groups, membership, ranking, media }) {
     this.posts = posts;
     this.derivedData = derivedData;
     this.groups = groups;
     this.membership = membership;
     this.ranking = ranking;
+    this.media = media;
     this.models = socialModels;
   }
 
@@ -149,9 +154,10 @@ export class FeedService {
     return this.#decorate(FeedService.order(rows), networkId);
   }
 
-  /** Member views plus read-time member attribution (PORCH-034). */
+  /** Member views plus read-time member attribution (PORCH-034) and mediaMeta (PORCH-044). */
   async #decorate(views, networkId) {
-    return this.#withAttribution(await this.#withGroupChips(views, networkId), networkId);
+    const attributed = await this.#withAttribution(await this.#withGroupChips(views, networkId), networkId);
+    return this.media.withMediaMeta(attributed, networkId);
   }
 
   /**

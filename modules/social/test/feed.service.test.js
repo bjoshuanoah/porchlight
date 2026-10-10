@@ -41,6 +41,7 @@ function withFeed(fx, rankingOverrides = {}) {
     groups: fx.collections.groups,
     membership: fx.membership,
     ranking,
+    media: fx.media,
   });
   return { ranking, feed };
 }
@@ -52,6 +53,7 @@ function feedOver(fx, ranking) {
     groups: fx.collections.groups,
     membership: fx.membership,
     ranking,
+    media: fx.media,
   });
 }
 
@@ -309,6 +311,7 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
     groups: recording("groups", fx.collections.groups),
     membership: recordingMembership,
     ranking: new RankingService(),
+    media: fx.media,
   });
 
   const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "hideable" });

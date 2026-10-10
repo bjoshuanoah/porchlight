@@ -95,9 +95,13 @@ export class PostService {
    * @param {import("@porchlight/shared").CollectionLike} deps.artifacts
    * @param {import("@porchlight/shared").CollectionLike} deps.groups
    * @param {import("./membership.service.js").MembershipService} deps.membership
+   * @param {import("./media.service.js").MediaService} deps.media
+   *   The media pipeline: member views hydrate `mediaMeta` (rendition set
+   *   of record, display dims) so clients never fetch rendition metadata
+   *   per item (PORCH-044 ac-2).
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
    */
-  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, audit }) {
+  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -107,6 +111,7 @@ export class PostService {
     this.artifacts = artifacts;
     this.groups = groups;
     this.membership = membership;
+    this.media = media;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
   }
@@ -139,7 +144,7 @@ export class PostService {
     const post = await this.#buildPost({ networkId, did: session.did, payload, signature });
     await this.posts.insertOne(post);
     await this.audit("post_create", { networkId, did: session.did, detail: { postId: post._id, type: post.type } });
-    return { post: (await this.#withAttribution([this.view(post)], networkId))[0], did: session.did };
+    return { post: (await this.memberViews([post], networkId))[0], did: session.did };
   }
 
   /** Read one post as a member view (no counters, no vote data). */
@@ -150,7 +155,7 @@ export class PostService {
       // Containment: a post of another origin simply does not exist here.
       throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
     }
-    return { post: (await this.#withAttribution([this.view(post)], session.networkId))[0], did: session.did };
+    return { post: (await this.memberViews([post], session.networkId))[0], did: session.did };
   }
 
   /** List the origin network's posts, newest first (base timeline read). */
@@ -160,7 +165,13 @@ export class PostService {
     // Base timeline ordering (PORCH-007): newest first by latest activity;
     // reverse-chron pagination only — this read never re-sorts by rank.
     newestFirstByActivity(rows);
-    return { posts: await this.#withAttribution(rows.map((post) => this.view(post)), session.networkId), did: session.did };
+    return { posts: await this.memberViews(rows, session.networkId), did: session.did };
+  }
+
+  /** Member views with attribution and the hydrated mediaMeta (PORCH-044). */
+  async memberViews(postRows, networkId) {
+    const attributed = await this.#withAttribution(postRows.map((post) => this.view(post)), networkId);
+    return this.media.withMediaMeta(attributed, networkId);
   }
 
   /**

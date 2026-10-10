@@ -130,6 +130,21 @@ export class QuotaService {
   }
 
   /**
+   * Remove the artifact rows keyed to one source id (PORCH-044: a rendition
+   * regenerated to the current format leaves its old ledger rows behind —
+   * the usage ledger counts live renditions only). Returns the removed
+   * count/bytes; idempotent when nothing is keyed to the source.
+   */
+  async removeArtifact(sourceId, { networkId = null } = {}) {
+    if (sourceId == null) return { removedRows: 0, removedBytes: 0 };
+    const rows = await this.artifacts.find(networkId ? { networkId, sourceId } : { sourceId });
+    for (const row of rows) {
+      await this.artifacts.deleteOne({ _id: row._id });
+    }
+    return { removedRows: rows.length, removedBytes: rows.reduce((total, row) => total + row.bytes, 0) };
+  }
+
+  /**
    * Artifacts whose retention window has closed at `now`. The OWNER-SET
    * window is a setting, not a per-row snapshot: every live artifact row's
    * effective expiry is evaluated against the network's CURRENT
