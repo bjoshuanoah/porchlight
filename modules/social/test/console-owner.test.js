@@ -145,6 +145,63 @@ test("console guard: the founder-owner passes a representative console set", asy
   }
 });
 
+/* ---- PORCH-058: newest-first, paginated audit read ------------------------ */
+
+test("console audit read: newest-first with bounded pages over ?limit= and ?offset=", async () => {
+  const fx = await perimeterFixture();
+  const { base, close } = await serve(fx.mod);
+  const auth = { authorization: `Bearer ${fx.owner.accessToken}` };
+  try {
+    // Nine recorded events, future-dated so they sort above the admission
+    // logins the fixture already wrote; the endpoint must reverse them.
+    const created = [];
+    for (let i = 0; i < 9; i++) {
+      const event = await fx.mod.auditService.record({
+        networkId: FAMILY,
+        did: i % 2 ? MEMBER : OWNER,
+        action: `event_${i}`,
+        detail: { sequence: i },
+      });
+      await fx.mod.auditService.auditEvents.updateOne({ _id: event._id }, { $set: {
+        createdAt: new Date(Date.parse("9999-12-31T00:00:00Z") + i * 60_000).toISOString(),
+      } });
+      created.push(event);
+    }
+    await fx.mod.auditService.record({ networkId: "net_somewhere_else", action: "not_this_network" });
+    const expectedIds = created.map((event) => event._id).reverse();
+
+    const full = await (await fetch(`${base}/console/audit?limit=200`, { headers: auth })).json();
+    assert.deepEqual(full.events.slice(0, 9).map((event) => event._id), expectedIds);
+    assert.equal(full.hasMore, false);
+    assert.equal(full.total, full.events.length); // the read is a page, not the unbounded set
+
+    // Sliding windows page the same newest-first order.
+    const first = await (await fetch(`${base}/console/audit?limit=4&offset=0`, { headers: auth })).json();
+    assert.deepEqual(first.events.map((event) => event._id), full.events.slice(0, 4).map((event) => event._id));
+    assert.equal(first.total, full.total);
+    assert.equal(first.limit, 4);
+    assert.equal(first.offset, 0);
+    assert.equal(first.hasMore, true);
+
+    const second = await (await fetch(`${base}/console/audit?limit=4&offset=4`, { headers: auth })).json();
+    assert.deepEqual(second.events.map((event) => event._id), full.events.slice(4, 8).map((event) => event._id));
+    assert.equal(second.hasMore, true);
+
+    const tail = await (await fetch(`${base}/console/audit?limit=4&offset=${full.total - 4}`, { headers: auth })).json();
+    assert.deepEqual(tail.events.map((event) => event._id), full.events.slice(full.total - 4).map((event) => event._id));
+    assert.equal(tail.hasMore, false);
+
+    // Prior events preserved verbatim: every stored field reaches the page.
+    const spot = (await (await fetch(`${base}/console/audit?limit=1&offset=2`, { headers: auth })).json()).events[0];
+    const original = created[6];
+    assert.equal(spot._id, original._id);
+    assert.deepEqual(spot.detail, original.detail);
+    assert.equal(spot.createdAt, new Date(Date.parse("9999-12-31T00:00:00Z") + 6 * 60_000).toISOString());
+  } finally {
+    close();
+  }
+});
+
 /* ---- console-issued join links name their hub (PORCH-023) ---------------- */
 
 test("console-issued join links record the hub they were made for (PORCH-023 ac-2)", async () => {

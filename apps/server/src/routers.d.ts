@@ -221,6 +221,9 @@ declare module "@porchlight/social" {
   export class AuditService {
     constructor(auditEvents: unknown, bootstrapLedger?: { record: (step: string, detail?: object) => Promise<void> });
     record(options: { networkId: string; did?: string | null; action: string; detail?: object }): Promise<Record<string, unknown>>;
-    list(options: { networkId: string }): Promise<Array<Record<string, unknown>>>;
+    /** PORCH-058: newest first, bounded page (?limit= ?offset=). */
+    list(options: { networkId: string; limit?: unknown; offset?: unknown }): Promise<{
+      events: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean;
+    }>;
   }
 }

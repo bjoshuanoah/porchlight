@@ -24,7 +24,7 @@ import { arrivalPollMs } from "./live.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport } from "./media-transport.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
-import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
+import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
 // PORCH-051: the Add to Home Screen machinery — the decision logic module
 // and its two surfaces (the Android custom CTA, the iOS guided card).
@@ -603,6 +603,9 @@ function App() {
       await reload();
     },
     issueInvite: async () => { const result = await request(active, "social/console/invites", { method: "POST", body: JSON.stringify({ role: "member", maxUses: 1 }) }); await reload(); return result; },
+    // Paginated activity read (PORCH-058 ac-3): a newer/older page turn
+    // fetches directly from the paginated endpoint — no console reload.
+    loadAuditPage: (offset = 0) => request(active, `social/console/audit?limit=${AUDIT_PAGE}&offset=${offset}`),
     revokeInvite: async (id) => { const result = await request(active, "social/console/invites/revoke", { method: "POST", body: JSON.stringify({ inviteId: id }) }); await reload(); return result; },
     // Shared update path (PORCH-040): the apply POST returns once npm has
     // installed the release and the hub is restarting; after the restarted

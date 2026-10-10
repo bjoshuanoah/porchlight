@@ -314,14 +314,20 @@ export class ConsoleController {
     }
   };
 
-  /** GET /console/audit — member action trail (uploads, deletions, logins). */
+  /** GET /console/audit — member action trail (uploads, deletions, logins),
+   *  newest first, bounded pages: ?limit= and ?offset= ride the read
+   *  contract (PORCH-058); the service owns the bounds. */
   listAudit = async (req, res) => {
     if (!(await this.#requireOwner(req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
     }
-    res.json({ events: await this.audit.list({ networkId: network._id }) });
+    res.json(await this.audit.list({
+      networkId: network._id,
+      limit: req.query?.limit,
+      offset: req.query?.offset,
+    }));
   };
 
   /**

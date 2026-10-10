@@ -48,14 +48,40 @@ export class AuditService {
       });
   }
 
-  /** Owner console read: the network's action trail, newest-last stable order. */
-  async list({ networkId } = {}) {
+  /**
+   * Owner console read (PORCH-058): the network's action trail, newest
+   * first — reverse chronological, most recent event at the top — with a
+   * bounded page: `limit` (1..AUDIT_PAGE_MAX, default AUDIT_PAGE_LIMIT)
+   * and `offset` (>= 0) are part of the read contract; the full unbounded
+   * event set is never returned.
+   */
+  static AUDIT_PAGE_LIMIT = 50;
+  static AUDIT_PAGE_MAX = 200;
+
+  async list({ networkId, limit, offset } = {}) {
     if (!networkId) {
       const error = new Error("networkId required");
       error.code = "E_AUDIT_REQUIRED";
       throw error;
     }
-    return this.auditEvents.find({ networkId: String(networkId) });
+    const pageSize = Math.min(
+      Math.max(Math.floor(Number(limit) || AuditService.AUDIT_PAGE_LIMIT), 1),
+      AuditService.AUDIT_PAGE_MAX,
+    );
+    const start = Math.max(Math.floor(Number(offset) || 0), 0);
+    // No re-backfill, no event reshaping (PORCH-058 ac-4): prior rows read
+    // exactly as stored and are only ordered and windowed for the page.
+    const rows = (await this.auditEvents.find({ networkId: String(networkId) }))
+      .sort((a, b) =>
+        String(b.createdAt).localeCompare(String(a.createdAt)) ||
+        String(b._id).localeCompare(String(a._id)));
+    return {
+      events: rows.slice(start, start + pageSize),
+      total: rows.length,
+      limit: pageSize,
+      offset: start,
+      hasMore: start + pageSize < rows.length,
+    };
   }
 }
 
