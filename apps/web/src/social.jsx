@@ -9,6 +9,7 @@ import { tokens } from './theme.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction } from './reactions.js';
+import { groupRows, groupMemberRows, canManageGroup, addableCandidates } from './groups.js';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
@@ -20,7 +21,6 @@ const originOf = (post) => post?.originNetworkId ?? post?.networkId ?? post?.ori
 const networkId = (data) => data?.network?._id ?? data?.network?.id;
 const originName = (post, data) => post?.origin?.name ?? post?.network ?? (String(originOf(post)) === String(networkId(data)) || !originOf(post) ? data?.network?.name : null) ?? originOf(post) ?? 'This network';
 const visibleAtOrigin = (post, data) => !originOf(post) || !networkId(data) || String(originOf(post)) === String(networkId(data)) || data.connections?.some((connection) => String(connection.networkId) === String(originOf(post)) || (post.origin && String(connection.url).replace(/\/$/, '') === String(post.origin).replace(/\/$/, '')));
-const groupAtOrigin = (group, data) => !group?.networkId || !networkId(data) || String(group.networkId) === String(networkId(data));
 const postKey = (post) => `${post?.origin ?? originOf(post) ?? ''}:${identityOf(post)}`;
 const atCurrentOrigin = (post, data) => post.origin ? post : { ...post, origin: data.server?.url, network: data.network?.name };
 // Attribution (PORCH-034): the hub resolves each author's family-facing
@@ -292,12 +292,20 @@ export function Timeline({ data = {}, actions = {}, navigate }) {
   </Box>;
 }
 
+// Group management (PORCH-030, Oct 14 2026 follow-up — the owner's "fix
+// groups in the UI" note): the Groups page is member-plane. Creating a
+// group is open to every member; the member who created a group manages its
+// membership from its Members view; origin containment is unchanged (a
+// group belongs to exactly one network). The pure mappings ride groups.js;
+// this component only renders and forwards actions.
 export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
   const selectedId = id ?? routeId;
-  const groups = (Array.isArray(data.groups) ? data.groups : []).filter((item) => groupAtOrigin(item, data));
+  const groups = groupRows(data.groups, data.network?.id);
   const [loaded, setLoaded] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
     if (!selectedId || data.offline) return undefined;
     if (!actions.loadGroup) { setLoadError('This group timeline cannot be loaded from your family server yet.'); return undefined; }
@@ -312,10 +320,16 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
       })
       .catch((error) => { if (current) { setLoadError(messageOf(error)); setLoading(false); } });
     return () => { current = false; };
-  }, [selectedId, data.offline, actions.loadGroup]);
+  }, [selectedId, data.offline, actions.loadGroup, revision]);
   const current = loaded?.id === selectedId ? loaded : null;
   const group = current?.group ?? groups.find((item) => identityOf(item) === String(selectedId));
   const posts = current ? rows(current.posts).map((post) => atCurrentOrigin(post, data)) : rows(data.posts).filter((post) => String(post.groupId ?? '') === String(selectedId) && (!group?.networkId || String(originOf(post)) === String(group.networkId)));
+  const onCreate = async (name) => {
+    const result = await invoke(actions, 'createGroup', name);
+    setCreating(false);
+    if (result?.group?._id) navigate?.(`/groups/${encodeURIComponent(result.group._id)}`);
+    return result;
+  };
   return <Box>
     <Heading title={group?.name ?? 'Groups'} subtitle="Spaces within your family network" />
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>Groups may be out of date while your family server is unreachable.</Alert>}
@@ -325,10 +339,106 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
     {selectedId && !group && !loading && !loadError && <Alert severity="info">{data.offline ? 'This group is not saved on this device. Reconnect to check it.' : 'This group is not available in your network.'}</Alert>}
     {group && !loading && !loadError && <Stack spacing={2}>
       <Typography color="text.secondary">Posts in {group.name} stay within {data.network?.name ?? 'this family network'}. Each post shows its origin.</Typography>
+      <MembersCard group={group} data={data} actions={actions} onchanged={() => setRevision((at) => at + 1)} />
       <Feed posts={posts} data={data} actions={actions} navigate={navigate} empty={data.offline ? 'No saved posts from this group are available.' : 'No posts in this group yet.'} />
     </Stack>}
-    {!selectedId && (groups.length ? <Stack spacing={2}>{groups.map((item) => <Card key={identityOf(item)} variant="outlined"><CardContent><Typography variant="h6">{item.name}</Typography><Typography color="text.secondary">Within {data.network?.name ?? 'this family network'}</Typography><Button onClick={() => navigate?.(`/groups/${encodeURIComponent(identityOf(item))}`)}>View group</Button></CardContent></Card>)}</Stack> : <Alert severity="info">{data.offline || data.availability?.groups === false ? 'Groups cannot be loaded from your family server right now.' : 'No groups have been created on this family server.'}</Alert>)}
+    {!selectedId && <Stack spacing={2}>
+      <Stack direction="row" spacing={1} flexWrap="wrap"><Button variant="contained" onClick={() => setCreating(true)} data-testid="create-group">Create a group</Button></Stack>
+      {groups.length ? <Stack spacing={2}>{groups.map((item) => <Card key={identityOf(item)} variant="outlined"><CardContent><Typography variant="h6">{item.name}</Typography><Typography color="text.secondary">Within {data.network?.name ?? 'this family network'} · {(Array.isArray(item.members) ? item.members.length : 0)} member{(item.members?.length ?? 0) === 1 ? '' : 's'}</Typography><Button onClick={() => navigate?.(`/groups/${encodeURIComponent(identityOf(item))}`)}>View group</Button></CardContent></Card>)}</Stack> : <Alert severity="info">{data.offline || data.availability?.groups === false ? 'Groups cannot be loaded from your family server right now.' : 'No groups yet. Create one — every member of the network can.'}</Alert>}
+    </Stack>}
+    {creating && <CreateGroupDialog data={data} actions={actions} onClose={() => setCreating(false)} onCreate={onCreate} />}
   </Box>;
+}
+
+function MembersCard({ group, data, actions, onchanged }) {
+  const [adding, setAdding] = useState(false);
+  const manage = canManageGroup(group, data);
+  const roster = groupMemberRows(group);
+  return <Card variant="outlined"><CardContent>
+    <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
+      <Typography variant="h6">Members</Typography>
+      {manage && <Button onClick={() => setAdding(true)} data-testid="add-group-members">Add members</Button>}
+    </Stack>
+    <Typography color="text.secondary" sx={{ mb: 1 }}>
+      {group.createdBy === data.identity?.id ? 'You created this group; you add its members.' : 'Only the group\'s creator (or the network owner) adds members.'}
+    </Typography>
+    <List dense disablePadding>
+      {roster.map((member) => <ListItemButton key={member.did} disableGutters>
+        <ListItemText primary={member.name ?? (member.did === data.identity?.id ? 'You' : member.did)}
+          secondary={member.did === data.identity?.id && member.name ? 'You' : undefined} />
+      </ListItemButton>)}
+    </List>
+    {adding && <AddMembersDialog group={group} actions={actions} onClose={() => setAdding(false)}
+      onAdded={() => { setAdding(false); onchanged?.(); }} />}
+  </CardContent></Card>;
+}
+
+function CreateGroupDialog({ data, actions, onClose, onCreate }) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!name.trim()) { setError('A group needs a name.'); return; }
+    setSaving(true);
+    setError('');
+    try { await onCreate(name); } catch (cause) { setError(messageOf(cause)); setSaving(false); }
+  };
+  return <Dialog open onClose={onClose} aria-label="Create a group">
+    <DialogTitle>Create a group</DialogTitle>
+    <DialogContent>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>A space within {data.network?.name ?? 'your family network'}. You create it, you add its members — its posts stay inside the network.</Typography>
+      <TextField autoFocus fullWidth label="Group name" value={name} onChange={(event) => setName(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Enter') void save(); }} error={Boolean(error)} helperText={error} />
+    </DialogContent>
+    <DialogActions>
+      <Button onClick={onClose}>Cancel</Button>
+      <Button variant="contained" disabled={saving || !name.trim()} onClick={() => void save()}>Create group</Button>
+    </DialogActions>
+  </Dialog>;
+}
+
+function AddMembersDialog({ group, actions, onClose, onAdded }) {
+  const [candidates, setCandidates] = useState(null);
+  const [picked, setPicked] = useState(() => new Set());
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const groupId = group?._id ?? group?.id;
+  useEffect(() => {
+    let current = true;
+    Promise.resolve().then(() => invoke(actions, 'groupMemberCandidates', ''))
+      .then((result) => { if (current) setCandidates(addableCandidates(result?.candidates, group)); })
+      .catch((cause) => { if (current) setError(messageOf(cause)); });
+    return () => { current = false; };
+  }, [groupId]); // eslint-disable-line react-hooks/exhaustive-deps -- the roster pick rides one group; actions/group by value at open
+  const toggle = (did) => setPicked((current) => {
+    const next = new Set(current);
+    if (next.has(did)) next.delete(did); else next.add(did);
+    return next;
+  });
+  const add = async () => {
+    setSaving(true);
+    setError('');
+    try { await invoke(actions, 'addGroupMembers', group._id || group.id, [...picked]); onAdded?.(); }
+    catch (cause) { setError(messageOf(cause)); setSaving(false); }
+  };
+  return <Dialog open onClose={onClose} aria-label="Add group members">
+    <DialogTitle>Add members to {group.name}</DialogTitle>
+    <DialogContent>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Members of this network only — a group's membership never outgrows the network's.</Typography>
+      {!candidates && !error && <CircularProgress size={24} />}
+      {error && <Alert severity="error">{error}</Alert>}
+      {candidates && (candidates.length
+        ? <List dense>{candidates.map((candidate) => <ListItemButton key={candidate.did} onClick={() => toggle(candidate.did)} selected={picked.has(candidate.did)}>
+            <ListItemText primary={candidate.name ?? candidate.did} secondary={candidate.role === 'owner' ? 'Owner' : undefined} />
+            {picked.has(candidate.did) ? <Chip size="small" label="Adding" /> : null}
+          </ListItemButton>)}</List>
+        : <Alert severity="info">Every member of this network is already in {group.name}.</Alert>)}
+    </DialogContent>
+    <DialogActions>
+      <Button onClick={onClose}>Cancel</Button>
+      <Button variant="contained" disabled={saving || picked.size === 0} onClick={() => void add()}>Add</Button>
+    </DialogActions>
+  </Dialog>;
 }
 
 // Mention rendering (PORCH-037): a reply body carries @Name tokens that the
@@ -545,7 +655,7 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
   const operation = useOperation();
   const reset = () => { setBody(''); setCaption(''); setFiles([]); setGroupId(''); setType('text'); };
   const mediaType = type !== 'text';
-  const groups = (Array.isArray(data.groups) ? data.groups : []).filter((group) => groupAtOrigin(group, data));
+  const groups = groupRows(data.groups, data.network?.id);
   return <Dialog open={Boolean(open)} onClose={operation.busy ? undefined : onClose} fullWidth maxWidth="sm" aria-labelledby="compose-title">
     <DialogTitle id="compose-title">Create a post</DialogTitle>
     <Box component="form" onSubmit={(event) => {
