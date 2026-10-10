@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { directoryRows, inviteDialogCopy, inviteRows, copyLink } from "../src/member-directory.js";
+import { directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, copyLink } from "../src/member-directory.js";
 
 // PORCH-029: the member directory's view mapping is pure and deterministic —
 // owner first, then everyone by admission, and every row carries the three
@@ -57,4 +57,43 @@ test("copyLink fails soft where no clipboard exists (deterministic in node)", as
   // reports the missed copy instead of throwing at the screen.
   const result = await copyLink("https://hub.example/join/code_1");
   assert.equal(typeof result, "boolean");
+});
+
+// Owner gating (PORCH-029, reused for the owner-console navigation entry in
+// the PORCH-040 user-testing follow-up): the console members response is
+// owner-only at the hub, so the viewer seeing themselves listed there as
+// owner IS the owner. Both owner buttons — Members and Owner console — ride
+// this one test.
+test("the viewer listed as owner in the console roster is the owner", () => {
+  const data = {
+    identity: { id: "did:porch:owner" },
+    members: [
+      { did: "did:porch:june", role: "member" },
+      { did: "did:porch:owner", role: "owner" },
+    ],
+  };
+  assert.equal(viewerIsOwner(data), true);
+});
+
+test("a plain member, or anyone without the owner row, is not the owner", () => {
+  const member = {
+    identity: { id: "did:porch:june" },
+    members: [
+      { did: "did:porch:june", role: "member" },
+      { did: "did:porch:owner", role: "owner" },
+    ],
+  };
+  assert.equal(viewerIsOwner(member), false);
+  // Wrong role on the viewer's own row: never the owner.
+  assert.equal(viewerIsOwner({ identity: { id: "did:porch:x" }, members: [{ did: "did:porch:x", role: "member" }] }), false);
+  // A viewer absent from the roster: never the owner.
+  assert.equal(viewerIsOwner({ identity: { id: "did:porch:x" }, members: [{ did: "did:porch:y", role: "owner" }] }), false);
+});
+
+test("a non-owner's failed console read degrades to no owner surfaces", () => {
+  // The hub 403s the console members fetch for non-owners; the SPA's
+  // fallback is an empty members list, so the gate must read false cleanly.
+  assert.equal(viewerIsOwner({ identity: { id: "did:porch:june" }, members: [] }), false);
+  assert.equal(viewerIsOwner({ identity: { id: "did:porch:june" } }), false);
+  assert.equal(viewerIsOwner(null), false);
 });

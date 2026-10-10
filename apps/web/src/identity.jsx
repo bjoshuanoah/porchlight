@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
-import { copyLink, directoryRows, inviteDialogCopy, inviteRows } from './member-directory.js';
+import { copyLink, directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner } from './member-directory.js';
 import { updateCardModel } from './update.js';
 import { Lockup, LampMark } from './brand.jsx';
 import { cssVars } from './theme.js';
@@ -575,8 +575,11 @@ export function Profile({ data, actions, navigate, mode }) {
   // the only identity list the SPA can consult is the console members
   // response (owner-only at the hub) — the viewer seeing themselves as the
   // owner there is the owner. Non-owners keep riding the origin-membership
-  // surfaces already specced (mention resolution, group members).
-  const canOpenMembers = (data?.members || []).some(entry => entry?.did === data?.identity?.id && entry?.role === 'owner');
+  // surfaces already specced (mention resolution, group members). The owner
+  // console navigation entry (PORCH-040 user-testing follow-up) rides the
+  // same gate: owners reach the console from Profile, non-owners see neither
+  // button.
+  const isOwner = viewerIsOwner(data);
   async function makeCode() {
     const result = await operation.run('createPairingCode');
     if (!result) return;
@@ -607,7 +610,7 @@ export function Profile({ data, actions, navigate, mode }) {
     <Heading title="Profile" subtitle={`Your place on ${networkName(data)} and the devices you use.`} />
     <Card sx={section}><CardContent><Typography variant="h5">{named(identity)}</Typography>
       <Typography color="text.secondary">{data?.server?.url || networkName(data)}</Typography>
-      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => navigate?.('/who-is-here')}>Who is here?</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{canOpenMembers && <Button onClick={() => navigate?.('/members')}>Members</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
+      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => navigate?.('/who-is-here')}>Who is here?</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{isOwner && <Button onClick={() => navigate?.('/members')}>Members</Button>}{isOwner && <Button onClick={() => navigate?.('/owner')}>Owner console</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signing out ends this device's open turn. The device stays connected and opens straight into your timeline on your next visit.</Typography>
       <Collapse in={membershipOpen}><Divider sx={{ my: 2 }} /><Typography variant="h6">Your memberships</Typography>
         {memberships.length ? <List dense>{memberships.map((entry, index) => <ListItem key={idOf(entry) || index}><ListItemText primary={named(entry)} secondary={entry.role || entry.server} /></ListItem>)}</List> : <Typography color="text.secondary">No additional memberships are available here.</Typography>}
