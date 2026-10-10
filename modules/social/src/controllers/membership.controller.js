@@ -89,10 +89,12 @@ export class MembershipController {
   };
 
   /**
-   * POST /session/restore {identityAccessToken} — re-establish membership
-   * sessions for an already-admitted member on a re-bound device. Rides
-   * live membership rows plus the one founder-root exception (PORCH-018:
-   * the network owner's binding may be created here, hub account as proof).
+   * POST /session/restore {identityAccessToken, deviceId} — re-establish
+   * membership sessions for an already-admitted member on a re-bound device.
+   * Rides live membership rows plus the one founder-root exception
+   * (PORCH-018: the network owner's binding may be created here, hub account
+   * as proof). PORCH-048: the re-credential also re-enrolls the device key
+   * for write verification from the identity plane's active registration.
    */
   restore = async (req, res) => {
     try {

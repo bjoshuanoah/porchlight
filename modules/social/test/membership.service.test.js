@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { createMemoryStore } from "@porchlight/shared";
 import { InviteService } from "../src/services/invite.service.js";
-import { MembershipService } from "../src/services/membership.service.js";
+import { MembershipService, canonicalJson } from "../src/services/membership.service.js";
 
 function fixture(options = {}) {
   const db = createMemoryStore();
@@ -550,4 +550,102 @@ test("ac-1: an assembly without the name resolver keeps the directory working", 
   assert.equal(views[0].name, null);
   assert.equal(views[0].role, "owner");
   assert.equal(views[0].state, "active");
+});
+
+/* ---- member re-bind enrollment (PORCH-048) -------------------------------- */
+
+/**
+ * Fixture with the full re-bind shape: Susan admitted via her laptop through
+ * the real invite path (the admitting device's enrollment is the baseline),
+ * plus an identity-plane device_registrations stand-in with the active-only
+ * resolution AuthService.activeDeviceRegistration implements — a revoked row
+ * resolves to nothing.
+ */
+async function rebindFixture(registrationStatus = "active") {
+  const { db, invites, membership } = fixture();
+  const invite = await invites.issue({ networkId: "net_1", role: "member" });
+  const laptop = okp();
+  await membership.admit({
+    code: invite.token,
+    identityAccessToken: "did:porchlight:susan",
+    deviceId: "dev_laptop",
+    devicePublicKeyJwk: laptop.publicKeyJwk,
+    signature: laptop.sign(`porchlight-join:${invite.token}`).toString("base64url"),
+  });
+
+  // Identity plane: the owner-routed device link (or pairing code) bound the
+  // fresh browser device. Private identity detail (createdBy, label) is
+  // irrelevant here — only did + deviceId + status + public key resolve.
+  const bindings = db.collection("device_registrations");
+  await bindings.insertOne({ _id: "reg_laptop", did: "did:porchlight:susan", deviceId: "dev_laptop", publicKeyJwk: laptop.publicKeyJwk, status: "active", revokedAt: null });
+  const phone = okp();
+  await bindings.insertOne({
+    _id: "reg_phone",
+    did: "did:porchlight:susan",
+    deviceId: "dev_phone",
+    publicKeyJwk: phone.publicKeyJwk,
+    status: registrationStatus,
+    revokedAt: registrationStatus === "active" ? null : "2026-10-10T00:00:00.000Z",
+  });
+  membership.registeredDeviceKey = async (did, deviceId) =>
+    bindings.findOne({ did, deviceId, status: "active" });
+  return { db, membership, phone };
+}
+
+test("PORCH-048: a member device re-bound by device link or pairing re-credentials its write enrollment at restore, and the write verifies", async () => {
+  const { db, membership, phone } = await rebindFixture();
+
+  // The re-bound device's re-credential: identity proof in, session + the
+  // per-network device key enrollment out.
+  const restored = await membership.restoreSession({ identityAccessToken: "did:porchlight:susan", deviceId: "dev_phone" });
+  assert.equal(restored.did, "did:porchlight:susan");
+  assert.equal(restored.sessions.length, 1);
+  assert.equal(restored.sessions[0].networkId, "net_1");
+
+  const enrolled = await db.collection("device_keys").findOne({ networkId: "net_1", did: "did:porchlight:susan", deviceId: "dev_phone" });
+  assert.deepEqual(enrolled.publicKeyJwk, phone.publicKeyJwk, "the active registration's key is the enrollment copy");
+  // The admit-time enrollment for the other device is untouched.
+  assert.equal((await db.collection("device_keys").find({ did: "did:porchlight:susan" })).length, 2);
+
+  // The written payload verifies under the same verifyMemberWrite contract
+  // as every origin write (post, comment, reaction, vote), signed by the
+  // re-bound device's own key.
+  const payload = { type: "text", body: "hello from the re-bound device", networkId: "net_1" };
+  const write = await membership.verifyMemberWrite({
+    networkId: "net_1",
+    did: "did:porchlight:susan",
+    deviceId: "dev_phone",
+    payload,
+    signature: phone.sign(canonicalJson(payload)).toString("base64url"),
+  });
+  assert.equal(write.verified, true);
+  assert.equal(write.membership.did, "did:porchlight:susan");
+
+  // Origin containment: the restored session is scoped to exactly the
+  // membership's own network.
+  assert.equal(restored.sessions[0].networkId, "net_1");
+});
+
+test("PORCH-048: a revoked device registration loses enrollment — restore enrolls nothing and the write is refused", async () => {
+  const { db, membership, phone } = await rebindFixture("revoked");
+
+  // The membership session still restores (reads keep working); the dead
+  // registration produces no enrollment, so the write plane stays closed.
+  const restored = await membership.restoreSession({ identityAccessToken: "did:porchlight:susan", deviceId: "dev_phone" });
+  assert.equal(restored.sessions.length, 1);
+  assert.equal((await db.collection("device_keys").find({ deviceId: "dev_phone" })).length, 0, "no resurrection of revoked keys");
+
+  // No key, no write — the same typed error the admitting-device path uses.
+  const payload = { type: "text", body: "should not verify", networkId: "net_1" };
+  await assert.rejects(
+    () =>
+      membership.verifyMemberWrite({
+        networkId: "net_1",
+        did: "did:porchlight:susan",
+        deviceId: "dev_phone",
+        payload,
+        signature: phone.sign(canonicalJson(payload)).toString("base64url"),
+      }),
+    (error) => error.code === "E_DEVICE_NOT_ENROLLED",
+  );
 });

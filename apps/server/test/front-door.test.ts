@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sign, generateKeyPairSync } from "node:crypto";
 import { DEFAULT_CONFIG, createMemoryStore, normalizeConfig } from "@porchlight/shared";
+import { canonicalJson } from "@porchlight/social";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
 import { BootstrapService } from "../src/services/bootstrap.service.js";
 import { createServer } from "../src/router.js";
@@ -258,6 +259,21 @@ test("front door: member identity birth, admission, device link, session restore
     headers: { authorization: `Bearer ${(restoredSessions[0] as Json).accessToken as string}` },
   });
   assert.equal(restoredTimeline.status, 200);
+
+  // PORCH-048: the re-credential also restores the per-network device key
+  // enrollment, so a signed WRITE from the re-bound device verifies — the
+  // read-only failure mode (E_DEVICE_NOT_ENROLLED on every write) is gone.
+  const reboundPayload = { type: "text", body: "hello from the re-bound device", networkId: (sophieAdmit.body.membership as Json).networkId };
+  const reboundWrite = await call(port, "/api/social/posts", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${(restoredSessions[0] as Json).accessToken as string}` },
+    body: JSON.stringify({
+      payload: reboundPayload,
+      signature: sign(null, Buffer.from(canonicalJson(reboundPayload), "utf8"), newDevice.privateKey).toString("base64url"),
+    }),
+  });
+  assert.equal(reboundWrite.status, 200, `re-bound device write failed: ${JSON.stringify(reboundWrite.body)}`);
+  assert.equal(((reboundWrite.body as Json).post as Json).authorId, sophieDid);
 
   // Owner console grant states: used for the consumed grant.
   const links = await call(port, "/api/social/console/device-links", { headers: ownerAuth });

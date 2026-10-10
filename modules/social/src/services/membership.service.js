@@ -367,24 +367,36 @@ export class MembershipService {
    * ONLY live membership rows — it never widens the perimeter, with one
    * founder-root exception (PORCH-018): when the presenting DID is the
    * network row's recorded ownerDid, a missing owner binding is created
-   * here — the hub account is the proof, never an invite — and the
-   * presenting device's registered key enrolls for write verification
-   * (possession proven at identity session open, re-proven at every write).
+   * here — the hub account is the proof, never an invite.
    * This is also the repair path for hubs bootstrapped before the binding
    * existed: the owner's next silent re-credential binds them.
+   *
+   * PORCH-048: EVERY re-bound device re-credentials its write-verification
+   * enrollment — admit and the founder path are no longer the only
+   * enrollment points. The presenting device's ACTIVE identity-plane
+   * registration for (did, deviceId) is the copy source for each live
+   * membership's per-network device_keys row (possession proven when the
+   * identity session opened, re-proven at every write via the same
+   * verifyMemberWrite contract). Origin containment: each enrollment rides
+   * exactly the live membership row's own networkId — no enrollment is
+   * created beyond memberships the DID holds here. A revoked registration
+   * resolves nothing (the resolver returns active rows only), so a
+   * re-credential can never resurrect dead keys.
    */
   async restoreSession({ identityAccessToken, deviceId = null } = {}) {
     const identity = await this.verifyMemberIdToken(identityAccessToken);
     if (!identity?.did) {
       throw typedError("E_MUST_SIGN_IN", "Open your identity on this device first, then continue.");
     }
+    // One (did, deviceId) registration lookup for the whole re-credential:
+    // the device binding is an identity-plane fact, never a per-network one.
+    const registration = deviceId && this.registeredDeviceKey
+      ? await this.registeredDeviceKey(identity.did, deviceId)
+      : null;
     if (this.networks) {
       const network = await this.networks.findOne({});
-      if (network && network.ownerDid === identity.did && deviceId) {
-        const registration = await this.registeredDeviceKey?.(identity.did, deviceId);
-        if (registration?.publicKeyJwk) {
-          await this.enrollDevice({ networkId: network._id, did: identity.did, deviceId, publicKeyJwk: registration.publicKeyJwk });
-        }
+      if (network && network.ownerDid === identity.did && registration?.publicKeyJwk) {
+        await this.enrollDevice({ networkId: network._id, did: identity.did, deviceId, publicKeyJwk: registration.publicKeyJwk });
       }
       await this.bindFounder({ network, did: identity.did });
     }
@@ -401,6 +413,12 @@ export class MembershipService {
     const byDid = new Map((resolved ?? []).map((row) => [row.did, row.displayName ?? null]));
     const sessions = [];
     for (const membership of rows) {
+      // PORCH-048: the per-network enrollment rides the live membership —
+      // this is the restore for every member device (device-link or pairing
+      // re-bind), not only the founder's.
+      if (registration?.publicKeyJwk) {
+        await this.enrollDevice({ networkId: membership.networkId, did: identity.did, deviceId, publicKeyJwk: registration.publicKeyJwk });
+      }
       const tokens = await this.issueSession({ membership, deviceId });
       // PORCH-034 follow-up: every re-credential returns the member's
       // family-facing name, so a re-bound device stores the person — never
