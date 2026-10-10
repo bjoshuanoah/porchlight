@@ -64,6 +64,13 @@ export function createSocialRouter(controllers) {
   router.get("/ranked", feed.ranked);
   router.get("/search", feed.search);
 
+  // Link previews (PORCH-052): compose-time hub-side resolution of one
+  // pasted URL — bounded fetch, degrade-to-plain-link on any failure, and
+  // the two render classes (provider embed | og:image card). Member
+  // devices never fetch third-party metadata or preview bytes; the og:image
+  // original + renditions serve from the media pipeline's hub origin.
+  router.post("/previews/resolve", content.resolvePreview);
+
   // Media pipeline (PORCH-008): resumable chunked ingest of immutable
   // originals, hub-generated renditions, rendition-default serving with
   // explicit original retrieval, and the signed export stream. Every

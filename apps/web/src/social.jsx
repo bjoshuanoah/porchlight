@@ -19,6 +19,8 @@ import { groupRows, groupMemberRows, canManageGroup, addableCandidates } from '.
 import { dateOf, relativeTime } from './time.js';
 import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, visibleFeedPosts } from './feed-filter.js';
 import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, pendingReply, conversationOf } from './slice.js';
+import { LinkPreviewBlock, LinkedBody } from './link-preview.jsx';
+import { firstUrlIn, previewOrigin } from './link-preview.js';
 import { useMediaQuery } from '@mui/material';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
@@ -656,9 +658,14 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
           spacing; the body line stays 16px/25px on the timeline with the
           readable 68ch length. */}
       {(post.body || post.caption) && <Box sx={{ mt: detail ? 2 : 1 }}>
-        {post.body && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch' }}>{post.body}</Typography>}
-        {post.caption && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch', ...(post.body ? { mt: 0.5 } : {}) }}>{post.caption}</Typography>}
+        {post.body && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch' }}><LinkedBody text={post.body} /></Typography>}
+        {post.caption && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch', ...(post.body ? { mt: 0.5 } : {}) }}><LinkedBody text={post.caption} /></Typography>}
       </Box>}
+      {/* Link preview (PORCH-052): the compact embed facade or og:image card
+          rides the text rail — inside the 16px padding band, never
+          banner-scale (media dominance untouched). The card's image loads
+          from this hub only; the embed facade waits for a member tap. */}
+      {post.preview && <LinkPreviewBlock preview={post.preview} origin={previewOrigin(post, data)} />}
       <Media post={post} actions={actions} detail={detail} />
       <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2, ...(detail ? {} : { justifyContent: 'space-between' }) }}>
         <Button disabled={operation.busy || data.offline} sx={actionSx} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'up'))}>Lift</Button>
@@ -681,7 +688,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
       {/* Conversation preview (PORCH-046 ac-5): the latest five replies,
           readable and joinable without opening the post; the expander opens
           the conversation in place (ac-6), quantity only. */}
-      {!detail && <ReplySliceBlock slice={displaySlice} data={data} actions={actions} onOpenConversation={() => setConversationOpen(true)} offline={data.offline} />}
+      {!detail && <ReplySliceBlock slice={displaySlice} data={data} actions={actions} onOpenConversation={() => setConversationOpen(true)} offline={data.offline} origin={previewOrigin(post, data)} />}
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
       {/* The in-place conversation surface: no navigation, so the feed's
           reading place survives open and dismissal untouched (ac-3, ac-6).
@@ -702,7 +709,7 @@ function Heading({ title, subtitle }) {
 // name, relative time, text). The expander is the quiet amber text action
 // "(and N more)" and carries the conversation-length quantity only — never
 // an engagement count (quantity-versus-engagement boundary).
-function ReplySliceBlock({ slice, data, actions, onOpenConversation, offline }) {
+function ReplySliceBlock({ slice, data, actions, onOpenConversation, offline, origin = null }) {
   const more = expanderCount(slice.total);
   if (!slice.replies.length && more === 0) return null;
   return <Stack spacing={1} sx={{ mt: photoFirst.spacing.reactionsSlice / 8 }}>
@@ -714,6 +721,10 @@ function ReplySliceBlock({ slice, data, actions, onOpenConversation, offline }) 
             {reply.authorName ?? memberName(reply.authorDid, data)} · {relativeTime(reply.createdAt)}
           </Typography>
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data)}</Typography>
+          {/* Link preview (PORCH-052): a reply carrying a provider URL renders
+              its embed (tap to play) inline in the slice; card links open in
+              a new tab. The image always loads from the reply's own hub. */}
+          {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={origin ?? previewOrigin(reply, data)} compact />}
         </Box>
       </Stack>
     ))}
@@ -1162,6 +1173,7 @@ function Reply({ reply, depth, children, onReply, offline, data, post, actions, 
   return <Box sx={{ ml: { xs: Math.min(depth, 3) * 1.5, sm: Math.min(depth, 4) * 3 }, pl: 2, py: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}>
     <Typography variant="subtitle2">{reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)} <Typography component="span" variant="caption" color="text.secondary">{dateOf(reply.createdAt)}</Typography></Typography>
     <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
+    {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={previewOrigin(post, data)} />}
     {depth < 8 && <Button size="small" onClick={() => setEditing(!editing)}>Reply</Button>}
     {editing && <ReplyForm label="Your reply" offline={offline} post={post} actions={actions} onSubmit={(body, mentions) => onReply(body, identityOf(reply), mentions)} />}
     {children}
@@ -1246,10 +1258,41 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
   const [caption, setCaption] = useState('');
   const [groupId, setGroupId] = useState('');
   const [files, setFiles] = useState([]);
+  // Link preview (PORCH-052): compose-time chip. The hub resolves the pasted
+  // URL once (bounded fetch, the hub's own call — no member-device third-
+  // party request); the chip is removable, and a resolution that fails or
+  // degrades renders nothing and never blocks submit (the URL stays in the
+  // body as a plain link).
+  const [preview, setPreview] = useState(null);
+  const [previewAttached, setPreviewAttached] = useState(true);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const lastResolvedRef = useRef(null);
   const operation = useOperation();
-  const reset = () => { setBody(''); setCaption(''); setFiles([]); setGroupId(''); setType('text'); };
+  const reset = () => { setBody(''); setCaption(''); setFiles([]); setGroupId(''); setType('text'); setPreview(null); setPreviewAttached(true); setPreviewLoading(false); lastResolvedRef.current = null; };
   const mediaType = type !== 'text';
   const groups = groupRows(data.groups, data.network?.id);
+  // Debounce-tolerant detection: one resolve per distinct URL once typing
+  // settles — mid-typing URL fragments don't fire hub fetches (bounded
+  // fetch hygiene); the chip re-arms on URL change and no chip at all when
+  // the URL leaves the body.
+  useEffect(() => {
+    if (mediaType) { setPreview(null); lastResolvedRef.current = null; return undefined; }
+    const url = firstUrlIn(body);
+    if (!url) { setPreview(null); setPreviewAttached(true); lastResolvedRef.current = null; setPreviewLoading(false); return undefined; }
+    if (lastResolvedRef.current === url) return undefined;
+    let cancelled = false;
+    setPreviewAttached(true);
+    setPreviewLoading(true);
+    const timer = setTimeout(() => {
+      lastResolvedRef.current = url;
+      Promise.resolve()
+        .then(() => invoke(actions, 'resolvePreview', url))
+        .then((result) => { if (!cancelled) setPreview(result?.preview ?? null); })
+        .catch(() => { if (!cancelled) setPreview(null); })
+        .finally(() => { if (!cancelled) setPreviewLoading(false); });
+    }, 700);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [body, mediaType, actions]);
   return <Dialog open={Boolean(open)} onClose={operation.busy ? undefined : onClose} fullWidth maxWidth="sm" aria-labelledby="compose-title">
     <DialogTitle id="compose-title">Create a post</DialogTitle>
     <Box component="form" onSubmit={(event) => {
@@ -1261,7 +1304,7 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
           mediaRefs = mediaIds(await invoke(actions, 'upload', files));
           if (mediaRefs.length !== files.length || new Set(mediaRefs).size !== files.length) throw new Error('Could not attach every original. Check your uploads before trying again.');
         }
-        const result = await invoke(actions, 'submitPost', { type, body: mediaType ? null : body.trim(), caption: mediaType ? caption.trim() || null : null, mediaRefs, groupId: groupId || null });
+        const result = await invoke(actions, 'submitPost', { type, body: mediaType ? null : body.trim(), caption: mediaType ? caption.trim() || null : null, mediaRefs, groupId: groupId || null, previewId: !mediaType && preview && previewAttached && preview.id ? preview.id : null });
         if (!result?.post || !identityOf(result.post)) throw new Error('The family server did not confirm this post. Refresh your timeline before trying again.');
         return result;
       }, () => { reset(); onClose?.(); });
@@ -1272,7 +1315,15 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
         {groups.length > 0 && <FormControl fullWidth><InputLabel id="post-group-label">Group (optional)</InputLabel><Select labelId="post-group-label" label="Group (optional)" value={groupId} onChange={(event) => setGroupId(event.target.value)}><MenuItem value="">Entire network</MenuItem>{groups.map((group) => <MenuItem key={identityOf(group)} value={identityOf(group)}>{group.name}</MenuItem>)}</Select></FormControl>}
         {mediaType ? <><Button variant="outlined" component="label">Choose {type}<input hidden type="file" accept={type === 'photo' ? 'image/*' : `${type}/*`} multiple={type === 'photo'} onChange={(event) => { setFiles(Array.from(event.target.files || [])); event.target.value = ''; }} /></Button><Typography variant="body2" color="text.secondary">{files.length ? files.map((file) => file.name).join(', ') : 'Choose an original file to upload before publishing.'}</Typography>
         {type === 'photo' && <ComposerPreviewCarousel files={files} />}
-        <TextField label="Caption (optional)" multiline minRows={2} value={caption} onChange={(event) => setCaption(event.target.value)} /></> : <TextField autoFocus label="Your post" multiline minRows={4} value={body} onChange={(event) => setBody(event.target.value)} />}
+        <TextField label="Caption (optional)" multiline minRows={2} value={caption} onChange={(event) => setCaption(event.target.value)} /></> : <>
+        <TextField autoFocus label="Your post" multiline minRows={4} value={body} onChange={(event) => setBody(event.target.value)} />
+        {preview && previewAttached && <Chip
+          label={preview.kind === 'embed' ? `${(preview.provider ?? 'link')}: tap-to-play link attached` : `Link preview attached`}
+          onDelete={() => setPreviewAttached(false)}
+          sx={{ alignSelf: 'flex-start', maxWidth: '100%' }}
+        />}
+        {previewLoading && <Typography variant="caption" color="porchlight.muted">Resolving the link preview…</Typography>}
+      </>}
         {operation.error && <Alert severity="error">{operation.error}</Alert>}
       </Stack></DialogContent>
       <DialogActions><Button disabled={operation.busy} onClick={onClose}>Cancel</Button><Button variant="contained" type="submit" disabled={operation.busy || data.offline || (mediaType ? !files.length : !body.trim())}>{operation.busy ? <CircularProgress size={20} color="inherit" /> : 'Publish'}</Button></DialogActions>

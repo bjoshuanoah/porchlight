@@ -17,7 +17,8 @@ import { createCustody } from "./session-sync.js";
 import { reCredentialPlanes } from "./session-credentials.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
 import { resolveStoredNames } from "./name-heal.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview } from "./member-actions.js";
+import { firstUrlIn } from "./link-preview.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { arrivalPollMs } from "./live.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
@@ -718,7 +719,21 @@ function App() {
     react: async (post, emoji) => publishReaction(connectionForPost(post), post, emoji),
     unreact: async (post, emoji) => unpublishReaction(connectionForPost(post), post, emoji),
     submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
-    submitReply: async (post, body, parentId, mentions = []) => publishReply(connectionForPost(post), post, body, parentId, mentions),
+    submitReply: async (post, body, parentId, mentions = []) => {
+      // Link previews (PORCH-052): a reply body carrying a URL resolves at
+      // submit time, hub-side and device-signed; a failed or degraded
+      // resolution never blocks the reply (the URL rides the text plainly).
+      let previewId = null;
+      const url = firstUrlIn(body);
+      if (url) {
+        try {
+          const resolved = await resolvePreview(connectionForPost(post), url);
+          previewId = resolved?.preview?.id ?? null;
+        } catch { previewId = null; }
+      }
+      return publishReply(connectionForPost(post), post, body, parentId, mentions, previewId);
+    },
+    resolvePreview: (url) => resolvePreview(active, url),
     // Mention roster (PORCH-037): same-origin members by name, fetched at
     // the post's own origin so candidates never ride another connection.
     mentionCandidates: (post, q = "") => fetchMentionCandidates(connectionForPost(post), q),

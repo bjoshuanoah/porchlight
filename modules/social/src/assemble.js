@@ -12,6 +12,7 @@ import { GroupService } from "./services/group.service.js";
 import { RankingService, normalizeRankingConfig } from "./services/ranking.service.js";
 import { FeedService } from "./services/feed.service.js";
 import { MediaService } from "./services/media.service.js";
+import { LinkPreviewService } from "./services/link-preview.service.js";
 import { ExportService } from "./services/export.service.js";
 import { AlbumService } from "./services/album.service.js";
 import { createMemoryMediaStore, createFileMediaStore, nodeDiskProbe } from "./services/media.store.js";
@@ -102,6 +103,10 @@ export function assembleSocialModule(store, options = {}) {
   const groups = collection("groups");
   const mediaUploads = collection("media_uploads");
   const mediaAssets = collection("media_assets");
+  // Link previews (PORCH-052): per-attach reference rows + the URL-level
+  // metadata cache (quantity-only, no engagement data).
+  const linkPreviews = collection("link_previews");
+  const linkPreviewCache = collection("link_preview_cache");
 
   const auditService = new AuditService(auditEvents, ledger);
   const audit = auditService.recorderFor(null);
@@ -172,6 +177,29 @@ export function assembleSocialModule(store, options = {}) {
       renditionRungs: mediaConfig.renditions,
     },
   );
+  const linkPreviewService = new LinkPreviewService(
+    {
+      previews: linkPreviews,
+      cache: linkPreviewCache,
+      assets: mediaAssets,
+      artifacts,
+      membership: membershipService,
+      media: mediaService,
+      quota: quotaService,
+      audit,
+      realtime: realtimeService,
+    },
+    {
+      // Tests inject their own fetch + DNS resolver + bounds; production
+      // defaults to global fetch + node:dns (modules/social, no CI network).
+      fetch: options.previews?.fetch ?? null,
+      resolveHost: options.previews?.resolveHost ?? null,
+      timeoutMs: options.previews?.timeoutMs,
+      maxRedirects: options.previews?.maxRedirects,
+      maxMetadataBytes: options.previews?.maxMetadataBytes,
+      maxImageBytes: options.previews?.maxImageBytes,
+    },
+  );
   const postService = new PostService({
     posts,
     comments,
@@ -185,6 +213,7 @@ export function assembleSocialModule(store, options = {}) {
     media: mediaService,
     audit,
     realtime: realtimeService,
+    previews: linkPreviewService,
   });
   const interactionService = new InteractionService({
     posts,
@@ -195,6 +224,7 @@ export function assembleSocialModule(store, options = {}) {
     notifications: notificationService,
     audit,
     realtime: realtimeService,
+    previews: linkPreviewService,
   });
   const rankingService = new RankingService({ config: options.rankingConfig ? normalizeRankingConfig(options.rankingConfig) : undefined });
   const feedService = new FeedService({
@@ -206,6 +236,7 @@ export function assembleSocialModule(store, options = {}) {
     media: mediaService,
     comments,
     reactions,
+    previews: linkPreviewService,
   });
   const exportService = new ExportService({
     posts,
@@ -230,7 +261,7 @@ export function assembleSocialModule(store, options = {}) {
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger, options.mintOwnerDeviceLink ?? null),
-    content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService, realtime: realtimeService }),
+    content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService, realtime: realtimeService, previews: linkPreviewService }),
     feed: new FeedController({ feed: feedService }),
     membership: new MembershipController(membershipService, networkService, options.log ?? null),
     console: new ConsoleController({
@@ -270,6 +301,7 @@ export function assembleSocialModule(store, options = {}) {
     rankingService,
     feedService,
     mediaService,
+    linkPreviewService,
     exportService,
     albumService,
     controllers,

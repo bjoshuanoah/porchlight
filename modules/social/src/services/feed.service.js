@@ -50,11 +50,15 @@ export class FeedService {
    * @param {import("@porchlight/shared").CollectionLike} deps.reactions
    *   Reaction rows ride the member view as authored (PORCH-046): cards
    *   reflect arriving reactions in place from the same feed read.
+   * @param {import("./link-preview.service.js").LinkPreviewService} [deps.previews]
+   *   Link previews (PORCH-052): feed views and their reply slices hydrate
+   *   `preview` at read time — the card/embed metadata + og:image geometry
+   *   ride the same single feed read (no per-card requests).
    *   Post views hydrate `mediaMeta` — the rendition set of record + display
    *   dims — so every feed surface carries what the client's srcset/sizes
    *   and the video poster need (PORCH-044 ac-2).
    */
-  constructor({ posts, derivedData, groups, membership, ranking, media, comments, reactions }) {
+  constructor({ posts, derivedData, groups, membership, ranking, media, comments, reactions, previews }) {
     this.posts = posts;
     this.derivedData = derivedData;
     this.groups = groups;
@@ -63,6 +67,7 @@ export class FeedService {
     this.media = media;
     this.comments = comments;
     this.reactions = reactions;
+    this.previews = previews ?? null;
     this.models = socialModels;
   }
 
@@ -171,7 +176,8 @@ export class FeedService {
   async #decorate(views, networkId) {
     const attributed = await this.#withAttribution(await this.#withGroupChips(views, networkId), networkId);
     const withConversation = await this.#withConversationPreviews(attributed, networkId);
-    return this.media.withMediaMeta(withConversation, networkId);
+    const withMeta = await this.media.withMediaMeta(withConversation, networkId);
+    return this.previews ? await this.previews.withViews(withMeta, networkId) : withMeta;
   }
 
   /**

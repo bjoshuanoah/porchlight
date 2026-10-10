@@ -58,6 +58,10 @@ export const socialModels = {
        * `lastActivityAt ?? createdAt` — null until the first interaction.
        */
       lastActivityAt: { type: ["string", "null"] },
+      /** Link-preview reference (PORCH-052): one removable reference for the
+       *  URL this post carries, resolved hub-side at compose time. Null when
+       *  the post carries no URL or its URL degraded to a plain link. */
+      previewId: { type: ["string", "null"] },
     },
   },
   /**
@@ -79,6 +83,9 @@ export const socialModels = {
       mentions: { type: "array", items: { type: "string" } },
       deviceSignature: { type: "string" },
       createdAt: { type: "string" },
+      /** Link-preview reference (PORCH-052): hub-side resolved at compose
+       *  time for a reply carrying a URL; null otherwise. */
+      previewId: { type: ["string", "null"] },
     },
   },
   /**
@@ -377,6 +384,67 @@ export const socialModels = {
       deviceSignature: { type: ["string", "null"] },
       uploadId: { type: ["string", "null"] },
       createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Link-preview reference (PORCH-052): the removable per-attach record a
+   * post or reply carries for one pasted URL. Metadata resolution is
+   * hub-side at compose time; the record carries the shared cache's
+   * metadata by value so a cascade removes exactly this attach's data
+   * without ever touching the URL-level cache row.
+   */
+  linkPreview: {
+    type: "object",
+    required: ["_id", "networkId", "url", "kind", "fetchedAt"],
+    properties: {
+      _id: { type: "string" },
+      networkId: { type: "string" },
+      /** The resolved URL as pasted (post-process, one origin of record). */
+      url: { type: "string" },
+      /** embed | card — the two render classes of record; a resolution
+       *  failure never produces a record (the URL rides the text as a plain
+       *  link and submit is never blocked). */
+      kind: { type: "string", enum: ["embed", "card"] },
+      /** oEmbed-class provider identity; null for generic pages. */
+      provider: { type: ["string", "null"] },
+      /** The provider embed URL for kind=embed; null for kind=card. */
+      embedUrl: { type: ["string", "null"] },
+      title: { type: ["string", "null"] },
+      siteName: { type: ["string", "null"] },
+      /** The og:image's media-pipeline original (content-addressed, hub-
+       *  generated renditions, hub-origin serving); null for embeds and
+       *  imageless cards. */
+      ogImageMediaId: { type: ["string", "null"] },
+      /** The cache row this resolution reused/upserted. */
+      cacheId: { type: "string" },
+      fetchedAt: { type: "string" },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * URL-level metadata cache (PORCH-052, quantity-only): one hub-wide row
+   * per URL — repeat shares reuse the cached metadata with zero refetches,
+   * and og:image ingest dedupes per origin through `ogAssets` (the media
+   * pipeline's content-addressed bytes dedupe globally across origins).
+   * No engagement data ever rides this cache.
+   */
+  linkPreviewCache: {
+    type: "object",
+    required: ["_id", "url", "kind", "fetchedAt"],
+    properties: {
+      /** Deterministic: `lpc_<sha256(url)>` — one row per URL. */
+      _id: { type: "string" },
+      url: { type: "string" },
+      kind: { type: "string", enum: ["embed", "card"] },
+      provider: { type: ["string", "null"] },
+      embedUrl: { type: ["string", "null"] },
+      title: { type: ["string", "null"] },
+      siteName: { type: ["string", "null"] },
+      /** Origins whose og:image bytes were ingested (content-addressed
+       *  original ids per network, for origin-contained serving). */
+      ogAssets: { type: "object" },
+      fetchedAt: { type: "string" },
+      lastUsedAt: { type: "string" },
     },
   },
   /**
