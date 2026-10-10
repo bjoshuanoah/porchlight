@@ -46,8 +46,12 @@ test('PORCH-045 ac-1: multi-image posts render one swipeable carousel, grids sta
 test('PORCH-045 ac-2: one slide per gesture; near-vertical drags scroll the timeline; desktop arrows', () => {
   // scroll-snap-stop always halts momentum at the adjacent slide.
   assert.match(social, /scrollSnapStop: 'always'/);
-  // Near-vertical drags keep scrolling the timeline (horizontal pan only).
-  assert.match(social, /touchAction: 'pan-y'/);
+  // Horizontal touch drags swipe the track and near-vertical drags chain to
+  // the timeline: the touch-action must permit both pan axes. A vertical-only
+  // value (pan-y alone) starves the horizontal swipe entirely (user-testing
+  // failure "Carousel is not swipeable").
+  assert.match(social, /touchAction: 'pan-x pan-y'/);
+  assert.doesNotMatch(social, /touchAction: 'pan-y'/);
   // Arrow affordances cover desktop and hide on mobile.
   assert.match(social, /function CarouselArrows\(/);
   assert.match(social, /display: \{ xs: 'none', lg: 'inline-flex' \}/);
