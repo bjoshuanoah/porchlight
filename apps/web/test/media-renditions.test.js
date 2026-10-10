@@ -115,6 +115,16 @@ test("PORCH-044 ac-3: the rendition worker cache-firsts content-addressed URLs o
   assert.match(worker, /while \(response\.status === 401 && Date\.now\(\) < deadline\)/);
   assert.match(worker, /PARK_BUDGET_MS = 8000/);
   assert.match(worker, /authedRequest\(request, tokensByOrigin\[url\.origin\]\)/);
+  // PORCH-050: the authed re-issue never re-uses the intercepted no-cors
+  // request — the request-no-cors headers guard is not required to carry
+  // non-safelisted names and Authorization is not safelisted (Safari drops
+  // the value), which can re-issue rendition fetches UNAUTHENTICATED on
+  // that engine (the reported desktop album-401 root). The worker rebuilds
+  // the request same-origin in cors mode, where the header carries and no
+  // preflight applies.
+  assert.doesNotMatch(worker, /new Request\(request, \{ headers \}\)/);
+  assert.match(worker, /mode: "cors"/);
+  assert.match(worker, /headers\.set\("authorization"/);
   // The boot-time sync can publish the SAME token the park just failed on;
   // only a changed token set wakes parked requests — otherwise the park
   // retries the identical stale-token request and 401s again.

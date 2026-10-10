@@ -74,7 +74,14 @@ export async function loadFeeds(connections) {
     if (item.status === "fulfilled") {
       posts.push(...item.value.posts);
       ranked.push(...item.value.ranked);
-    } else failures.push({ origin: connections[i].url, message: item.reason.message });
+    } else failures.push({
+      origin: connections[i].url,
+      message: item.reason.message,
+      // PORCH-050: the failure class drives the honest state — a 401 that
+      // survived recovery is a dead credential, not an unreachable hub.
+      status: item.reason.status ?? null,
+      code: item.reason.code ?? null,
+    });
   }
   posts.sort((a, b) => new Date(b.lastActivityAt || b.createdAt) - new Date(a.lastActivityAt || a.createdAt));
   // Preserve each origin's published rank order. No invented cross-origin scoring.
