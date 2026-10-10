@@ -5,7 +5,7 @@ import {
   ListItemText, MenuItem, Paper, Popover, Select, Stack, TextField, Typography,
 } from '@mui/material';
 import { AddReactionOutlined, ChevronLeft, ChevronRight, CloseOutlined } from '@mui/icons-material';
-import { tokens } from './theme.js';
+import { cssVars } from './theme.js';
 import { carouselIndex, photoFirst } from './photo-first.js';
 import {
   renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
@@ -475,7 +475,7 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2 }) 
       aria-haspopup="dialog"
       disabled={operation.busy || Boolean(data?.offline)}
       onClick={(event) => setAnchor(event.currentTarget)}
-      sx={{ width: 40, height: 40, border: `1px dashed ${tokens.borderStrong}` }}
+      sx={{ width: 40, height: 40, border: `1px dashed ${cssVars.borderStrong}` }}
     >
       <AddReactionOutlined fontSize="small" />
     </IconButton>
@@ -553,8 +553,8 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   const cardSx = detail ? undefined : {
     width: '100%',
     borderRadius: { xs: 0, lg: '14px' },
-    border: { xs: 'none', lg: `1px solid ${tokens.border}` },
-    boxShadow: { xs: 'none', lg: '0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)' },
+    border: { xs: 'none', lg: `1px solid ${cssVars.border}` },
+    boxShadow: { xs: 'none', lg: cssVars.shadowCard },
   };
   // PORCH-043 timeline actions (mobile chrome ruling): 14px/600 amber text,
   // no backgrounds or borders, ≥44px touch targets, distributed evenly. The
@@ -800,9 +800,9 @@ function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
 // Empty timeline (tokens): encouraging, never marketing — the porch-at-dusk
 // glow is CSS, and the CTA opens compose without navigating away.
 function EmptyTimeline({ navigate }) {
-  return <Paper elevation={0} sx={{ textAlign: 'center', py: 8, px: 3, borderRadius: '14px', border: `1px solid ${tokens.border}`, background: 'transparent' }}>
+  return <Paper elevation={0} sx={{ textAlign: 'center', py: 8, px: 3, borderRadius: '14px', border: `1px solid ${cssVars.border}`, background: 'transparent' }}>
     {/* Brand surface (PORCH-032): the porch-at-dusk glow carries the new lamp mark. */}
-    <Box aria-hidden="true" sx={{ mx: 'auto', mb: 3, width: 88, height: 88, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `radial-gradient(circle at 50% 30%, ${tokens.amberGlow}, ${tokens.amberSoft})` }}>
+    <Box aria-hidden="true" sx={{ mx: 'auto', mb: 3, width: 88, height: 88, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `radial-gradient(circle at 50% 30%, ${cssVars.amberGlow}, ${cssVars.amberSoft})` }}>
       <LampMark size={48} />
     </Box>
     <Typography variant="h3" component="p" sx={{ mb: 1 }}>It's quiet here.</Typography>

@@ -2,23 +2,23 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, List, ListItem, ListItemAvatar, ListItemText,
-  Paper, Stack, TextField, Typography,
+  Paper, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { copyLink, directoryRows, inviteDialogCopy, inviteRows } from './member-directory.js';
 import { updateCardModel } from './update.js';
 import { Lockup, LampMark } from './brand.jsx';
-import { tokens } from './theme.js';
+import { cssVars } from './theme.js';
 
 const section = { mb: 3 };
 const rows = { display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' };
-// Front-door panels (design tokens): white surface on the warm page, warm
-// border, 14px radius, sparse card shadow — the approved join/setup look.
+// Front-door panels (design tokens): surface on the warm page, warm border,
+// 14px radius, sparse card shadow — the approved join/setup look, both modes.
 const frontPanel = { // sx object
-  border: `1px solid ${tokens.border}`,
+  border: `1px solid ${cssVars.border}`,
   borderRadius: '14px',
-  boxShadow: '0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)',
+  boxShadow: cssVars.shadowCard,
   p: { xs: 2, sm: 3 },
 };
 const pinPrefix = 'porchlight:local-pin:';
@@ -299,8 +299,8 @@ const setupSteps = ["network", "account"]; // exactly two prompts (PORCH-020)
 
 function StepCircle({ number, state }) {
   const sx = state === 'complete'
-    ? { bgcolor: "primary.main", color: "#fff" }
-    : state === 'current' ? { bgcolor: "secondary.main", color: "#fff" } : { bgcolor: "grey.300", color: "text.secondary" };
+    ? { bgcolor: "primary.main", color: cssVars.textInverse }
+    : state === 'current' ? { bgcolor: "secondary.main", color: cssVars.amberInk } : { bgcolor: cssVars.subtle, color: "text.secondary" };
   return <Box sx={{ width: 24, height: 24, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 13, flexShrink: 0, ...sx }}>
     {state === 'complete' ? "✓" : number}
   </Box>;
@@ -324,15 +324,15 @@ function SetupShell({ children }) {
   // warm border, sparse shadow; the optional photo slot rides the warm
   // gradient side panel (no external asset — the porch-lamp glow is CSS).
   return <Box sx={{ maxWidth: 960, mx: "auto" }}>
-    <Paper elevation={0} sx={{ borderRadius: "18px", border: `1px solid ${tokens.border}`, boxShadow: "0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)", overflow: "hidden" }}>
+    <Paper elevation={0} sx={{ borderRadius: "18px", border: `1px solid ${cssVars.border}`, boxShadow: cssVars.shadowCard, overflow: "hidden" }}>
       <Box sx={{ display: "grid", gridTemplateColumns: { md: "58% 42%" } }}>
         <Box sx={{ p: { xs: 2.5, sm: 4, md: 5 } }}>
           <Heading title="Set up your porch" subtitle="Two quick questions and you are home: the network's name, and who you are. Everything else waits until you are inside." />
           {children}
         </Box>
         {/* Brand surface (PORCH-032): the lamp mark glows over the porch-side gradient. */}
-        <Box aria-hidden="true" sx={{ display: { xs: "none", md: "flex" }, alignItems: "flex-end", justifyContent: "center", minHeight: 480, background: `radial-gradient(circle at 50% 115%, rgba(255,190,87,.35), transparent 60%), linear-gradient(180deg, ${tokens.warm}, ${tokens.amberSoft})` }}>
-          <LampMark size={120} sx={{ mb: 6, filter: "drop-shadow(0 0 28px rgba(255,190,87,.45))" }} />
+        <Box aria-hidden="true" sx={{ display: { xs: "none", md: "flex" }, alignItems: "flex-end", justifyContent: "center", minHeight: 480, background: `radial-gradient(circle at 50% 115%, ${cssVars.lampGlowSoft}, transparent 60%), linear-gradient(180deg, ${cssVars.warm}, ${cssVars.amberSoft})` }}>
+          <LampMark size={120} sx={{ mb: 6, filter: `drop-shadow(0 0 28px ${cssVars.lampGlow})` }} />
         </Box>
       </Box>
     </Paper>
@@ -557,7 +557,7 @@ function DeviceList({ devices, operation, actions, currentDeviceId }) {
   </>;
 }
 
-export function Profile({ data, actions, navigate }) {
+export function Profile({ data, actions, navigate, mode }) {
   const operation = useOperation(actions);
   const [pairing, setPairing] = useState(null);
   const [pairOpen, setPairOpen] = useState(false);
@@ -633,6 +633,17 @@ export function Profile({ data, actions, navigate }) {
         : undefined}><ListItemText primary={item.replace(/^https?:\/\//, '')} secondary="Hidden on this device" /></ListItem>)}</List>
         : <Typography color="text.secondary" sx={{ mt: 1 }}>Nothing is hidden on this device.</Typography>}
     </CardContent></Card>
+    {/* PORCH-042 appearance setting: Light / Dark / System, System the
+        default. The choice is device-level (client-local per origin, carried
+        by no server write) — the wording says so plainly. */}
+    {typeof actions?.chooseMode === 'function' && typeof mode === 'string' && <Card sx={section}><CardContent><Typography variant="h6">Appearance</Typography>
+      <Typography color="text.secondary">Light, dark, or follow this device. The choice stays on this device for everyone using it.</Typography>
+      <ToggleButtonGroup exclusive size="small" aria-label="Display mode" value={mode} onChange={(event, next) => next && actions.chooseMode(next)} sx={{ mt: 2 }}>
+        <ToggleButton value="light" aria-label="Light mode">Light</ToggleButton>
+        <ToggleButton value="dark" aria-label="Dark mode">Dark</ToggleButton>
+        <ToggleButton value="system" aria-label="Follow this device's theme">System</ToggleButton>
+      </ToggleButtonGroup>
+    </CardContent></Card>}
     <Feedback operation={operation} />
     <Button onClick={() => navigate?.('/who-is-here')}>Choose another person</Button>
     <Dialog open={pairOpen} onClose={() => setPairOpen(false)} fullWidth maxWidth="xs">

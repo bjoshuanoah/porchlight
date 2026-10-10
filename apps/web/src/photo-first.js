@@ -1,3 +1,5 @@
+import { lightTokens, darkTokens } from "./theme.js";
+
 // PORCH-043 build contract — "Photo-First Timeline: Build Contract"
 // (Porchlight UI initiative, TS §5, Brian Oct 14, 2026). The published
 // values live in one module so the timeline renders from a single source
@@ -18,8 +20,11 @@ export const photoFirst = {
   // spans the full interior post width with no internal horizontal padding.
   postPad: 20,
   // Post separation ships as the continuous-album 1px warm-neutral divider
-  // (preferred mode; no card gap mode on mobile).
-  dividerColor: "#ECE8E1",
+  // (preferred mode; no card gap mode on mobile). The value rides the token
+  // layer as a custom property — light per PORCH-043, dark per PORCH-042 —
+  // so the feed divider never carries a screen-level mode branch.
+  dividerColor: "var(--porch-timeline-divider)",
+  dividerValues: { light: lightTokens.timelineDivider, dark: darkTokens.timelineDivider },
   // Extreme images only: the single crop-adjacent allowance. Landscapes and
   // ordinary portraits never cap; the natural ratio governs.
   extremeCap: "85vh",

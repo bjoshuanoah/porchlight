@@ -7,7 +7,7 @@
 // with; no counts and no hub-defined emoji set render here.
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, IconButton, Popover, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
-import { tokens } from './theme.js';
+import { cssVars } from './theme.js';
 import { EMOJI_CATEGORIES, searchEmojis } from './emoji-data.js';
 
 export default function EmojiPicker({ anchorEl, open, onClose, own = new Set(), onToggle, busy }) {
@@ -36,8 +36,8 @@ export default function EmojiPicker({ anchorEl, open, onClose, own = new Set(), 
             maxWidth: '92vw',
             p: 2,
             borderRadius: '18px',
-            border: `1px solid ${tokens.border}`,
-            boxShadow: '0 20px 60px rgba(18,32,51,.18)',
+            border: `1px solid ${cssVars.border}`,
+            boxShadow: cssVars.shadowModal,
           },
         },
       }}
@@ -74,9 +74,9 @@ export default function EmojiPicker({ anchorEl, open, onClose, own = new Set(), 
                     height: 44,
                     fontSize: 22,
                     borderRadius: '10px',
-                    backgroundColor: ownEmoji ? tokens.amberSoft : 'transparent',
-                    border: `1px solid ${ownEmoji ? tokens.amber : 'transparent'}`,
-                    '&:hover': { backgroundColor: ownEmoji ? tokens.amberSoft : tokens.subtle },
+                    backgroundColor: ownEmoji ? cssVars.amberSoft : 'transparent',
+                    border: `1px solid ${ownEmoji ? cssVars.amber : 'transparent'}`,
+                    '&:hover': { backgroundColor: ownEmoji ? cssVars.amberSoft : cssVars.subtle },
                   }}
                 >
                   {row.emoji}

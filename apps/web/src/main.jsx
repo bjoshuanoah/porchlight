@@ -7,7 +7,8 @@ import GroupsOutlined from "@mui/icons-material/GroupsOutlined";
 import AddOutlined from "@mui/icons-material/AddOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutline";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
-import { theme } from "./theme.js";
+import { themeFor, tokenStyles, lightTokens, darkTokens } from "./theme.js";
+import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
 import { readJoinQuery } from "./frontdoor.js";
 import { fullName } from "./setup-state.js";
 import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } from "./api.js";
@@ -23,6 +24,11 @@ import { registerMediaTransport, syncMediaTransport } from "./media-transport.js
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
+
+// PORCH-042: both modes' custom properties land in one static <style> block
+// before the first render — component CSS resolves from the token layer with
+// no screen-level mode branch, and a mode switch needs no CSS rewrite.
+document.head.appendChild(Object.assign(document.createElement("style"), { textContent: tokenStyles() }));
 
 const origin = window.location.origin;
 const stored = window.localStorage;
@@ -49,6 +55,28 @@ function routeOf() {
 }
 function App() {
   const [route, setRoute] = useState(routeOf);
+  // PORCH-042: mode is a device-level display setting held in this origin's
+  // browser-local storage (never a server write); System follows the device's
+  // prefers-color-scheme live, so the resolved mode re-renders in place —
+  // the switch is one paint frame, never a reload.
+  const [modePref, setModePref] = useState(() => readStoredMode(stored));
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const displayMode = resolveMode(modePref, systemDark);
+  const muiTheme = themeFor(displayMode);
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (event) => setSystemDark(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  useEffect(() => {
+    // Sync the pre-paint state (html[data-theme], the pre-paint background,
+    // theme-color meta) with the running app after every resolved change.
+    const page = displayMode === "dark" ? darkTokens.page : lightTokens.page;
+    document.documentElement.dataset.theme = displayMode;
+    document.documentElement.style.backgroundColor = page;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", page);
+  }, [displayMode]);
   const [connections, setConnections] = useState(initialConnections);
   const [posts, setPosts] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? cachedTimeline(stored, `${origin}:${localIdentities[0]}`) : []);
   const [ranked, setRanked] = useState([]);
@@ -416,6 +444,12 @@ function App() {
     return admitted;
   };
   const unsupported = () => { throw new Error("Your family server does not offer this action yet. No change was made."); };
+  // PORCH-042: the Profile appearance control writes the device-level mode
+  // choice client-side only; removing the override stores nothing.
+  const chooseMode = (next) => {
+    writeStoredMode(stored, next);
+    setModePref(readStoredMode(stored));
+  };
   // Card- and detail-level writes resolve the post's own origin connection
   // through the shared resolver (PORCH-038 ac-4); card and detail ride one
   // routing rule, so a card write lands in the same conversation detail loads.
@@ -425,6 +459,7 @@ function App() {
   // prominence order is the server's own computation.
   const connectionForPost = (post) => connectionForPostOrigin(post, identityConnections, active);
   const actions = useMemo(() => ({
+    chooseMode,
     isHidden: (post) => hidden.has(`${post.origin || origin}:${post._id || post.id}`),
     hide: (post) => setHidden(hidePost(stored, `${origin}:${identity?.id}`, `${post.origin || origin}:${post._id || post.id}`)),
     hiddenItems: () => [...hidden],
@@ -699,7 +734,7 @@ function App() {
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline,
   };
-  const props = { data, actions, navigate };
+  const props = { data, actions, navigate, mode: displayMode };
   const sharedDevice = new Set(connections.map((item) => item.identity?.id).filter(Boolean)).size > 1;
   const setupRoute = route === "/setup";
   const deviceLinkRoute = route === "/device-link" || route.startsWith("/device-link/");
@@ -767,14 +802,14 @@ function App() {
   else if (!connections.length) page = <Join {...props} />;
   else page = <Timeline {...props} />;
 
-  return <ThemeProvider theme={theme}><CssBaseline />
-    {!frontDoor && <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(12px)", background: "rgba(255,255,255,.96)" }}>
+  return <ThemeProvider theme={muiTheme}><CssBaseline />
+    {!frontDoor && <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(12px)", background: `var(--porch-appbar-bg)` }}>
       <Toolbar sx={{ minHeight: { xs: 56, lg: 64 }, maxWidth: 1180, width: "100%", mx: "auto", px: { xs: 2, lg: 4 } }}>
         {/* Brand lockup (PORCH-032): the new lamp mark plus the navy wordmark. */}
         <Lockup onClick={() => navigate("/timeline")} size={30} sx={{ cursor: "pointer", flex: { xs: 1, lg: 0 }, minWidth: { lg: 180 } }} />
         <Stack direction="row" spacing={3} alignItems="center" sx={{ display: { xs: "none", lg: "flex" }, flex: 1, justifyContent: "center" }}>
           {primary.map((path, index) => index === 2
-            ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", boxShadow: "0 6px 18px rgba(216,138,36,.28)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
+            ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", color: "var(--porch-amber-ink)", boxShadow: "var(--porch-shadow-compose)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
             : <Button key={path} onClick={() => navigate(path)} sx={{ color: route.startsWith(path) ? "primary.main" : "text.secondary" }}>{labels[index]}</Button>)}
         </Stack>
         <IconButton aria-label="Search family moments" onClick={() => navigate("/search")}><SearchOutlined /></IconButton>
@@ -790,7 +825,7 @@ function App() {
       <BottomNavigation showLabels value={primary.findIndex((path) => route.startsWith(path))} onChange={(_event, value) => value === 2 ? setComposeOpen(true) : navigate(primary[value])} sx={{ minHeight: 68 }}>
         {primary.map((path, index) => <BottomNavigationAction key={path} label={labels[index]} icon={icons[index]}
           sx={{ ...(index === 2
-            ? { "& .MuiSvgIcon-root": { bgcolor: "secondary.main", color: "primary.main", width: 52, height: 52, p: 1.5, borderRadius: "50%", transform: "translateY(-8px)", boxShadow: "0 6px 18px rgba(216,138,36,.28)" } }
+            ? { "& .MuiSvgIcon-root": { bgcolor: "secondary.main", color: "var(--porch-amber-ink)", width: 52, height: 52, p: 1.5, borderRadius: "50%", transform: "translateY(-8px)", boxShadow: "var(--porch-shadow-compose)" } }
             : { minWidth: 44 }), ...(route.startsWith(path) ? { "&::before": { content: '""', position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", width: 24, height: 2, borderRadius: 1, bgcolor: "secondary.main" } } : {}) }} />)}
       </BottomNavigation>
     </Paper>}
