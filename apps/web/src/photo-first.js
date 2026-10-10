@@ -28,6 +28,14 @@ export const photoFirst = {
   // Extreme images only: the single crop-adjacent allowance. Landscapes and
   // ordinary portraits never cap; the natural ratio governs.
   extremeCap: "85vh",
+  // The reserved frame's warm placeholder wash (PORCH-049 ac-2): the
+  // aspect-ratio box shows this while media bytes are still arriving —
+  // photos and video alike (the poster is video's own placeholder once it
+  // lands). Token-layer contract like the divider: the custom property
+  // resolves per mode with no screen-level branch. The subtle surface is
+  // the wash of record — visibly distinct from both page and paper.
+  mediaWash: "var(--porch-subtle)",
+  mediaWashValues: { light: lightTokens.subtle, dark: darkTokens.subtle },
   // 12–14px media radius permitted at ≥900px; mobile media is square-cornered.
   desktopMediaRadius: 12,
   // Mobile vertical rhythm in px — 25–30% tighter than the Oct 9 spacing:

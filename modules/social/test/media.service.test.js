@@ -946,6 +946,75 @@ test("PORCH-044: every feed surface hydrates mediaMeta — the rendition set of 
   }
 });
 
+/* ---- PORCH-049 ac-1: the media-geometry stamp ---------------------------- */
+
+test("PORCH-049 ac-1: every payload states the media geometry — display dims, computed aspect, durationMs for video", async () => {
+  const fx = mediaFixture({ chunkSize: 1024 * 1024 });
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const june = await admitted(fx, { networkId: FAMILY, did: JUNE, device: fx.juneDev });
+  const bytes = await sampleImageBytes({ width: 1600, height: 1067, seed: 47 });
+  const video = await sampleVideoBytes({ seconds: 1 });
+  const photo = await upload(fx.media, susan, bytes);
+  const clip = await mediaVideoUpload(fx, susan, video);
+  const photoPayload = { type: "photo", mediaRefs: [photo.mediaId], caption: "the pier" };
+  const videoPayload = { type: "video", mediaRefs: [clip.mediaId], caption: "the ferry" };
+  const photoPost = (await fx.mod.postService.create({ accessToken: susan.token, payload: photoPayload, signature: susan.dev.signPayload(photoPayload) })).post;
+  const videoPost = (await fx.mod.postService.create({ accessToken: susan.token, payload: videoPayload, signature: susan.dev.signPayload(videoPayload) })).post;
+
+  // Groups ride the same hydrate path (ac-1 names groups among the surfaces).
+  const group = await fx.mod.groupService.create({ networkId: FAMILY, name: "Picnic crew", members: [susan.did, june.did], createdBy: susan.did });
+  const groupPayload = { ...photoPayload, groupId: group._id, caption: "the group pier" };
+  await fx.mod.postService.create({ accessToken: susan.token, payload: groupPayload, signature: susan.dev.signPayload(groupPayload) });
+  await fx.mod.albumService.addItem({ accessToken: susan.token, name: "Lake Album", postId: photoPost._id, signature: susan.dev.signPayload({ kind: "album.add", networkId: FAMILY, postId: photoPost._id, album: "Lake Album" }) });
+
+  const expectedImageAspect = 1600 / 1067;
+  for (const surface of [
+    fx.mod.feedService.timeline({ accessToken: june.token }),
+    fx.mod.feedService.groupTimeline({ accessToken: june.token, groupId: group._id }),
+    fx.mod.feedService.ranked({ accessToken: june.token }),
+    fx.mod.postService.get({ accessToken: june.token, postId: videoPost._id }),
+  ]) {
+    const result = await surface;
+    const views = result.posts ?? [result.post];
+    for (const view of views) {
+      for (const id of view.mediaRefs ?? []) {
+        const meta = view.mediaMeta?.[id];
+        assert.ok(meta, `every surface carries mediaMeta for ${id}`);
+        if (meta.contentType.startsWith("video/")) {
+          assert.ok(Math.abs(meta.aspect - 1280 / 720) < 0.001, "video aspect computed from display dims");
+          assert.ok(meta.durationMs >= 900 && meta.durationMs <= 1500, `video durationMs stamped (${meta.durationMs})`);
+        } else {
+          assert.ok(Math.abs(meta.aspect - expectedImageAspect) < 0.001, "image aspect computed from display dims");
+          assert.equal(meta.durationMs, null, "images carry no duration");
+        }
+        assert.ok(meta.width > 0 && meta.height > 0);
+      }
+    }
+  }
+
+  // The album media list states the same stamp per entry.
+  const listing = await fx.mod.albumService.listMedia({ accessToken: june.token, name: "Lake Album" });
+  const entry = listing.media[0];
+  assert.ok(Math.abs(entry.aspect - expectedImageAspect) < 0.001);
+  assert.equal(entry.width, 1600);
+  assert.equal(entry.height, 1067);
+  assert.equal(entry.durationMs, null);
+});
+
+test("PORCH-049 ac-1: a ref without a readable archive states null geometry — legacy surfaces fall back intrinsically", async () => {
+  const fx = mediaFixture({ chunkSize: 1024 * 1024 });
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const payload = { type: "photo", mediaRefs: ["med_ghost"], caption: "no archive row" };
+  await fx.mod.postService.create({ accessToken: susan.token, payload, signature: susan.dev.signPayload(payload) });
+  const [view] = await fx.mod.feedService.timeline({ accessToken: susan.token }).then((result) => result.posts);
+  const meta = view.mediaMeta["med_ghost"];
+  assert.ok(meta);
+  assert.equal(meta.width, null);
+  assert.equal(meta.height, null);
+  assert.equal(meta.aspect, null);
+  assert.equal(meta.durationMs, null);
+});
+
 /* ---- helpers ------------------------------------------------------------- */
 
 /** Parse one stored ZIP entry out of the streamed archive bytes. */

@@ -27,7 +27,10 @@ export const socialModels = {
       groupId: { type: ["string", "null"] },
       /** Ed25519 device signature over the canonical write payload. */
       deviceSignature: { type: "string" },
-      /** Media references owned by this post alone (media pipeline PORCH-008). */
+      /** Media references owned by this post alone (media pipeline PORCH-008).
+       *  Each ref's served payload carries the media-geometry stamp — display
+       *  width, height, computed aspect ratio, durationMs for video — so
+       *  clients reserve the final frame before any byte loads (PORCH-049). */
       mediaRefs: { type: "array", items: { type: "string" } },
       caption: { type: ["string", "null"] },
       /** Text body for type=text posts. */

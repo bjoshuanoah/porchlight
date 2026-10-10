@@ -71,6 +71,20 @@ export function posterUrl(meta, origin) {
 }
 
 /**
+ * The aspect ratio a surface reserves its final frame from (PORCH-049
+ * ac-2): the stamped `aspect` when the payload states it, the stamped
+ * dims' ratio when a pre-PORCH-049 archive carries only width/height, and
+ * null when the payload states no geometry — the legacy intrinsic-sizing
+ * fallback (no reserved box, media renders its intrinsic size on load).
+ * Pure helper so the SPA renders from it and the tests pin the fallback.
+ */
+export function stampedAspect(meta) {
+  if (typeof meta?.aspect === "number" && meta.aspect > 0) return meta.aspect;
+  if ((meta?.width ?? 0) > 0 && (meta?.height ?? 0) > 0) return meta.width / meta.height;
+  return null;
+}
+
+/**
  * Blob-loader fallback (insecure HTTP origins, where the auth-relaying
  * service worker can't register). Video posts ride their playable
  * rendition; images take the rung nearest the viewport's device pixels,

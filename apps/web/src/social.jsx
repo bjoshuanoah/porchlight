@@ -9,7 +9,7 @@ import { cssVars } from './theme.js';
 import { carouselIndex, photoFirst } from './photo-first.js';
 import {
   renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
-  playableVideoUrl, posterUrl, rungKindForViewport,
+  playableVideoUrl, posterUrl, rungKindForViewport, stampedAspect,
 } from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
@@ -122,10 +122,10 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
     }).then(async ([blob, posterBlob]) => {
       if (!(blob instanceof Blob)) throw new Error('Your hub did not return the media.');
       if (!active) return;
-      // PORCH-043 ac-7: decode before the first paint, then reserve layout
-      // space through CSS aspect-ratio in the same render that shows the
-      // media — dimensions resolving can never relayout the feed, and the
-      // only placeholder is this spinner (no shimmer anywhere).
+      // PORCH-043 ac-7 decode-before-paint carries: the blob path resolves
+      // the shape before the first paint, and the stamped reserved frame
+      // (or, legacy, the decoded intrinsic box) is the only waiting
+      // surface — a still frame, never a moving placeholder (PORCH-049 ac-2).
       const shape = (meta && meta.width) ? { width: meta.width, height: meta.height } : await mediaShape(blob, post.type);
       const url = URL.createObjectURL(blob);
       const posterUrlObj = posterBlob instanceof Blob ? URL.createObjectURL(posterBlob) : null;
@@ -143,7 +143,9 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
   // nests inside another padded media frame (PORCH-043 ac-1, ac-6). In the
   // PORCH-045 carousel the slide mode omits the breakout: the track owns it
   // once for every slide, so a slide is exactly the media width and the
-  // media rules can never double-apply.
+  // media rules can never double-apply. The element background is the
+  // reserved frame's warm wash (PORCH-049 ac-2): bytes that have not
+  // arrived yet show the wash, not a hole.
   const media = post.type === 'photo' || post.type === 'video';
   const breakout = !detail && media && !slide;
   const mediaSx = breakout ? {
@@ -155,21 +157,24 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
     borderRadius: { xs: '0px', lg: `${photoFirst.desktopMediaRadius}px` },
     overflow: 'hidden',
     display: 'block',
-    bgcolor: 'background.default',
+    bgcolor: photoFirst.mediaWash,
   } : {
     display: 'block',
     width: media || post.type === 'audio' ? '100%' : undefined,
     maxHeight: detail ? 720 : undefined,
     borderRadius: detail ? 2 : slide ? 0 : undefined,
-    bgcolor: 'background.default',
+    bgcolor: media ? photoFirst.mediaWash : 'background.default',
   };
-  // Layout reservation (ac-7): CSS aspect-ratio in place from the first
-  // paint; the 85vh cap only letterboxes (object-fit contain), never crops.
-  // The rendition payload carries the display dims, so the reservation is
-  // exact before the first byte arrives; the decoded blob path (fallback)
-  // resolves the same way after the blob decodes.
-  const fitSx = media && (resource?.width ?? meta?.width ?? 0) && (resource?.height ?? meta?.height ?? 0)
-    ? { aspectRatio: `${resource?.width ?? meta.width} / ${resource?.height ?? meta.height}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' }
+  // Reserved frame (PORCH-049 ac-2): the stamped geometry — aspect first,
+  // dims' ratio as the pre-PORCH-049 fallback — puts the exact final box in
+  // place from the first paint, so the element occupies identical geometry
+  // before and after load and bytes landing can never reflow the feed. A
+  // decoded fallback shape (blob loader) wins once present. Legacy payloads
+  // without any stamp state no box: media renders intrinsic sizing on load
+  // (decode-before-paint keeps that path corruption-free, PORCH-043 ac-7).
+  const reserved = resource?.width && resource?.height ? resource.width / resource.height : stampedAspect(meta);
+  const fitSx = media && reserved
+    ? { aspectRatio: `${reserved}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' }
     : {};
   // Slide mode (PORCH-045): the media spans the full slide width above, so
   // the textual lines below it ride the 16px mobile rail and the card
@@ -185,6 +190,26 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
   // rendition loads behind it.
   const videoPoster = meta ? posterUrl(meta, origin) : null;
   const videoPlayable = meta ? playableVideoUrl(meta, origin) : null;
+  // Family-video playback posture (PORCH-049 ac-3, superseding the Oct 9
+  // no-autoplay line for family media): the poster fills the reserved frame
+  // and playback begins inline with the sound off. A tap ON the media frame
+  // is the only way sound arrives — no player chrome and no sound exist
+  // before it. Third-party link-preview embeds keep their own tap-to-play
+  // rule under the Link Previews pair; they render nowhere here.
+  const [soundOn, setSoundOn] = useState(false);
+  const toggleSound = (event) => {
+    // Sound toggles on the element property, not the attribute: browsers
+    // autoplay only unmuted-by-property media, so the sync is load-bearing.
+    event.currentTarget.muted = soundOn;
+    setSoundOn(!soundOn);
+  };
+  // The muted property is re-asserted on every metadata load: React's muted
+  // attribute handling does not always survive element remount (the
+  // boot-window retry remounts keyed by attempt), and autoplay requires it.
+  const syncMuted = (event) => {
+    if (event.currentTarget) event.currentTarget.muted = !soundOn;
+    if (!meta.width && event.target) setResource({ width: event.target.videoWidth, height: event.target.videoHeight });
+  };
   // Rendition elements remount once for the boot-window retry: key=attempt
   // re-issues the same content-addressed request after the window settles.
   const directImg = post.type === 'photo' && direct;
@@ -206,14 +231,21 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
       sx={{ ...mediaSx, ...fitSx }} />}
     {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
       sx={{ ...mediaSx, ...fitSx }} />}
-    {directVideo && <Box key={`vid-${attempt}`} component="video" src={videoPlayable} poster={videoPoster} controls preload="metadata"
-      onLoadedMetadata={(event) => { if (!meta.width && event.target) setResource({ width: event.target.videoWidth, height: event.target.videoHeight }); }}
+    {directVideo && <Box key={`vid-${attempt}`} component="video" src={videoPlayable} poster={videoPoster}
+      autoPlay muted playsInline preload="metadata" onClick={toggleSound}
+      ref={(el) => { if (el) el.muted = true; }}
+      onLoadedMetadata={syncMuted}
       onError={() => setLoadError('Your hub did not return the media.')}
-      sx={{ ...mediaSx, ...fitSx }} />}
-    {post.type === 'video' && !direct && resource && <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined} controls preload="metadata"
-      sx={{ ...mediaSx, ...fitSx }} />}
+      sx={{ ...mediaSx, ...fitSx, cursor: 'pointer' }} />}
+    {post.type === 'video' && !direct && resource && <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined}
+      autoPlay muted playsInline onClick={toggleSound}
+      ref={(el) => { if (el) el.muted = true; }}
+      onError={() => setLoadError('Your hub did not return the media.')}
+      sx={{ ...mediaSx, ...fitSx, cursor: 'pointer' }} />}
     {post.type === 'audio' && <Box component="audio" src={resource?.url} controls preload="none" sx={{ width: '100%' }} />}
-    {!resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" sx={slideRailSx} />}
+    {!resource && !direct && post.type !== 'audio' && !loadError && (reserved)
+      ? <Box role="status" aria-label="Loading media" sx={{ ...mediaSx, ...fitSx }} />
+      : !resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" sx={slideRailSx} />}
     {loadError && <Alert severity="error" sx={slideRailSx}>{loadError}</Alert>}
     <Button size="small" disabled={operation.busy} onClick={() => operation.run(async () => {
       const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
