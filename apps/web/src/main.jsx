@@ -9,7 +9,8 @@ import PersonOutline from "@mui/icons-material/PersonOutline";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import { themeFor, tokenStyles, lightTokens, darkTokens } from "./theme.js";
 import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
-import { readJoinQuery } from "./frontdoor.js";
+// PORCH-055: the signed-out marker and boot routing for the device front state.
+import { bootRoute, readSignedOut, markSignedOut, clearSignedOut } from "./front-state.js";
 import { fullName } from "./setup-state.js";
 import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
@@ -53,11 +54,16 @@ const labels = ["Timeline", "Groups", "Compose", "Profile"];
 const icons = [<HomeOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />];
 
 function routeOf() {
-  if (window.location.pathname !== "/") return window.location.pathname;
-  // An invite riding the query string at the served root is the front door,
-  // never the timeline: keep the search alive so Join reads it (PORCH-023).
-  if (localIdentities.length === 0 && readJoinQuery(window.location.search)) return "/join";
-  return localIdentities.length > 1 || initialConnections.some(hasLocalPin) ? "/who-is-here" : localIdentities.length ? "/timeline" : "/join";
+  // PORCH-055: the zero-open-sessions front state rides the client-local
+  // signed-out marker; grant consumption (a join link on the chooser)
+  // wins over the front state and routes into its flow immediately.
+  return bootRoute({
+    pathname: window.location.pathname,
+    search: window.location.search,
+    connections: initialConnections,
+    signedOut: readSignedOut(stored, origin),
+    pinned: initialConnections.some(hasLocalPin),
+  });
 }
 function App() {
   const [route, setRoute] = useState(routeOf);
@@ -453,6 +459,13 @@ function App() {
     const revised = connections.filter((item) => item.identity?.id !== registration.did).concat(next);
     saveConnections(stored, origin, revised);
     setConnections(revised);
+    if (readSignedOut(stored, origin)) {
+      // PORCH-055 ac-4: grant consumption wins over the chooser state but
+      // never opens the identity turn — the refreshed registration joins
+      // the face row and the device returns to the front state.
+      navigate("/who-is-here");
+      return registration;
+    }
     setIdentity(next.identity);
     setPosts(cachedTimeline(stored, `${origin}:${registration.did}`));
     setRanked([]);
@@ -482,6 +495,12 @@ function App() {
     const revised = connections.filter((item) => item.identity?.id !== did).concat(next);
     saveConnections(stored, origin, revised);
     setConnections(revised);
+    if (readSignedOut(stored, origin)) {
+      // PORCH-055 ac-4: joining from the front state closes on the chooser —
+      // the new face joins the row, no identity turn opens. Join's done
+      // stage routes back through data.frontState.
+      return admitted;
+    }
     setIdentity(next.identity);
     setPosts(cachedTimeline(stored, `${origin}:${did}`));
     setRanked([]);
@@ -564,6 +583,9 @@ function App() {
       const next = connections.find((item) => item.identity?.id === id);
       if (!next) throw new Error("This person is not connected on this device.");
       const session = await openDeviceSession(next, { did: id, deviceId: next.deviceId }, request);
+      // The turn is open again: the forever-logged-in silent reopen resumes.
+      signedOut.current = false;
+      clearSignedOut(stored, origin);
       identityEndedRef.current = false;
       // PORCH-034 follow-up: the hub resolves the member's family-facing
       // name at re-credential, healing any device-local stale naming.
@@ -591,7 +613,17 @@ function App() {
       setHidden(hiddenPosts(stored, `${origin}:${id}`));
       navigate("/timeline");
     },
-    signOut: () => { signedOut.current = true; setIdentity(null); setPosts([]); setRanked([]); navigate(connections.length > 1 ? "/who-is-here" : "/timeline"); },
+    // Explicit sign-out / Switch (PORCH-055): the turn closes here and the
+    // next open renders the WhoIsHere front state, never a half-open app.
+    signOut: () => {
+      signedOut.current = true;
+      markSignedOut(stored, origin);
+      setIdentity(null);
+      setPosts([]);
+      setRanked([]);
+      setHidden(new Set());
+      navigate("/who-is-here");
+    },
     createPairingCode: async () => {
       if (!active?.identityToken || !identity?.id) throw new Error("Open your connected identity on this device first.");
       return request({ ...active, token: active.identityToken }, "identity/pairing-code", { method: "POST", body: JSON.stringify({ did: identity.id }) });
@@ -819,6 +851,9 @@ function App() {
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
     mediaRoot: owner.mediaRoot,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline, membershipEnded,
+    // PORCH-055: the grant screens route consumption back to the front
+    // state while this device is signed out — never into a half-open app.
+    frontState: readSignedOut(stored, origin),
   };
   // The Profile appearance control is bound to the stored *preference*
   // (modePref), never the resolved mode: choosing System must stick as the
@@ -853,9 +888,11 @@ function App() {
     return () => { stale = true; };
   }, []);
   useEffect(() => {
-    // Signed-out-but-registered device: a fresh app open re-credentials
-    // silently into the timeline (no wall). An explicit sign-out keeps the
-    // turn closed until the next visit.
+    // PORCH-055: a signed-out device is marked client-locally; its fresh
+    // open rides the WhoIsHere front state (routeOf) and the turn only
+    // reopens through an explicit face tap. The forever-logged-in device
+    // (no open session, no marker) re-credentials silently into the
+    // timeline when the sole registration is unpinned.
     if (signedOut.current || identity || frontDoor) return;
     const solo = connections.length === 1 && connections[0]?.identity?.id && !connections.some(hasLocalPin);
     if (!solo) return;
@@ -937,7 +974,7 @@ function App() {
         This device's connection ended. Saved moments remain on this device. Ask your family's owner for a device link — opening it here reconnects this device.
       </Alert>}
       {!frontDoor && networkLoaded && !network && identity && <Alert severity="info" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/setup")}>Continue</Button>}>Porch setup is not finished on this hub yet.</Alert>}
-      {sharedDevice && !frontDoor && <Button size="small" onClick={() => navigate("/who-is-here")}>Switch person</Button>}
+      {sharedDevice && !frontDoor && <Button size="small" onClick={() => actions.signOut()}>Switch person</Button>}
       {page}
     </Container>
     {!frontDoor && <Paper elevation={0} sx={{ display: { xs: "block", lg: "none" }, position: "fixed", left: 0, bottom: 0, right: 0, zIndex: 10, borderTop: "1px solid", borderColor: "divider", pb: "env(safe-area-inset-bottom)" }}>
