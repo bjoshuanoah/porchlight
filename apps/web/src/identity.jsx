@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, List, ListItem, ListItemAvatar, ListItemText,
-  Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
+  DialogContent, DialogTitle, Divider, IconButton, List, ListItem, ListItemAvatar,
+  ListItemText, Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
@@ -257,7 +257,12 @@ export function Join({ data, actions, navigate }) {
         : 'Connect once and this device stays yours.'} />
     {stage === 'done' ? <Paper elevation={0} sx={frontPanel}><Stack spacing={2}>
       <Typography>Your family can see you now. Nothing to import, nothing to set up twice.</Typography>
-      <Button variant="contained" sx={{ height: 48 }} onClick={() => navigate?.('/timeline')}>Open Timeline</Button>
+      {/* PORCH-055: joining from the front state returns to the chooser with
+          the new face present; a device with an open turn lands on the
+          timeline. */}
+      <Button variant="contained" sx={{ height: 48 }} onClick={() => navigate?.(data?.frontState ? '/who-is-here' : '/timeline')}>
+        {data?.frontState ? "Back to Who's using Porchlight?" : 'Open Timeline'}
+      </Button>
     </Stack></Paper>
     : stage === 'mismatch' ? <Paper elevation={0} sx={frontPanel}><Stack spacing={2}>
       <Alert severity="warning" icon={false}>
@@ -508,8 +513,9 @@ export function Pair({ data, actions, navigate }) {
   const operation = useOperation(actions);
   async function submit(event) {
     event.preventDefault();
-    const result = await operation.run('pair', [code.trim()], 'This device is now yours.');
-    if (result) navigate?.('/timeline');
+    // bindDevice owns the completion target: a signed-out device returns to
+    // the WhoIsHere front state with the refreshed face present (PORCH-055).
+    await operation.run('pair', [code.trim()], 'This device is now yours.');
   }
   return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
     <Heading title="Add this device" subtitle={`You're already part of ${networkName(data)}. Enter the code shown on your other device once, and this device joins your place.`} />
@@ -529,8 +535,10 @@ export function DeviceLink({ data, actions, navigate }) {
   const network = networkName(data);
   async function submit(event) {
     event.preventDefault();
-    const result = await operation.run('linkDevice', [grant.trim()], 'This device is now yours.');
-    if (result) navigate?.('/timeline');
+    // bindDevice owns the completion target (PORCH-055): the front state
+    // gets the refreshed face on the chooser, an open turn lands back on
+    // the timeline.
+    await operation.run('linkDevice', [grant.trim()], 'This device is now yours.');
   }
   return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
     <Heading title="Welcome back" subtitle={`Welcome back. This link adds this device to your place in ${network}. Your moments, groups, and profile arrive untouched — nothing to bring over.`} />
@@ -626,8 +634,8 @@ export function Profile({ data, actions, navigate, mode }) {
     <Heading title="Profile" subtitle={`Your place on ${networkName(data)} and the devices you use.`} />
     <Card sx={section}><CardContent><Typography variant="h5">{named(identity)}</Typography>
       <Typography color="text.secondary">{data?.server?.url || networkName(data)}</Typography>
-      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => navigate?.('/who-is-here')}>Who is here?</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{isOwner && <Button onClick={() => navigate?.('/members')}>Members</Button>}{isOwner && <Button onClick={() => navigate?.('/owner')}>Owner console</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signing out ends this device's open turn. The device stays connected and opens straight into your timeline on your next visit.</Typography>
+      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => (typeof actions?.signOut === 'function' ? actions.signOut() : navigate?.('/who-is-here'))}>Switch person</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{isOwner && <Button onClick={() => navigate?.('/members')}>Members</Button>}{isOwner && <Button onClick={() => navigate?.('/owner')}>Owner console</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signing out ends this device's open turn. The device stays connected: the next open shows the family greeting — Who's using Porchlight? — and one tap reopens your place.</Typography>
       <Collapse in={membershipOpen}><Divider sx={{ my: 2 }} /><Typography variant="h6">Your memberships</Typography>
         {memberships.length ? <List dense>{memberships.map((entry, index) => <ListItem key={idOf(entry) || index}><ListItemText primary={named(entry)} secondary={entry.role || entry.server} /></ListItem>)}</List> : <Typography color="text.secondary">No additional memberships are available here.</Typography>}
       </Collapse>
@@ -681,42 +689,72 @@ export function Profile({ data, actions, navigate, mode }) {
   </Box>;
 }
 
+// The device front state (PORCH-055): a full-screen identity selection over
+// this device's registrations, in family vocabulary only. The shell renders
+// it bare — no tab bar, no compose, no profile, no device management behind
+// an opened identity — and "Add someone" carries the front state's two
+// doors: pairing-code entry ("Already in …") and the join surface ("New
+// here"). Both consume owner-routed grants only; this device never mints
+// or authorizes credentials.
 export function WhoIsHere({ data, actions, navigate }) {
-  const members = (data?.connections || []).filter(connection => connection?.identity?.id && connection.deviceId);
-  const [selected, setSelected] = useState(null);
+  const faces = (data?.connections || []).filter(connection => connection?.identity?.id && connection.deviceId);
+  const [pinFor, setPinFor] = useState(null);
   const [pin, setPin] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
   const operation = useOperation(actions);
-  const connection = members.find(item => item.identity.id === selected);
-  const hasPin = Boolean(connection && storedPin(connection));
-  async function openIdentity() {
-    const result = await operation.run('switchIdentity', [selected]);
-    if (result) { setPin(''); navigate?.('/timeline'); }
+  const chosen = faces.find(item => item.identity.id === pinFor);
+  const hasPin = Boolean(chosen && storedPin(chosen));
+  async function openFace(face) {
+    if (storedPin(face)) { setPinFor(face.identity.id); setPin(''); operation.setError(''); return; }
+    const result = await operation.run('switchIdentity', [face.identity.id]);
+    if (result) navigate?.('/timeline');
   }
   async function submitPin(event) {
     event.preventDefault();
-    const record = storedPin(connection);
+    const record = storedPin(chosen);
     if (!record || !Array.isArray(record.salt) || !record.digest) { operation.setError('The local PIN is not available for this identity.'); return; }
     try {
       if (await pinDigest(pin, record.salt) !== record.digest) {
         setPin(''); operation.setError('That PIN does not match. Try again, or ask the member to change it from their Profile.'); return;
       }
-      await openIdentity();
+      const result = await operation.run('switchIdentity', [chosen.identity.id]);
+      if (result) { setPinFor(null); setPin(''); }
     } catch { operation.setError('This browser cannot check the local PIN right now.'); }
   }
-  return <Box sx={{ maxWidth: 700, mx: 'auto' }}>
-    <Heading title="Who is here?" subtitle="Choose an identity already connected on this device. A local PIN is optional; without one, open with one tap." />
-    <Paper sx={{ p: 2, mb: 3 }}><List disablePadding>{members.map(item => <ListItem key={`${item.url}:${item.identity.id}:${item.deviceId}`} disableGutters divider sx={{ gap: 1 }}>
-      <ListItemText primary={named(item.identity)} secondary={[item.name || item.url, item.identity.id === data?.identity?.id && 'Currently here'].filter(Boolean).join(' · ')} />
-      <Button onClick={() => { setSelected(item.identity.id); setPin(''); operation.setError(''); }}>Choose</Button>
-    </ListItem>)}</List>{members.length === 0 && <Typography color="text.secondary">No identities are connected on this device yet.</Typography>}</Paper>
-    {connection && <Paper sx={{ p: 3 }}><Typography variant="h6" gutterBottom>{named(connection.identity)}</Typography>
-      <Feedback operation={operation} />
-      {hasPin ? <form onSubmit={submitPin}><Stack spacing={2}>
+  return <Box sx={{ maxWidth: 560, mx: 'auto', textAlign: 'center', pt: { xs: 2, sm: 6 } }}>
+    <Box component="header" sx={{ mb: 4 }}>
+      <Lockup size={30} sx={{ mb: 3 }} />
+      <Typography variant="h1" component="h1">Who's using Porchlight?</Typography>
+      <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
+        {faces.length ? 'Tap a face to open. A local PIN is optional; without one, one tap opens.' : 'No faces are connected on this device yet.'}
+      </Typography>
+    </Box>
+    <Stack direction="row" spacing={4} justifyContent="center" sx={{ flexWrap: 'wrap', rowGap: 3 }}>
+      {faces.map(item => (
+        <Stack key={`${item.url}:${item.identity.id}:${item.deviceId}`} spacing={1} alignItems="center" sx={{ width: 108 }}>
+          <IconButton onClick={() => void openFace(item)} sx={{ p: 0 }} aria-label={`Open ${named(item.identity)}`}>
+            <Avatar sx={{ width: 72, height: 72, fontSize: 26 }}>{named(item.identity).trim().charAt(0) || '·'}</Avatar>
+          </IconButton>
+          <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{named(item.identity)}</Typography>
+        </Stack>
+      ))}
+    </Stack>
+    <Feedback operation={operation} />
+    {chosen && <Paper sx={{ p: 3, mt: 2, textAlign: 'left' }}>
+      <Typography variant="h6" gutterBottom>{named(chosen.identity)}</Typography>
+      {hasPin && <form onSubmit={submitPin}><Stack spacing={2}>
         <PinField label="Local PIN" value={pin} onChange={setPin} />
-        <Button variant="contained" type="submit" disabled={operation.busy}>Continue as {named(connection.identity)}</Button>
-      </Stack></form> : <Button variant="contained" disabled={operation.busy} onClick={openIdentity}>Continue as {named(connection.identity)}</Button>}
+        <Button variant="contained" type="submit" disabled={operation.busy}>Continue as {named(chosen.identity)}</Button>
+      </Stack></form>}
     </Paper>}
-    <Button sx={{ mt: 2 }} onClick={() => navigate?.('/join')}>Join another network</Button>
+    <Button variant="outlined" onClick={() => setAddOpen(true)} sx={{ mt: 5 }}>Add someone</Button>
+    <Dialog open={addOpen} onClose={() => setAddOpen(false)} fullWidth maxWidth="xs">
+      <DialogTitle>Add someone</DialogTitle>
+      <DialogContent><Stack spacing={2}>
+        <Button fullWidth variant="outlined" onClick={() => { setAddOpen(false); navigate?.('/pair'); }}>Already in {networkName(data)}</Button>
+        <Button fullWidth variant="outlined" onClick={() => { setAddOpen(false); navigate?.('/join'); }}>New here</Button>
+      </Stack></DialogContent>
+    </Dialog>
   </Box>;
 }
 
