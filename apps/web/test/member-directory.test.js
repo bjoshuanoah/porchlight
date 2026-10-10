@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, copyLink } from "../src/member-directory.js";
+import { directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, viewerRole, roleLabel, copyLink } from "../src/member-directory.js";
 
 // PORCH-029: the member directory's view mapping is pure and deterministic —
 // owner first, then everyone by admission, and every row carries the three
@@ -88,6 +88,28 @@ test("a plain member, or anyone without the owner row, is not the owner", () => 
   assert.equal(viewerIsOwner({ identity: { id: "did:porch:x" }, members: [{ did: "did:porch:x", role: "member" }] }), false);
   // A viewer absent from the roster: never the owner.
   assert.equal(viewerIsOwner({ identity: { id: "did:porch:x" }, members: [{ did: "did:porch:y", role: "owner" }] }), false);
+});
+
+// PORCH-053: the ladder's UI gating reads the viewer's OWN role (owner or
+// delegate — not just the owner boolean), and the role display carries all
+// three rungs of the ladder.
+test("the viewer's ladder role reads from the self row, and roles render as Member/Delegate/Owner", () => {
+  assert.equal(viewerRole({ identity: { id: "did:porch:o" }, members: [{ did: "did:porch:o", role: "owner", state: "active" }] }), "owner");
+  assert.equal(viewerRole({ identity: { id: "did:porch:d" }, members: [{ did: "did:porch:d", role: "delegate", state: "active" }] }), "delegate");
+  assert.equal(viewerRole({ identity: { id: "did:porch:m" }, members: [{ did: "did:porch:m", role: "member", state: "active" }] }), "member");
+  // A revoked self row is not live membership: no role.
+  assert.equal(viewerRole({ identity: { id: "did:porch:gone" }, members: [{ did: "did:porch:gone", role: "delegate", state: "revoked" }] }), null);
+  // No roster: no role (the failed console read).
+  assert.equal(viewerRole({ identity: { id: "did:porch:o" }, members: [] }), null);
+  assert.equal(roleLabel("owner"), "Owner");
+  assert.equal(roleLabel("delegate"), "Delegate");
+  assert.equal(roleLabel("member"), "Member");
+  // Directory rows carry the three-rung display.
+  const rows = directoryRows(
+    [{ _id: "m1", did: "did:porch:o", role: "owner", state: "active", admittedAt: "2026-10-01T00:00:00.000Z" }, { _id: "m2", did: "did:porch:d", role: "delegate", state: "active", admittedAt: "2026-10-02T00:00:00.000Z" }, { _id: "m3", did: "did:porch:m", role: "member", state: "active", admittedAt: "2026-10-03T00:00:00.000Z" }],
+    "did:porch:o",
+  );
+  assert.deepEqual(rows.map((row) => row.role), ["Owner", "Delegate", "Member"]);
 });
 
 test("a non-owner's failed console read degrades to no owner surfaces", () => {

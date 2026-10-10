@@ -233,10 +233,23 @@ export class PostService {
       signature,
     });
 
-    const authoredPosts = await this.posts.find({ originNetworkId: networkId, authorId: session.did });
-    const theirComments = await this.comments.find({ networkId, authorDid: session.did });
-    const theirReactions = await this.reactions.find({ networkId, memberDid: session.did });
-    const theirVotes = await this.votes.find({ networkId, memberDid: session.did });
+    return this.sweepContentOf({ networkId, did: session.did, actorDid: session.did, action: "member_content_delete" });
+  }
+
+  /**
+   * The sweep core, authorized above by the caller (PORCH-053): sweeps ALL
+   * of one member's authored content at this origin — every authored post
+   * (full cascade), plus every comment, reaction, and vote they authored on
+   * other posts. The member's own self-service sweep (above) and the
+   * owner-only permanent member deletion both ride this one transactional
+   * write; `actorDid` records who the trail names, `did` whose content dies.
+   */
+  async sweepContentOf({ networkId, did, actorDid = null, action = "member_content_delete" } = {}) {
+
+    const authoredPosts = await this.posts.find({ originNetworkId: networkId, authorId: did });
+    const theirComments = await this.comments.find({ networkId, authorDid: did });
+    const theirReactions = await this.reactions.find({ networkId, memberDid: did });
+    const theirVotes = await this.votes.find({ networkId, memberDid: did });
     // Reply notifications fired onto comments the member authored die with
     // those comments; their own posts cascade their notifications below.
     const theirCommentIds = new Set(theirComments.map((row) => row._id));
@@ -286,10 +299,10 @@ export class PostService {
       await this.recount({ postId, networkId });
     }
 
-    await this.audit("member_content_delete", {
+    await this.audit(action, {
       networkId,
-      did: session.did,
-      detail: { postsSwept: authoredPosts.length },
+      did: actorDid ?? did,
+      detail: { targetDid: did, postsSwept: authoredPosts.length },
     });
     return { sweptPosts: authoredPosts.length };
   }

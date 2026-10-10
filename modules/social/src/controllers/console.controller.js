@@ -16,6 +16,10 @@ export class ConsoleController {
    * @param {import("../services/quota.service.js").QuotaService} deps.quota
    * @param {import("../services/audit.service.js").AuditService} deps.audit
    * @param {import("../services/group.service.js").GroupService} deps.groups
+   * @param {import("../services/member-admin.service.js").MemberAdminService} [deps.memberAdmin]
+   *   PORCH-053: the permanent-deletion cascade service (owner-only typed-
+   *   confirmation purge). Optional — surfaces answer 501 without it, the
+   *   module not wired for member administration.
    * @param {import("../services/ranking.service.js").RankingService} deps.ranking
    * @param {import("../services/media.service.js").MediaService} [deps.media]
    * @param {{ release: { service: string, version: string | null }, launch: () => Promise<{ resumable: boolean, lastError: string | null, steps: Record<string, { status: string }>, diagnostics: Array<{ at: string, source: string, message: string }> }> }} [deps.system]
@@ -29,7 +33,7 @@ export class ConsoleController {
    * @param {((line: string) => void) | null} [deps.log]
    *   Auth-failure capture sink (PORCH-019); defaults to console.log.
    */
-  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system, hubUrl, log }) {
+  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system, hubUrl, log, memberAdmin }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
@@ -38,23 +42,24 @@ export class ConsoleController {
     this.groups = groups;
     this.ranking = ranking;
     this.media = media ?? null;
+    this.memberAdmin = memberAdmin ?? null;
     this.system = system ?? null;
     this.hubUrl = typeof hubUrl === "function" ? hubUrl : null;
     this.log = log ?? null;
   }
 
   /**
-   * Owner-console perimeter guard (PORCH-015): every /console/* handler
-   * calls this first. A valid Bearer membership token for THIS network with
-   * the owner role is the only way through — no token or no session is 401
-   * (plain member language), a session without the owner role is 403.
+   * Owner-console perimeter pass (PORCH-015): a valid Bearer membership
+   * token for THIS network is the only way through — no token or no session
+   * is 401 (plain member language), sharing the one verification pass the
+   * capability guard (#requireCapability, PORCH-053) rides.
    * The guard lives in the controller (traceability: the audit pins the
    * route table, which stays thin middleware-free).
    *
    * @returns {Promise<{membership: object, session: object} | null>} the
    *   verified perimeter to continue with, or null after writing the error.
    */
-  async #requireOwner(req, res) {
+  async #verifyPerimeter(req, res) {
     const header = req.headers?.authorization ?? "";
     const accessToken = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
     const network = await this.networks.get();
@@ -80,6 +85,12 @@ export class ConsoleController {
       });
       return null;
     }
+    return perimeter;
+  }
+
+  async #requireOwner(req, res) {
+    const perimeter = await this.#verifyPerimeter(req, res);
+    if (!perimeter) return null;
     if (perimeter.membership.role !== "owner") {
       res.status(403).json({ error: "The owner console belongs to the network owner.", code: "E_FORBIDDEN" });
       return null;
@@ -87,16 +98,53 @@ export class ConsoleController {
     return perimeter;
   }
 
-  /** GET /console/invites — owner-visible join-link states (unused/used/revoked). */
+  /**
+   * Capability-console perimeter guard (PORCH-053): every admin handler
+   * authorizes through the ONE capability table (MembershipService's
+   * `capabilitiesFor`), never an ad-hoc role string. A valid Bearer
+   * membership token for THIS network is still the only way through (401
+   * with plain member language, PORCH-019 capture on failure); a live
+   * session whose role lacks the capability is 403, worded per capability
+   * in family language — the delegate ladder (invites, device links,
+   * removal) admits delegates; promote/demote and permanent deletion stay
+   * owner-only because no delegate capability reaches them.
+   *
+   * @returns {Promise<{membership: object, session: object} | null>} the
+   *   verified perimeter to continue with, or null after writing the error.
+   */
+  async #requireCapability(capability, req, res) {
+    const perimeter = await this.#verifyPerimeter(req, res);
+    if (!perimeter) return null;
+    if (!this.membership.capabilitiesFor(perimeter.membership.role).includes(capability)) {
+      const copy = {
+        members_read: "The member directory belongs to the network's owner and delegates.",
+        invites_read: "Invitations belong to the network's owner and delegates.",
+        invite_issue: "Join links belong to the network's owner and delegates.",
+        invite_revoke: "Withdrawing join links belongs to the network's owner and delegates.",
+        device_links_read: "Device links belong to the network's owner and delegates.",
+        device_link_issue: "Device links belong to the network's owner and delegates.",
+        device_link_revoke: "Withdrawing device links belongs to the network's owner and delegates.",
+        member_remove: "Removing members belongs to the network's owner and delegates.",
+        member_role: "Role changes belong to the network owner.",
+        member_purge: "Permanent deletion belongs to the network owner.",
+      };
+      res.status(403).json({ error: copy[capability] ?? "The owner console belongs to the network owner.", code: "E_FORBIDDEN" });
+      return null;
+    }
+    return perimeter;
+  }
+
+  /** GET /console/invites — owner/delegate join-link states (unused/used/revoked). */
   listInvites = async (req, res) => {
-    if (!(await this.#requireOwner(req, res))) return;
+    if (!(await this.#requireCapability("invites_read", req, res))) return;
     const invites = await this.invites.list({ networkId: req.query?.networkId ?? undefined });
     res.json({ invites });
   };
 
   /** POST /console/invites — issue a join-link invite (join URL embeds the code). */
   issueInvite = async (req, res) => {
-    if (!(await this.#requireOwner(req, res))) return;
+    const perimeter = await this.#requireCapability("invite_issue", req, res);
+    if (!perimeter) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "Create the hub network before issuing invites" });
@@ -106,19 +154,20 @@ export class ConsoleController {
     // verify's joinUrl is absolute and the member's front door can tell a
     // mismatched host apart (PORCH-023).
     const invite = await this.invites.issue({ networkId: network._id, role, maxUses, hubUrl: this.hubUrl ? this.hubUrl() : null });
-    await this.audit.record({ networkId: network._id, did: null, action: "invite_issue", detail: { inviteId: invite._id } });
+    await this.audit.record({ networkId: network._id, did: perimeter.session.did, action: "invite_issue", detail: { inviteId: invite._id } });
     res.status(201).json({ invite });
   };
 
   /** POST /console/invites/revoke — instant revocation. */
   revokeInvite = async (req, res) => {
-    if (!(await this.#requireOwner(req, res))) return;
+    const perimeter = await this.#requireCapability("invite_revoke", req, res);
+    if (!perimeter) return;
     const { inviteId } = req.body ?? {};
     try {
       const result = await this.invites.revoke({ inviteId });
       await this.audit.record({
         networkId: result.invite.networkId,
-        did: null,
+        did: perimeter.session.did,
         action: "invite_revoke",
         detail: { inviteId },
       });
@@ -129,9 +178,9 @@ export class ConsoleController {
     }
   };
 
-  /** GET /console/members — the network's membership records. */
+  /** GET /console/members — the network's membership records (owner + delegate). */
   listMembers = async (req, res) => {
-    if (!(await this.#requireOwner(req, res))) return;
+    if (!(await this.#requireCapability("members_read", req, res))) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
@@ -142,18 +191,84 @@ export class ConsoleController {
 
   /** POST /console/members/revoke — instant revocation; sessions die with it. */
   revokeMember = async (req, res) => {
-    if (!(await this.#requireOwner(req, res))) return;
+    const perimeter = await this.#requireCapability("member_remove", req, res);
+    if (!perimeter) return;
     const network = await this.networks.get();
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
     }
     const { did, memberId } = req.body ?? {};
     try {
-      const result = await this.membership.revokeMember({ networkId: network._id, did, memberId });
+      const result = await this.membership.revokeMember({ networkId: network._id, did, memberId, actor: perimeter });
       res.json(result);
     } catch (error) {
-      const status = error.code === "E_MEMBER_NOT_FOUND" ? 404 : 500;
-      res.status(status).json({ error: error.message });
+      const status = error.code === "E_MEMBER_NOT_FOUND" ? 404 : error.code === "E_FORBIDDEN" ? 403 : error.code === "E_LAST_OWNER" ? 409 : 500;
+      res.status(status).json({ error: error.message, code: error.code ?? "E_INTERNAL" });
+    }
+  };
+
+  /**
+   * PATCH /console/members/role — promote/demote member↔delegate, owner-only
+   * (PORCH-053 ac-2). The change lands immediately in the acting capability
+   * surface: the membership row's role drives every read-time check.
+   */
+  setMemberRole = async (req, res) => {
+    const perimeter = await this.#requireCapability("member_role", req, res);
+    if (!perimeter) return;
+    const network = await this.networks.get();
+    if (!network) {
+      return res.status(409).json({ error: "No network exists yet" });
+    }
+    const { memberId, role } = req.body ?? {};
+    try {
+      const membership = await this.membership.setMemberRole({ networkId: network._id, memberId, to: role, actor: perimeter });
+      res.json({ membership });
+    } catch (error) {
+      const statusByCode = {
+        E_MEMBER_NOT_FOUND: 404,
+        E_ROLE_INVALID: 400,
+        E_ROLE_UNCHANGED: 409,
+        E_LAST_OWNER: 409,
+        E_FORBIDDEN: 403,
+      };
+      res.status(statusByCode[error.code] ?? 500).json({ error: error.message, code: error.code ?? "E_INTERNAL" });
+    }
+  };
+
+  /**
+   * DELETE /console/members/:memberId — the permanent member deletion
+   * (PORCH-053 ac-4), owner-only: the typed member-name confirmation is
+   * validated in the service, then the origin-network deletion cascade runs
+   * (authored originals, derived artifacts, authored comments) and the
+   * action lands in the audit log with the confirming actor. Never a
+   * single-tap surface: the typed name IS the second factor.
+   */
+  purgeMember = async (req, res) => {
+    if (!this.memberAdmin) {
+      return res.status(501).json({ error: "Member administration is not wired into this deployment" });
+    }
+    const perimeter = await this.#requireCapability("member_purge", req, res);
+    if (!perimeter) return;
+    const network = await this.networks.get();
+    if (!network) {
+      return res.status(409).json({ error: "No network exists yet" });
+    }
+    try {
+      const result = await this.memberAdmin.purgeMember({
+        networkId: network._id,
+        memberId: req.params?.memberId,
+        confirmName: req.body?.confirmName,
+        actor: perimeter,
+      });
+      res.json(result);
+    } catch (error) {
+      const statusByCode = {
+        E_MEMBER_NOT_FOUND: 404,
+        E_CONFIRM_NAME: 400,
+        E_LAST_OWNER: 409,
+        E_FORBIDDEN: 403,
+      };
+      res.status(statusByCode[error.code] ?? 500).json({ error: error.message, code: error.code ?? "E_INTERNAL" });
     }
   };
 

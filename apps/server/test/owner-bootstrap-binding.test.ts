@@ -319,19 +319,39 @@ test("perimeter: restore binds nothing for a non-founder and never resurrects a 
     assert.equal(refused.body.code, "E_NOT_A_MEMBER");
     assert.equal((await hub.db.collection("memberships").find({})).length, 1);
 
-    // Owner revokes themselves (the console kill switch); restore must NOT
-    // resurrect the revoked binding on the next open.
-    const ownerIdentityToken = await identitySession(port, ownerDid, ownerPair);
-    const bounded = await call(port, "/api/social/session/restore", {
+    // Self-removal of the SOLE owner is refused (final-owner invariant,
+    // PORCH-053): the last owner is un-removable, server-side, plain reason.
+    const soleOwnerIdentityToken = await identitySession(port, ownerDid, ownerPair);
+    const soleBounded = await call(port, "/api/social/session/restore", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ identityAccessToken: ownerIdentityToken, deviceId: ownerPair.deviceId }),
+      body: JSON.stringify({ identityAccessToken: soleOwnerIdentityToken, deviceId: ownerPair.deviceId }),
     });
-    assert.equal(bounded.status, 201);
-    const ownerAccessToken = (bounded.body.sessions as Array<Json>)[0].accessToken as string;
+    assert.equal(soleBounded.status, 201);
+    const soleToken = (soleBounded.body.sessions as Array<Json>)[0].accessToken as string;
+    const soleRevoke = await call(port, "/api/social/console/members/revoke", {
+      method: "POST",
+      headers: bearerAuth(soleToken),
+      body: JSON.stringify({ did: ownerDid }),
+    });
+    assert.equal(soleRevoke.status, 409);
+    assert.equal(soleRevoke.body.code, "E_LAST_OWNER");
+
+    // With a second owner in place, the removal is legal — and the revoked
+    // founder binding must NOT resurrect at the next restore.
+    await hub.db.collection("memberships").insertOne({
+      _id: `mem_${randomUUID()}`,
+      networkId,
+      did: memberDid,
+      role: "owner",
+      state: "active",
+      admittedViaInviteId: null,
+      admittedAt: new Date().toISOString(),
+      revokedAt: null,
+    });
     const revoke = await call(port, "/api/social/console/members/revoke", {
       method: "POST",
-      headers: bearerAuth(ownerAccessToken),
+      headers: bearerAuth(soleToken),
       body: JSON.stringify({ did: ownerDid }),
     });
     assert.equal(revoke.status, 200);
@@ -346,7 +366,7 @@ test("perimeter: restore binds nothing for a non-founder and never resurrects a 
     assert.equal(resurrect.body.code, "E_NOT_A_MEMBER");
     const remaining = await hub.db.collection("memberships").find({ networkId, did: ownerDid });
     assert.equal(remaining.length, 1);
-    assert.equal((remaining[0] as Json).state, "revoked");
+    assert.equal((remaining as Array<Json>)[0].state, "revoked");
   } finally {
     hub.close();
   }

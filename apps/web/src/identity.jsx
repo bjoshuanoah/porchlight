@@ -6,10 +6,19 @@ import {
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
-import { copyLink, directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner } from './member-directory.js';
+import { copyLink, directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, viewerRole, roleLabel } from './member-directory.js';
 import { updateCardModel } from './update.js';
 import { Lockup, LampMark } from './brand.jsx';
 import { cssVars } from './theme.js';
+
+/** Removal capability on the ladder (PORCH-053): the owner removes anyone
+ * (the final-owner invariant guards the last one); a delegate removes
+ * plain members — removing an owner is an owner action. */
+function canRemoveMember(viewer, target) {
+  if (viewer === 'owner') return true;
+  if (viewer === 'delegate') return target !== 'owner';
+  return false;
+}
 
 const section = { mb: 3 };
 const rows = { display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' };
@@ -35,6 +44,11 @@ function memberError(cause) {
   if (cause?.code === 'E_PAIRING_CODE_UNKNOWN' || cause?.code === 'E_DEVICE_LINK_UNKNOWN') return 'This code or link was not found. Check it and try again.';
   if (cause?.code === 'E_DEVICE_LINK_REVOKED') return 'This link was withdrawn. Ask your family owner for a new one.';
   if (cause?.code === 'E_SESSION_REQUIRED' || cause?.code === 'E_NO_REGISTRATION') return 'Open this identity on a connected device before continuing.';
+  // PORCH-053: the server's admin refusals already speak family language —
+  // the final-owner refusal and the typed-name confirmation must render the
+  // server's own reason, never a generic stand-in.
+  if (cause?.code === 'E_LAST_OWNER' || cause?.code === 'E_CONFIRM_NAME') return cause?.message || 'The hub could not complete this action.';
+  if (cause?.code === 'E_FORBIDDEN' && cause?.status === 403 && typeof cause?.message === 'string' && cause.message.length > 0) return cause.message;
   return 'The hub could not complete this action. Check with your family owner if it continues.';
 }
 
@@ -714,6 +728,8 @@ export function OwnerConsole({ data, actions, navigate }) {
   const operation = useOperation(actions);
   const [issued, setIssued] = useState('');
   const [removing, setRemoving] = useState(null);
+  const [purging, setPurging] = useState(null);
+  const [purgeName, setPurgeName] = useState('');
   const [linking, setLinking] = useState(null);
   const [issuedDeviceLink, setIssuedDeviceLink] = useState('');
   const [draftLimits, setLimits] = useState(null);
@@ -781,9 +797,14 @@ export function OwnerConsole({ data, actions, navigate }) {
         : members.length ? <List dense>{members.map(person => {
           const activeDevices = (data.allDevices || []).filter(device => device.did === person.did && device.status === 'active').length;
           return <ListItem key={idOf(person)} divider sx={{ gap: 1, flexWrap: 'wrap' }}>
-            <ListItemText primary={person.name || person.did || 'Member'} secondary={[person.role, person.state, `${activeDevices} device${activeDevices === 1 ? '' : 's'}`, person.admittedAt && `Joined ${displayDate(person.admittedAt)}`, person.revokedAt && `Removed ${displayDate(person.revokedAt)}`].filter(Boolean).join(' · ')} />
+            <ListItemText primary={person.name || person.did || 'Member'} secondary={[roleLabel(person.role), person.state, `${activeDevices} device${activeDevices === 1 ? '' : 's'}`, person.admittedAt && `Joined ${displayDate(person.admittedAt)}`, person.revokedAt && `Removed ${displayDate(person.revokedAt)}`].filter(Boolean).join(' · ')} />
             {person.state === 'active' && typeof actions?.sendDeviceLink === 'function' && <Button size="small" disabled={operation.busy} onClick={() => setLinking(person)}>Send device link</Button>}
-            {person.state === 'active' && person.did !== data?.identity?.id && typeof actions?.revokeMember === 'function' && <Button color="error" size="small" onClick={() => setRemoving(person)}>Remove access</Button>}
+            {/* Role ladder (PORCH-053): promote/demote is owner-only; the
+                row renders the action the viewing member's own capability
+                grants and never for the owner row itself. */}
+            {person.state === 'active' && !person.isSelf && person.role !== 'owner' && viewerRole(data) === 'owner' && typeof actions?.setMemberRole === 'function' && <Button size="small" disabled={operation.busy} onClick={() => void operation.run('setMemberRole', [person, person.role === 'delegate' ? 'member' : 'delegate'], person.role === 'delegate' ? 'Returned to member.' : 'Delegate added.')}>{person.role === 'delegate' ? 'Return to member' : 'Make delegate'}</Button>}
+            {person.state === 'active' && person.did !== data?.identity?.id && canRemoveMember(viewerRole(data), person.role) && typeof actions?.revokeMember === 'function' && <Button color="error" size="small" onClick={() => setRemoving(person)}>Remove access</Button>}
+            {person.state !== 'revoked' && viewerRole(data) === 'owner' && person.did !== data?.identity?.id && typeof actions?.purgeMember === 'function' && <Button color="error" size="small" onClick={() => { setPurgeName(''); setPurging(person); }}>Delete member and posts…</Button>}
           </ListItem>;
         })}</List> : <Typography color="text.secondary">No members to show.</Typography>}
     </CardContent></Card>
@@ -870,6 +891,24 @@ export function OwnerConsole({ data, actions, navigate }) {
       <DialogActions><Button onClick={() => setRemoving(null)}>Keep member</Button><Button color="error" disabled={operation.busy} onClick={async () => {
         if (await operation.run('revokeMember', [removing], 'Membership removed.')) setRemoving(null);
       }}>Remove access</Button></DialogActions>
+    </Dialog>
+    {/* Permanent deletion (PORCH-053 ac-4): owner-only, the consequence
+        named in plain family language, and the typed member name as the
+        second factor — the button stays dead until the name matches. */}
+    <Dialog open={Boolean(purging)} onClose={() => { setPurging(null); setPurgeName(''); }} fullWidth maxWidth="xs">
+      <DialogTitle>Delete {purging?.name || 'this member'} and their posts?</DialogTitle>
+      <DialogContent>
+        <Typography>This cannot be undone. Everything {purging?.name || 'this member'} put on {networkName(data)} is deleted for good — their posts, their photos and videos, and every comment they wrote, on every post in the network. Their membership and their devices are removed too.</Typography>
+        <Typography sx={{ mt: 1 }}>Type their name to confirm: {purging?.name || purging?.did || ''}</Typography>
+        <TextField size="small" fullWidth sx={{ mt: 2 }} autoComplete="off" label="Member's name" value={purgeName} onChange={event => setPurgeName(event.target.value)} />
+        <Feedback operation={operation} />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => { setPurging(null); setPurgeName(''); }}>Keep member</Button>
+        <Button color="error" variant="contained" disabled={operation.busy || !purging || purgeName.trim().toLowerCase() !== String(purging.name || purging.did || '').trim().toLowerCase()} onClick={async () => {
+          if (await operation.run('purgeMember', [purging, purgeName], 'Member and posts deleted.')) { setPurging(null); setPurgeName(''); }
+        }}>Delete for good</Button>
+      </DialogActions>
     </Dialog>
     <Dialog open={inviteOpen} onClose={() => { setInviteOpen(false); setIssued(''); }} fullWidth maxWidth="xs">
       <DialogTitle>Make a join link</DialogTitle>
