@@ -8,6 +8,7 @@ import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQ
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { copyLink, directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, viewerRole, roleLabel } from './member-directory.js';
 import { updateCardModel } from './update.js';
+import { formatStorage, formatStorageMb, ceilingMbToGb, ceilingGbToMb } from './storage-format.js';
 import { Lockup, LampMark } from './brand.jsx';
 import { cssVars } from './theme.js';
 
@@ -742,8 +743,10 @@ export function OwnerConsole({ data, actions, navigate }) {
   const disk = available(data, 'disk') ? data?.disk : null;
   const settings = available(data, 'settings') ? data?.settings : null;
   const availability = data?.availability || {};
+  // PORCH-056: the wire carries the ceiling in MB, the console shows and
+  // edits GB — the draft state holds the human figure, the save converts.
   const limits = draftLimits || {
-    storageCeilingMb: settings?.quota?.storageCeilingMb ?? '',
+    storageCeilingGb: ceilingMbToGb(settings?.quota?.storageCeilingMb),
     retentionDays: settings?.quota?.retentionDays ?? '',
   };
   // The one owner action (PORCH-040): apply through the hub's shared update
@@ -776,7 +779,7 @@ export function OwnerConsole({ data, actions, navigate }) {
   async function saveLimits(event) {
     event.preventDefault();
     if (await operation.run('updateSettings', [{
-      storageCeilingMb: limits.storageCeilingMb === '' ? null : Number(limits.storageCeilingMb),
+      storageCeilingMb: ceilingGbToMb(limits.storageCeilingGb),
       retentionDays: limits.retentionDays === '' ? null : Number(limits.retentionDays),
     }], 'Storage settings saved.')) setLimits(null);
   }
@@ -839,12 +842,12 @@ export function OwnerConsole({ data, actions, navigate }) {
     <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Space and limits</Typography>
       {disk?.available === true ? <Alert severity={disk.uploadsHalted ? 'error' : disk.warning ? 'warning' : 'success'} sx={{ mb: 2 }}>
         {disk.uploadsHalted ? 'New uploads are paused by the disk guard. Existing content is still available.' : disk.warning ? 'Disk space is getting low. Uploads are still available.' : 'Disk space is within the hub thresholds.'}
-        {' '}Free: {disk.freeBytes?.toLocaleString()} bytes of {disk.totalBytes?.toLocaleString()} bytes.
+        {' '}Free: {formatStorage(disk.freeBytes) ?? 'unavailable'} of {formatStorage(disk.totalBytes) ?? 'unavailable'}.
       </Alert> : <Alert severity="info" sx={{ mb: 2 }}>Live disk status is not available from this hub.</Alert>}
-      {settings ? <><Typography>Stored media: {settings.usedBytes?.toLocaleString() ?? 'Unavailable'} bytes.</Typography>
-        <Typography color="text.secondary">Storage ceiling: {settings.quota?.storageCeilingMb == null ? 'Unset' : `${settings.quota.storageCeilingMb} MB`} · Retention: {settings.quota?.retentionDays == null ? 'Unset' : `${settings.quota.retentionDays} days`}</Typography>
+      {settings ? <><Typography>Stored media: {formatStorage(settings.usedBytes) ?? 'Unavailable'}.</Typography>
+        <Typography color="text.secondary">Storage ceiling: {settings.quota?.storageCeilingMb == null ? 'Unset' : formatStorageMb(settings.quota.storageCeilingMb) ?? 'Unset'} · Retention: {settings.quota?.retentionDays == null ? 'Unset' : `${settings.quota.retentionDays} days`}</Typography>
         <Box component="form" onSubmit={saveLimits} sx={{ ...rows, mt: 2 }}>
-          <TextField size="small" label="Storage ceiling (MB)" type="number" inputProps={{ min: 1, step: 1 }} value={limits.storageCeilingMb} onChange={event => setLimits(value => ({ ...(value || limits), storageCeilingMb: event.target.value }))} />
+          <TextField size="small" label="Storage ceiling (GB)" type="number" inputProps={{ min: 0.1, step: 0.1 }} value={limits.storageCeilingGb} onChange={event => setLimits(value => ({ ...(value || limits), storageCeilingGb: event.target.value }))} />
           <TextField size="small" label="Retention (days)" type="number" inputProps={{ min: 1, step: 1 }} value={limits.retentionDays} onChange={event => setLimits(value => ({ ...(value || limits), retentionDays: event.target.value }))} />
           <Button type="submit" variant="contained" disabled={operation.busy || typeof actions?.updateSettings !== 'function'}>Save limits</Button>
         </Box></> : <Typography color="text.secondary">Storage settings are not available from this hub.</Typography>}
