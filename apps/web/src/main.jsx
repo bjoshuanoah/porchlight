@@ -194,7 +194,11 @@ function App() {
     } else setNotice("Your family server is unreachable. Showing saved moments where available.");
     setRanked(result.ranked);
     const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult] = await Promise.allSettled([
-      request(liveActive, "social/console/groups"), request(liveActive, "social/console/members"),
+      // Member-plane groups (PORCH-030): the Groups page reads the group
+      // containers the member's own token can read — creation is open to
+      // every member, so an owner-gated console read would leave every
+      // plain member an empty Groups page.
+      request(liveActive, "social/groups"), request(liveActive, "social/console/members"),
       request(liveActive, "social/console/invites"), request(liveActive, "social/console/limits"),
       request(liveActive, "social/console/disk"), request(liveActive, "social/console/audit"),
       request({ ...liveActive, token: liveActive.identityToken }, "identity/devices"),
@@ -538,7 +542,32 @@ function App() {
       }));
     },
     loadComments: (post) => request(connectionForPost(post), `social/posts/${encodeURIComponent(post._id || post.id)}/comments`),
-    loadGroup: (id) => request(active, `social/timeline/groups/${encodeURIComponent(id)}`),
+    // Group management (PORCH-030, Oct 14 follow-up): the Members view reads
+    // group detail (roster + read-time names via /social/groups/:id) and its
+    // timeline from the origin-scoped group feed; creation and member adds
+    // ride the member plane — no elevation, the creator manages their group.
+    loadGroup: async (id) => {
+      const [detail, timeline] = await Promise.all([
+        request(active, `social/groups/${encodeURIComponent(id)}`),
+        request(active, `social/timeline/groups/${encodeURIComponent(id)}`),
+      ]);
+      const origin = active?.url ? new URL(active.url).origin : undefined;
+      const annotate = (post) => origin ? { ...post, origin } : post;
+      return { group: { ...detail.group, ...timeline.group }, posts: (timeline.posts ?? []).map(annotate) };
+    },
+    createGroup: async (name) => {
+      const result = await request(active, "social/groups", { method: "POST", body: JSON.stringify({ name }) });
+      await reload();
+      return result;
+    },
+    addGroupMembers: async (groupId, dids) => {
+      const result = await request(active, `social/groups/${encodeURIComponent(groupId)}/members`, {
+        method: "POST", body: JSON.stringify({ dids }),
+      });
+      await reload();
+      return result;
+    },
+    groupMemberCandidates: (q = "") => fetchMentionCandidates(active, q),
     search: (query) => request(active, `social/search?q=${encodeURIComponent(query)}`),
   }), [hidden, connections, active, identity, navigate, reload, posts, network]);
 

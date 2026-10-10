@@ -16,10 +16,20 @@ const OTHER = "net_other";
  * members (Cass, Devon, Pip) plus live membership tokens.
  */
 async function memberFixture() {
-  const fx = fixture({ networkIds: [FAMILY, OTHER] });
+  const NAMES = {
+    [OWNER]: "Brian Rivers",
+    [CASS]: "Cass Porter",
+    [DEVON]: "Devon Mills",
+    [PIP]: "Pip Larkin",
+  };
+  const fx = fixture({
+    networkIds: [FAMILY, OTHER],
+    memberNames: (dids) => dids.map((did) => ({ did, displayName: NAMES[did] ?? null })),
+  });
   await fx.collections.networks.updateOne({ _id: FAMILY }, { $set: { ownerDid: OWNER } });
   const mod = assembleSocialModule(fx.store, {
     verifyMemberIdToken: (token) => (token ? { did: token } : null),
+    memberNames: (dids) => dids.map((did) => ({ did, displayName: NAMES[did] ?? null })),
   });
   const devs = {
     owner: device("dev_owner"),
@@ -93,6 +103,9 @@ test("ac-1: the groups index and detail render for every member, scoped to their
     // The creating owner counts among the members, then the listed member.
     assert.deepEqual(group.members, [OWNER, DEVON]);
     assert.equal(group.createdBy, OWNER);
+    // The Members view renders family-facing names resolved at read time
+    // (PORCH-034 attribution); unset names stay null, never ids-as-names.
+    assert.deepEqual(group.names, { [OWNER]: "Brian Rivers", [DEVON]: "Devon Mills" });
 
     // ...and opens its group timeline (origin-filtered, member-scoped).
     const timeline = await fetch(`${base}/timeline/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.cass}` } });
@@ -196,7 +209,9 @@ test("ac-3: the creator adds members of the same network; authority and subset e
       body: JSON.stringify({ did: DEVON }),
     });
     assert.equal(add.status, 200);
-    assert.deepEqual((await add.json()).group.members, [CASS, DEVON]);
+    const added = (await add.json()).group;
+    assert.deepEqual(added.members, [CASS, DEVON]);
+    assert.deepEqual(added.names, { [CASS]: "Cass Porter", [DEVON]: "Devon Mills" });
 
     // Re-adding converges — membership stays a set.
     const again = await fetch(`${base}/groups/${groupId}/members`, {
@@ -257,7 +272,9 @@ test("ac-3: the creator adds members of the same network; authority and subset e
 
     // The Members view reads the updated roster from the group detail.
     const detail = await fetch(`${base}/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.cass}` } });
-    assert.deepEqual((await detail.json()).group.members, [CASS, DEVON, PIP]);
+    const readBack = (await detail.json()).group;
+    assert.deepEqual(readBack.members, [CASS, DEVON, PIP]);
+    assert.deepEqual(readBack.names, { [CASS]: "Cass Porter", [DEVON]: "Devon Mills", [PIP]: "Pip Larkin" });
   } finally {
     close();
   }

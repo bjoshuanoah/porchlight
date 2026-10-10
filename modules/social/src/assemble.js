@@ -111,7 +111,7 @@ export function assembleSocialModule(store, options = {}) {
     audit,
   });
   const quotaService = new QuotaService({ artifacts, networks, audit });
-  const groupService = new GroupService({ groups, memberships });
+  const groupService = new GroupService({ groups, memberships, membership: membershipService });
   const notificationService = new NotificationService({ notifications, membership: membershipService });
   const postService = new PostService({
     posts,

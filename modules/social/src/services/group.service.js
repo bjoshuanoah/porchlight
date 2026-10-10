@@ -16,11 +16,24 @@ export class GroupService {
    * @param {object} deps
    * @param {import("@porchlight/shared").CollectionLike} groups
    * @param {import("@porchlight/shared").CollectionLike} memberships
+   * @param {import("./membership.service.js").MembershipService} [membership]
    */
-  constructor({ groups, memberships }) {
+  constructor({ groups, memberships, membership = null }) {
     this.groups = groups;
     this.memberships = memberships;
+    this.membership = membership;
     this.models = socialModels;
+  }
+
+  /** A group read carries its roster's family-facing names (PORCH-034). */
+  async #named(group) {
+    if (!this.membership?.attributionNames || !Array.isArray(group?.members) || group.members.length === 0) {
+      return { ...group, names: {} };
+    }
+    const resolved = await this.membership.attributionNames({ networkId: group.networkId, dids: group.members });
+    const names = {};
+    for (const [did, value] of resolved) names[did] = value ?? null;
+    return { ...group, names };
   }
 
   /** The subset rule's predicate: one active membership row per network + DID. */
@@ -79,13 +92,15 @@ export class GroupService {
     return this.groups.find({ networkId: String(networkId) });
   }
 
-  /** Member-readable group detail: one container, scoped to the origin network. */
+  /** Member-readable group detail: one container, scoped to the origin network.
+   *  The read carries the roster's family-facing names (the Members view's
+   *  render rows; PORCH-034 attribution at read time). */
   async get({ networkId, groupId } = {}) {
     const group = await this.groups.findOne({ _id: groupId });
     if (!group || group.networkId !== String(networkId)) {
       throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
     }
-    return group;
+    return this.#named(group);
   }
 
   /**
@@ -117,7 +132,7 @@ export class GroupService {
     }
     const members = [...new Set([...(group.members ?? []), ...dids])];
     await this.groups.updateOne({ _id: group._id }, { $set: { members } });
-    return { ...group, members };
+    return this.#named({ ...group, members });
   }
 }
 
