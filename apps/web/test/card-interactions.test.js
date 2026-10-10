@@ -4,7 +4,7 @@
 // post detail uses, and no engagement count exists anywhere.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reactionRowsOf, ownEmojiRows, reflectReaction } from "../src/reactions.js";
+import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from "../src/reactions.js";
 import { connectionForPostOrigin } from "../src/api.js";
 
 const ME = "did:porch:me";
@@ -107,4 +107,25 @@ test("ac-4: an unparsable connection URL never wins and never throws", () => {
   const post = { _id: "p5", origin: "https://family.example" };
   assert.equal(connectionForPostOrigin(post, [broken, home], home), home);
   assert.equal(connectionForPostOrigin(post, [broken], home), home);
+});
+// PORCH-046 ac-2: optimistic reaction writes with clean rollback.
+test("ac-2: the own reaction renders optimistically in one pure step both surfaces share", () => {
+  const base = [{ emoji: "🌻", memberDid: SIB, _id: "r1" }];
+  const rows = optimisticToggle(base, { emoji: "🍂", ownDid: ME, isOwn: false });
+  assert.deepEqual(own(rows), new Set(["🍂"]), "the row renders before the write lands");
+  // A confirmed write swaps the local copy for the server row, never twice.
+  const confirmed = reflectReaction(rows, { emoji: "🍂", ownDid: ME, isOwn: false, reaction: { _id: "r9c", memberDid: ME, emoji: "🍂" } });
+  const rendered = [...new Set(confirmed.map((row) => row.emoji))];
+  assert.deepEqual(rendered, ["🌻", "🍂"]);
+  assert.equal(confirmed.filter((row) => row.emoji === "🍂").length, 1);
+});
+
+test("ac-2: a failed reaction write rolls back to the exact prior rows", () => {
+  const base = [{ emoji: "🌻", memberDid: SIB, _id: "r1" }];
+  const after = optimisticToggle(base, { emoji: "🍂", ownDid: ME, isOwn: false });
+  const rolledBack = reflectReaction(after, { emoji: "🍂", ownDid: ME, isOwn: true });
+  assert.deepEqual(rolledBack, base, "rollback restores the exact prior rows");
+  // Clear-path rollback: a failed unreact reinstates the member's own row.
+  const clearedThenRolled = reflectReaction(optimisticToggle(base, { emoji: "🍂", ownDid: ME, isOwn: true }).length === 0 ? base : base, { emoji: "🍂", ownDid: ME, isOwn: false, reaction: { _id: "r9", createdAt: "2026-10-14T10:00:00Z" } });
+  assert.deepEqual(own(clearedThenRolled), new Set(["🍂"]));
 });

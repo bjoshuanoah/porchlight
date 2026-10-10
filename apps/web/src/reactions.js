@@ -36,3 +36,19 @@ export function reflectReaction(base, { emoji, ownDid, isOwn, reaction }) {
     createdAt: reaction?.createdAt ?? new Date().toISOString(),
   }];
 }
+
+// Optimistic toggle (PORCH-046 ac-2): the member's own row reflects
+// IMMEDIATELY, in one pure step both surfaces (card and detail) share.
+// The write decides the settle: success swaps the local row for the
+// confirmed server row (reflectReaction is idempotent, never a duplicate),
+// failure reverts to the exact prior rows.
+export function optimisticToggle(base, { emoji, ownDid, isOwn }) {
+  const rows = Array.isArray(base) ? base : [];
+  if (!emoji) return rows;
+  return reflectReaction(rows, {
+    emoji,
+    ownDid,
+    isOwn: isOwn ? true : false,
+    reaction: isOwn ? null : { _id: `local:${emoji}`, createdAt: new Date().toISOString() },
+  });
+}

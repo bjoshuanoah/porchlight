@@ -83,8 +83,9 @@ test('PORCH-045 ac-5: interactions bind to the post, never the slide', () => {
   // or reply call lives in the carousel; the slide position is local state.
   const carousel = social.slice(social.indexOf('function MediaCarousel'), social.indexOf('// PORCH-045: upload previews'));
   assert.doesNotMatch(carousel, /\binvoke\(|\bunreact\b|\bsubmitReply\b/);
-  // PostCard's writes bind to the post object, never to a slide.
-  const postCard = social.slice(social.indexOf('return <Card sx={cardSx}'), social.indexOf('</Card>;') + 9);
+  // PostCard's writes bind to the post object, never to a slide. The
+  // optimistic card reply (PORCH-046) rides the same submitReply call.
+  const postCard = social.slice(social.indexOf('function PostCard'), social.indexOf('</Card>;') + 9);
   assert.match(postCard, /invoke\(actions, 'vote', post/);
   assert.match(postCard, /invoke\(actions, 'submitReply', post/);
   const reactions = social.slice(social.indexOf('function PresentReactions'), social.indexOf('function PostCard'));

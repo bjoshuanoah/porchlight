@@ -42,6 +42,8 @@ function withFeed(fx, rankingOverrides = {}) {
     membership: fx.membership,
     ranking,
     media: fx.media,
+    comments: fx.collections.comments,
+    reactions: fx.collections.reactions,
   });
   return { ranking, feed };
 }
@@ -54,6 +56,8 @@ function feedOver(fx, ranking) {
     membership: fx.membership,
     ranking,
     media: fx.media,
+    comments: fx.collections.comments,
+    reactions: fx.collections.reactions,
   });
 }
 
@@ -312,6 +316,10 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
     membership: recordingMembership,
     ranking: new RankingService(),
     media: fx.media,
+    // Conversation previews (PORCH-046) read the origin's replies and
+    // reaction rows; those two collections are the only additions.
+    comments: recording("comments", fx.collections.comments),
+    reactions: recording("reactions", fx.collections.reactions),
   });
 
   const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "hideable" });
@@ -320,7 +328,11 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
   await spyFeed.timeline({ accessToken: susan });
   await spyFeed.ranked({ accessToken: susan });
   await spyFeed.search({ accessToken: susan, query: "hideable" });
-  assert.deepEqual([...new Set(opened)].sort(), ["derived_data", "groups", "membership", "posts"], "no hidden-list storage is ever opened by feed reads");
+  assert.deepEqual(
+    [...new Set(opened)].sort(),
+    ["comments", "derived_data", "groups", "membership", "posts", "reactions"],
+    "no hidden-list storage is ever opened by feed reads",
+  );
   assert.equal(typeof spyFeed.storeHidden === "function", false, "no hidden-write surface exists on the feed service");
 
   // The client-side application: hidden ids drop from BOTH surfaces at
@@ -367,4 +379,92 @@ test("ac-5: plain-text search spans captions, people tags, and album names withi
     () => feed.search({ accessToken: susan, query: "   " }),
     (error) => error.code === "E_SEARCH_QUERY_REQUIRED",
   );
+});
+
+/** PORCH-046: conversation previews on feed views (ac-5, ac-6, ac-4). */
+test("ac-5: a post view carries its latest five replies chronologically plus the conversation total", async () => {
+  const names = { [SUSAN]: "Susan Hale", [JUNE]: "June River" };
+  const testFx = fixture({ memberNames: async (dids) => dids.map((did) => ({ did, displayName: names[did] ?? null })) });
+  const dev = device("dev_s");
+  const juneDev = device("dev_j");
+  const fx = { ...testFx, dev, juneDev };
+  const susan = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
+  await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev });
+  const feed = new FeedService({
+    posts: fx.collections.posts,
+    derivedData: fx.collections.derivedData,
+    groups: fx.collections.groups,
+    membership: fx.membership,
+    ranking: new RankingService(),
+    media: fx.media,
+    comments: fx.collections.comments,
+    reactions: fx.collections.reactions,
+  });
+
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "conversation starter" });
+  for (let index = 0; index < 52; index += 1) {
+    const hourAgo = new Date(Date.now() - (1000 - index)).toISOString();
+    await fx.collections.comments.insertOne({
+      _id: `cmt_test_${index}`, postId: post._id, networkId: FAMILY,
+      authorDid: index % 2 ? JUNE : SUSAN, parentId: null, body: `reply ${index}`,
+      mentions: [], createdAt: hourAgo,
+    });
+  }
+
+  const [view] = (await feed.timeline({ accessToken: susan })).posts;
+  assert.equal(view.replyTotal, 52, "the expander count is the conversation's full length");
+  assert.equal(view.replySlice.length, 5, "the card slice renders only the five latest replies");
+  assert.deepEqual(
+    view.replySlice.map((reply) => reply.body),
+    ["reply 47", "reply 48", "reply 49", "reply 50", "reply 51"],
+    "the slice is the most recent replies in natural reading order",
+  );
+  assert.equal(
+    view.replySlice.every((reply) => typeof reply.authorName === "string" && reply.authorName.length > 0),
+    true,
+    "slice replies carry read-time family-facing names",
+  );
+});
+
+test("ac-5: a post with five or fewer replies carries them all — nothing is withheld", async () => {
+  const fx = feedFixture();
+  const { susan } = await admitAll(fx);
+  const { feed } = withFeed(fx);
+
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "small talk" });
+  await fx.collections.comments.insertOne({ _id: "cmt_one", postId: post._id, networkId: FAMILY, authorDid: JUNE, parentId: null, body: "first", mentions: [], createdAt: "2026-10-14T10:00:00Z" });
+
+  const [view] = (await feed.timeline({ accessToken: susan })).posts;
+  assert.equal(view.replyTotal, 1);
+  assert.deepEqual(view.replySlice.map((reply) => reply.body), ["first"]);
+});
+
+test("ac-5/ac-4: reaction rows ride the view as authored; containment excludes foreign-network rows; no counters ride views", async () => {
+  const fx = feedFixture();
+  const { susan } = await admitAll(fx);
+  const { feed } = withFeed(fx);
+
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "reactable" });
+  await fx.collections.reactions.insertOne({ _id: "rct_1", postId: post._id, networkId: FAMILY, memberDid: JUNE, emoji: "🌻", createdAt: "2026-10-14T10:00:00Z" });
+  // Foreign-network rows (and a foreign reply) never decorate this origin.
+  await fx.collections.reactions.insertOne({ _id: "rct_2", postId: post._id, networkId: OTHER, memberDid: JUNE, emoji: "🐍", createdAt: "2026-10-14T10:01:00Z" });
+  await fx.collections.comments.insertOne({ _id: "cmt_foreign", postId: post._id, networkId: OTHER, authorDid: JUNE, parentId: null, body: "cross-origin", mentions: [], createdAt: "2026-10-14T10:01:00Z" });
+
+  const [view] = (await feed.timeline({ accessToken: susan })).posts;
+  assert.deepEqual(view.reactionRows.map((row) => row.emoji), ["🌻"], "rows render as given: no counts, no cross-origin noise");
+  assert.equal(view.replyTotal, 0);
+  assert.equal(view.replySlice.length, 0);
+  assert.equal("interactionCounters" in view, false, "the rank inputs stay off every read view");
+  assert.equal("voteRecords" in view, false);
+  assert.equal(view.reactionRows[0].memberDid, JUNE, "per-member rows identify the member's own reaction for the warm highlight only");
+});
+
+test("ac-5: an empty feed read performs no conversation reads and carries plain views", async () => {
+  const fx = feedFixture();
+  const { susan } = await admitAll(fx);
+  const { feed } = withFeed(fx);
+  const timeline = (await feed.timeline({ accessToken: susan })).posts;
+  assert.deepEqual(timeline, []);
+  const ranked = (await feed.ranked({ accessToken: susan })).posts;
+  assert.deepEqual(ranked, []);
 });

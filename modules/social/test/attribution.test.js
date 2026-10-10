@@ -48,6 +48,8 @@ function feedOver(fx) {
     membership: fx.membership,
     ranking: { rank: (rows) => rows.map((post) => ({ post })) },
     media: fx.media,
+    comments: fx.collections.comments,
+    reactions: fx.collections.reactions,
   });
 }
 
