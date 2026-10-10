@@ -343,6 +343,41 @@ test("ac-2 (PORCH-010): membership sessions restore for the unchanged member on 
   assert.equal(await membership.verifyAccessToken(restored.sessions[0].accessToken, { networkId: "net_other" }), null);
 });
 
+test("restore and admit carry the member's family-facing name — a re-bound device never masquerades as its device label (PORCH-034)", async () => {
+  const { invites, membership } = fixture({
+    memberNames: async (dids) => dids.map((did) => ({ did, displayName: did === "did:porchlight:susan" ? "Susan Hale" : null })),
+  });
+  const invite = await invites.issue({ networkId: "net_1", role: "member" });
+  const device = okp();
+  const admitted = await membership.admit({
+    code: invite.token,
+    identityAccessToken: "did:porchlight:susan",
+    deviceId: "dev_1",
+    devicePublicKeyJwk: device.publicKeyJwk,
+    signature: device.sign(`porchlight-join:${invite.token}`).toString("base64url"),
+  });
+  assert.equal(admitted.name, "Susan Hale");
+
+  const restored = await membership.restoreSession({ identityAccessToken: "did:porchlight:susan", deviceId: "dev_2" });
+  assert.equal(restored.sessions.length, 1);
+  assert.equal(restored.sessions[0].name, "Susan Hale");
+
+  // An assembly with no name resolver renders nameless sessions — never invents one.
+  const plain = fixture();
+  const plainInvite = await plain.invites.issue({ networkId: "net_1", role: "member" });
+  const plainDevice = okp();
+  const plainAdmit = await plain.membership.admit({
+    code: plainInvite.token,
+    identityAccessToken: "did:porchlight:susan",
+    deviceId: "dev_1",
+    devicePublicKeyJwk: plainDevice.publicKeyJwk,
+    signature: plainDevice.sign(`porchlight-join:${plainInvite.token}`).toString("base64url"),
+  });
+  assert.equal(plainAdmit.name, null);
+  const plainRestored = await plain.membership.restoreSession({ identityAccessToken: "did:porchlight:susan", deviceId: "dev_3" });
+  assert.equal(plainRestored.sessions[0].name, null);
+});
+
 test("ac-2 (PORCH-010): restore never widens the perimeter — no proof, no membership", async () => {
   const { invites, membership } = fixture();
   const invite = await invites.issue({ networkId: "net_1" });
