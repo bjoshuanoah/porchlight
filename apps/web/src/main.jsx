@@ -264,9 +264,13 @@ function App() {
         body: JSON.stringify(route === "identity/pair" ? { code: grant, device } : { token: grant, device }),
       }));
     const session = await openDeviceSession(hub, registration, request);
+    // PORCH-034 follow-up: the device label ("Browser") describes the
+    // hardware only — the person's name arrives from the hub with the
+    // restored membership, and the device-local identity never masquerades
+    // as its device.
     const next = {
       url: origin, name: network?.name || "Your family",
-      identity: { id: registration.did, name: registration.label || "Family member" },
+      identity: { id: registration.did, name: "Family member" },
       identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
       deviceId: registration.deviceId, token: null, refreshToken: null, networkId: null,
       renewedAt: Date.now(),
@@ -284,6 +288,7 @@ function App() {
         next.token = first.accessToken;
         next.refreshToken = first.refreshToken;
         next.networkId = first.networkId;
+        if (first.name) next.identity.name = first.name;
       }
     } catch { /* no membership row yet: the plain notice below names it */ }
     const revised = connections.filter((item) => item.identity?.id !== registration.did).concat(next);
@@ -310,7 +315,7 @@ function App() {
     });
     const next = {
       url, name: network?.name || "Your family",
-      identity: { id: did, name: identityName || "Family member" },
+      identity: { id: did, name: admitted.name || identityName || "Family member" },
       identityToken: session.accessToken, identityRefreshToken: session.refreshToken,
       deviceId, token: admitted.accessToken, refreshToken: admitted.refreshToken, networkId: admitted.networkId,
       renewedAt: Date.now(),
@@ -384,10 +389,27 @@ function App() {
       const next = connections.find((item) => item.identity?.id === id);
       if (!next) throw new Error("This person is not connected on this device.");
       const session = await openDeviceSession(next, { did: id, deviceId: next.deviceId }, request);
-      const updated = connections.map((item) => item === next ? { ...item, identityToken: session.accessToken, identityRefreshToken: session.refreshToken, renewedAt: Date.now() } : item);
+      // PORCH-034 follow-up: the hub resolves the member's family-facing
+      // name at re-credential, healing any device-local stale naming.
+      let hubName = null;
+      let hubTokens = null;
+      try {
+        const restored = await request({ url: next.url, token: session.accessToken }, "social/session/restore", {
+          method: "POST",
+          body: JSON.stringify({ identityAccessToken: session.accessToken, deviceId: next.deviceId }),
+        });
+        hubName = restored?.sessions?.[0]?.name || null;
+        hubTokens = restored?.sessions?.[0] ?? null;
+      } catch { /* membership state unchanged on this device */ }
+      const updated = connections.map((item) => item === next ? {
+        ...item,
+        identity: hubName ? { ...item.identity, name: hubName } : item.identity,
+        identityToken: session.accessToken, identityRefreshToken: session.refreshToken, renewedAt: Date.now(),
+        ...(hubTokens ? { token: hubTokens.accessToken, refreshToken: hubTokens.refreshToken, networkId: hubTokens.networkId } : {}),
+      } : item);
       saveConnections(stored, origin, updated);
       setConnections(updated);
-      setIdentity(next.identity);
+      setIdentity(updated.find((item) => item.identity?.id === id)?.identity ?? next.identity);
       setPosts(cachedTimeline(stored, `${origin}:${id}`));
       setRanked([]);
       setHidden(hiddenPosts(stored, `${origin}:${id}`));

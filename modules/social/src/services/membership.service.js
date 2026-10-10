@@ -142,7 +142,12 @@ export class MembershipService {
     await this.audit("login", { networkId, did: membership.did, detail: { deviceId, inviteId: inviteRow._id } });
 
     const tokens = await this.issueSession({ membership, deviceId });
-    return { membership: this.view(membership), networkId, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, membershipSessionId: tokens._id };
+    // PORCH-034 follow-up: a re-joining device learns the member's
+    // family-facing name at admission, so the device never falls back to
+    // presenting the device label as the person.
+    const resolved = this.memberNames ? await this.memberNames([membership.did]) : [];
+    const name = (resolved ?? []).find((row) => row.did === membership.did)?.displayName ?? null;
+    return { membership: this.view(membership), networkId, name, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, membershipSessionId: tokens._id };
   }
 
   /** Enroll (or refresh) the per-network device key copy used to verify writes. */
@@ -382,10 +387,20 @@ export class MembershipService {
     if (!rows.length) {
       throw typedError("E_NOT_A_MEMBER", "You are not currently a member of a network on this hub.");
     }
+    const members = [...new Set(rows.map((row) => row.did))];
+    // The member's own name on their own re-credential rides the identity
+    // plane directly (these rows are already live membership gates); the
+    // per-origin containment discipline applies to content attribution,
+    // not to the authenticated member's self name.
+    const resolved = this.memberNames ? await this.memberNames(members) : [];
+    const byDid = new Map((resolved ?? []).map((row) => [row.did, row.displayName ?? null]));
     const sessions = [];
     for (const membership of rows) {
       const tokens = await this.issueSession({ membership, deviceId });
-      sessions.push({ networkId: membership.networkId, role: membership.role, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+      // PORCH-034 follow-up: every re-credential returns the member's
+      // family-facing name, so a re-bound device stores the person — never
+      // the device label — as the identity's presentation name.
+      sessions.push({ networkId: membership.networkId, role: membership.role, name: byDid.get(membership.did) ?? null, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
     }
     return { did: identity.did, sessions };
   }
