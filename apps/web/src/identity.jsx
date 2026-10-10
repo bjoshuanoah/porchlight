@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, List, ListItem, ListItemAvatar, ListItemText,
-  Paper, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography,
+  Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { copyLink, directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, viewerRole, roleLabel } from './member-directory.js';
 import { updateCardModel } from './update.js';
+import { consoleTabs } from './console-tabs.js';
 import { formatStorage, formatStorageMb, ceilingMbToGb, ceilingGbToMb } from './storage-format.js';
 import { Lockup, LampMark } from './brand.jsx';
 import { cssVars } from './theme.js';
@@ -737,6 +738,11 @@ export function OwnerConsole({ data, actions, navigate }) {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateFeedback, setUpdateFeedback] = useState(null);
+  // PORCH-057: the console's areas render as distinct tabs (the model of
+  // record lives in console-tabs.js). Panels stay mounted while hidden, so
+  // the drafts (limits, media root) survive tab switches.
+  const [tab, setTab] = useState('invitations');
+  const [draftRoot, setDraftRoot] = useState(null);
   const members = available(data, 'members') ? data?.members || [] : null;
   const invites = available(data, 'invites') ? data?.invites || [] : null;
   const audit = available(data, 'audit') ? data?.audit || [] : null;
@@ -783,9 +789,36 @@ export function OwnerConsole({ data, actions, navigate }) {
       retentionDays: limits.retentionDays === '' ? null : Number(limits.retentionDays),
     }], 'Storage settings saved.')) setLimits(null);
   }
+  // Media-root edit (PORCH-054 / PORCH-057): a failing path is refused with
+  // the check's reason, surfaced verbatim — no generic stand-in, never a move
+  // of existing media.
+  async function saveMediaRoot(event) {
+    event.preventDefault();
+    const root = (draftRoot ?? '').trim();
+    if (!root) return;
+    operation.setError('');
+    operation.setNotice('');
+    try {
+      await actions.editMediaRoot(root);
+      setDraftRoot(null);
+      operation.setNotice('Media root saved. Existing media never moved — move the archive and repoint, in that order.');
+    } catch (cause) {
+      operation.setError(cause?.body?.error || memberError(cause));
+    }
+  }
   return <Box sx={{ maxWidth: 950, mx: 'auto' }}>
     <Heading title="Owner console" subtitle={`Invitations, members, and trust status for ${networkName(data)}.`} />
     <Feedback operation={operation} />
+    <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+      <Button onClick={() => navigate?.('/profile')}>Back to profile</Button>
+    </Box>
+    {/* PORCH-057: the one stacked scroll became distinct tabs. Scrollable
+        variant keeps the bar usable on narrow mobile web (the bar scrolls,
+        the page never does); panels stay mounted while hidden. */}
+    <Tabs value={tab} onChange={(event, value) => setTab(value)} variant="scrollable" scrollButtons={false} aria-label="Owner console sections" sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+      {consoleTabs.map(({ id, label }) => <Tab key={id} value={id} label={label} id={`owner-tab-${id}`} aria-controls={`owner-tabpanel-${id}`} />)}
+    </Tabs>
+    <div role="tabpanel" id="owner-tabpanel-invitations" aria-labelledby="owner-tab-invitations" hidden={tab !== 'invitations'}>
     <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Invitations</Typography>
       <Button variant="contained" disabled={operation.busy || typeof actions?.issueInvite !== 'function'} onClick={() => setInviteOpen(true)}>Make a join link</Button>
       {issued && <Alert severity="info" sx={{ mt: 2 }}>Share this invitation: {issued}</Alert>}
@@ -795,6 +828,8 @@ export function OwnerConsole({ data, actions, navigate }) {
           {item.status === 'unused' && typeof actions?.revokeInvite === 'function' && <Button color="error" size="small" disabled={operation.busy} onClick={() => operation.run('revokeInvite', [idOf(item)], 'Invitation revoked.')}>Revoke</Button>}
         </ListItem>)}</List> : <Typography color="text.secondary" sx={{ mt: 2 }}>No invitations have been issued.</Typography>}
     </CardContent></Card>
+    </div>
+    <div role="tabpanel" id="owner-tabpanel-members" aria-labelledby="owner-tab-members" hidden={tab !== 'members'}>
     <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Members</Typography>
       {members === null ? <Typography color="text.secondary">Member status is not available from this hub.</Typography>
         : members.length ? <List dense>{members.map(person => {
@@ -839,6 +874,8 @@ export function OwnerConsole({ data, actions, navigate }) {
             {row.status === 'unused' && typeof actions?.revokeDeviceGrant === 'function' && <Button color="error" size="small" disabled={operation.busy} onClick={() => void operation.run('revokeDeviceGrant', [idOf(row)], 'Device link withdrawn.')}>Withdraw</Button>}
           </ListItem>)}</List>}
     </CardContent></Card>
+    </div>
+    <div role="tabpanel" id="owner-tabpanel-storage" aria-labelledby="owner-tab-storage" hidden={tab !== 'storage'}>
     <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Space and limits</Typography>
       {disk?.available === true ? <Alert severity={disk.uploadsHalted ? 'error' : disk.warning ? 'warning' : 'success'} sx={{ mb: 2 }}>
         {disk.uploadsHalted ? 'New uploads are paused by the disk guard. Existing content is still available.' : disk.warning ? 'Disk space is getting low. Uploads are still available.' : 'Disk space is within the hub thresholds.'}
@@ -854,6 +891,24 @@ export function OwnerConsole({ data, actions, navigate }) {
       <Box sx={{ mt: 2 }}><Button disabled={!data?.identity || !data?.connections?.some(item => item.identity?.id === data.identity.id && item.token) || operation.busy || typeof actions?.exportData !== 'function'} onClick={() => operation.run('exportData', [], 'Archive download started.')}>Download archive</Button></Box>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>The archive includes your authored posts, comments, reactions, and original media. Backup status is not exposed by this hub.</Typography>
     </CardContent></Card>
+    {/* Media-root setting (PORCH-054's hub surface, rendered by PORCH-057):
+        current root with its readiness state, and the edit whose refused
+        path names its check; the no-migration sentence rides the hub's note
+        verbatim. */}
+    <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Media storage</Typography>
+      {(availability?.mediaRoot === false || data?.mediaRoot == null) ? <Typography color="text.secondary">Media-root status is not available from this hub.</Typography>
+        : <>
+          <Typography sx={{ wordBreak: 'break-all' }}>Media root: {data.mediaRoot.root == null ? "The hub's default location" : data.mediaRoot.root}</Typography>
+          <Typography color="text.secondary">{data.mediaRoot.state === 'ready' ? 'The volume is ready; media is stored there.' : `The volume is not ready${data.mediaRoot.check ? ` — check: ${data.mediaRoot.check}` : ''}${data.mediaRoot.reason ? `: ${data.mediaRoot.reason}` : '.'}`}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{data.mediaRoot.note}</Typography>
+          <Box component="form" onSubmit={saveMediaRoot} sx={{ ...rows, mt: 2 }}>
+            <TextField size="small" label="Media root path" autoComplete="off" sx={{ minWidth: 260, '& input': { wordBreak: 'break-all' } }} value={draftRoot ?? ''} onChange={event => setDraftRoot(event.target.value)} />
+            <Button type="submit" variant="contained" disabled={operation.busy || typeof actions?.editMediaRoot !== 'function'}>Save media root</Button>
+          </Box>
+        </>}
+    </CardContent></Card>
+    </div>
+    <div role="tabpanel" id="owner-tabpanel-updates" aria-labelledby="owner-tab-updates" hidden={tab !== 'updates'}>
     <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Updates</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Updates are owner-initiated only — this hub never fetches, downloads, or applies a release on its own.</Typography>
       {!available(data, 'update') || !data.update ? <Typography color="text.secondary">Release status is not available from this hub.</Typography>
@@ -870,12 +925,14 @@ export function OwnerConsole({ data, actions, navigate }) {
         })()}
       {updateFeedback && <Alert severity={updateFeedback.severity} sx={{ mt: 2 }}>{updateFeedback.message}</Alert>}
     </CardContent></Card>
+    </div>
+    <div role="tabpanel" id="owner-tabpanel-activity" aria-labelledby="owner-tab-activity" hidden={tab !== 'activity'}>
     <Card><CardContent><Typography variant="h6" gutterBottom>Recent activity</Typography>
       {audit === null ? <Typography color="text.secondary">Activity status is not available from this hub.</Typography>
         : audit.length ? <List dense>{audit.map((entry, index) => <ListItem key={idOf(entry) || index} divider><ListItemText primary={entry.action || 'Activity'} secondary={[entry.did, displayDate(entry.createdAt)].filter(Boolean).join(' · ')} /></ListItem>)}</List>
           : <Typography color="text.secondary">No activity is recorded here yet.</Typography>}
-      <Button onClick={() => navigate?.('/profile')}>Back to profile</Button>
     </CardContent></Card>
+    </div>
     <Dialog open={Boolean(linking)} onClose={() => { setLinking(null); setIssuedDeviceLink(''); }} fullWidth maxWidth="xs">
       <DialogTitle>Send a device link to {linking?.name || 'this member'}?</DialogTitle>
       <DialogContent><Typography>The link works once, for 24 hours, and only for this member's place on {networkName(data)} — it never creates a new identity. Share it in a family chat like any other link.</Typography>
