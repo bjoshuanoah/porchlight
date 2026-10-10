@@ -9,6 +9,13 @@
  * the generator produces chunks — no server-local staging — with the
  * Content-Disposition attachment name carrying the network's export name.
  */
+import {
+  RENDITION_CACHE_CONTROL,
+  ORIGINAL_CACHE_CONTROL,
+  contentAddressMatches,
+  ifNoneMatchSatisfied,
+} from "./media-response.js";
+
 export class MediaController {
   /**
    * @param {object} deps
@@ -73,7 +80,20 @@ export class MediaController {
         mediaId: req.params?.mediaId,
         renditionKind: req.params?.kind,
       });
+      // Content-addressed and immutable (PORCH-044 ac-3): the URL carries
+      // the rendition's sha256, so the long-lived browser-cache contract is
+      // safe — a mismatched content address is not that rendition.
+      if (!contentAddressMatches(req.query?.v ?? null, rendition.sha256)) {
+        return res.status(404).json({ error: "That rendition has not been generated yet.", code: "E_RENDITION_NOT_FOUND" });
+      }
+      res.set("Cache-Control", RENDITION_CACHE_CONTROL);
+      res.set("ETag", `"${rendition.sha256}"`);
       res.set("X-Porchlight-Sha256", rendition.sha256);
+      res.set("X-Porchlight-Media-Width", String(rendition.width ?? 0));
+      res.set("X-Porchlight-Media-Height", String(rendition.height ?? 0));
+      if (ifNoneMatchSatisfied(req, rendition.sha256)) {
+        return res.status(304).end();
+      }
       return res.status(200).type(rendition.contentType).send(rendition.bytes);
     } catch (error) {
       return this.memberError(res, error);
@@ -87,6 +107,9 @@ export class MediaController {
         accessToken: this.bearer(req),
         mediaId: req.params?.mediaId,
       });
+      // Originals are never pre-cached (PORCH-044 ac-3): the explicit
+      // archive action always revalidates against the archive.
+      res.set("Cache-Control", ORIGINAL_CACHE_CONTROL);
       res.set("X-Porchlight-Sha256", original.sha256);
       return res.status(200).type(original.contentType).send(original.bytes);
     } catch (error) {
@@ -155,6 +178,7 @@ export class MediaController {
       E_ORIGINAL_BYTES_MISSING: 500,
       E_BLOB_MISSING: 500,
       E_EXPORT_MEDIA_MISSING: 500,
+      E_MEDIA_UNDECODABLE: 415,
     };
     if (error?.code && plain[error.code]) {
       return res.status(plain[error.code]).json({ error: error.message, code: error.code });

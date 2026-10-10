@@ -225,10 +225,16 @@ async function bootMember(hub: TestHub, port: number, ownerAuth: Auth, displayNa
   };
 }
 
-/** Resumable original upload through the real media API; returns its mediaId. */
-async function uploadOriginal(port: number, pair: DevicePair, auth: Auth, sizeBytes = 12): Promise<string> {
+/** Resumable original upload through the real media API; returns its mediaId.
+ *  The commit probe (PORCH-044) accepts only browser-renderable media, so the
+ *  bytes are a real (decodable) 48×32 PNG fixture. */
+const FIXTURE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAASUlEQVRYhe2WAQkAQAwCF8dYRruoH2PPOFgAET03NF/drCtAQdGhmiFsWdbxg2CMDtUMYcuyDiF80KJDNUPYssihCMY6HRwe1weRi/BbpNIMlwAAAABJRU5ErkJggg==",
+  "base64",
+);
+async function uploadOriginal(port: number, pair: DevicePair, auth: Auth, sizeBytes = FIXTURE_PNG.length): Promise<string> {
   const contentType = "image/png";
-  const bytes = randomBytes(sizeBytes);
+  const bytes = FIXTURE_PNG;
   const begin = await call(port, "/api/social/media/uploads", {
     method: "POST",
     headers: auth,

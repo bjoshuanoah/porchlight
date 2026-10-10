@@ -11,6 +11,13 @@ const CAROL = "did:porchlight:carol";
 const FAMILY = "net_family";
 const OTHER = "net_other";
 
+// A real (decodable) 48×32 PNG — the commit probe (PORCH-044) accepts only
+// browser-renderable media, so uploads carry renderable bytes.
+const FIXTURE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAASUlEQVRYhe2WAQkAQAwCF8dYRruoH2PPOFgAET03NF/drCtAQdGhmiFsWdbxg2CMDtUMYcuyDiF80KJDNUPYssihCMY6HRwe1weRi/BbpNIMlwAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 const CHUNK_SIZE = 16;
 
 /**
@@ -317,7 +324,7 @@ test("ac-3: albums serve renditions by default; original retrieval is the explic
   const fx = albumFixture();
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
   const carol = await admitted(fx, { networkId: OTHER, did: CAROL, device: fx.otherDev });
-  const original = Buffer.from("JPEGORIGINALBYTES:the-full-quality-family-album-photo-archive", "utf8");
+  const original = FIXTURE_PNG;
   const committed = await upload(fx.mediaService, susan, original);
 
   const post = await fx.posts.create({
@@ -379,7 +386,7 @@ test("ac-3: albums serve renditions by default; original retrieval is the explic
 
     // Album containment: media that is not an album item does not exist on
     // the album surface, even within the same origin network.
-    const otherMedia = await upload(fx.mediaService, susan, Buffer.from("UNRELATED-ORIGINAL-BYTES-not-in-the-album", "utf8"));
+    const otherMedia = await upload(fx.mediaService, susan, FIXTURE_PNG);
     const outsideRes = await fetch(`${base}/albums/${encodeURIComponent(album)}/media/${otherMedia.mediaId}/renditions/album`, {
       headers: { authorization: `Bearer ${susan.token}` },
     });

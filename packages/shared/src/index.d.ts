@@ -21,6 +21,13 @@ export interface PorchlightConfig {
   };
   daemons: { mongoPort: number; redisPort: number };
   quota: { storageCeilingMb: number | null; retentionDays: number | null };
+  /** PORCH-044: the rendition ladder rungs (owner-readable configuration). */
+  media: {
+    renditions: {
+      image: Record<string, number>;
+      video: Record<string, number>;
+    };
+  };
 }
 
 export declare const DEFAULT_CONFIG: Readonly<PorchlightConfig>;

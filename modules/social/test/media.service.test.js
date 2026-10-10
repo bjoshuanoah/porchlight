@@ -1,10 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { device, fixture, canonicalJson } from "./helpers/content.fixture.js";
 import { assembleSocialModule } from "../src/assemble.js";
-import { renditionBytes, MESSAGES } from "../src/services/media.service.js";
+import {
+  MESSAGES,
+  DEFAULT_RENDITION_RUNGS,
+  normalizeRenditionRungs,
+  rungsForContentType,
+} from "../src/services/media.service.js";
 import { sha256Hex } from "../src/services/media.store.js";
+import sharp from "sharp";
+import ffmpegStatic from "ffmpeg-static";
 
 const SUSAN = "did:porchlight:susan";
 const JUNE = "did:porchlight:june";
@@ -19,7 +30,7 @@ const CHUNK_SIZE = 16;
  * chunk size and an injectable disk probe. Returns the module's services
  * plus admission helpers that return real membership tokens.
  */
-function mediaFixture({ diskProbe = async () => ({ totalBytes: 1_000_000, freeBytes: 900_000 }) } = {}) {
+function mediaFixture({ diskProbe = async () => ({ totalBytes: 1_000_000, freeBytes: 900_000 }), chunkSize = CHUNK_SIZE } = {}) {
   const fx = fixture();
   // Owner-root rule (PORCH-015): the hub-owner identity founded this
   // network, so Susan's admission resolves the owner role — the console
@@ -27,7 +38,7 @@ function mediaFixture({ diskProbe = async () => ({ totalBytes: 1_000_000, freeBy
   fx.collections.networks.updateOne({ _id: FAMILY }, { $set: { ownerDid: SUSAN } });
   const mod = assembleSocialModule(fx.store, {
     verifyMemberIdToken: (token) => (token ? { did: token } : null),
-    media: { chunkSize: CHUNK_SIZE, diskProbe },
+    media: { chunkSize, diskProbe },
   });
   const dev = device("dev_s");
   const juneDev = device("dev_j");
@@ -55,12 +66,56 @@ async function admitted(fx, { networkId, did, device: memberDevice }) {
 
 const chunkSha = (chunk) => createHash("sha256").update(chunk).digest("hex");
 
+/**
+ * A realistic, decodable sample photo: smooth deterministic structure
+ * (sine fields seeded per test) encoded JPEG — same shape family as the
+ * family archive, deterministic bytes, well above the budget floors.
+ */
+export const sampleImageBytes = async ({ width = 480, height = 320, seed = 7 } = {}) => {
+  const channels = 3;
+  const raw = Buffer.alloc(width * height * channels);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = (y * width + x) * channels;
+      raw[at] = 128 + 120 * Math.sin(x * seed * 0.011) * Math.cos(y * seed * 0.004);
+      raw[at + 1] = 128 + 120 * Math.sin(y * seed * 0.009) * Math.cos(x * 0.002);
+      raw[at + 2] = 128 + 120 * Math.sin((x + y) * seed * 0.006);
+    }
+  }
+  return sharp(raw, { raw: { width, height, channels } }).jpeg({ quality: 85 }).toBuffer();
+};
+
+const runBin = (bin, args) => new Promise((resolve, reject) => execFile(bin, args, (error, stdout, stderr) => (error ? reject(Object.assign(error, { stderr })) : resolve(stdout))));
+
+/**
+ * A realistic, decodable sample video: ffmpeg renders a test clip (visual
+ * pattern + audio) and returns the H.264/AAC MP4 bytes the ingest accepts.
+ */
+export const sampleVideoBytes = async ({ seconds = 1 } = {}) => {
+  const dir = await mkdtemp(join(tmpdir(), "porchlight-video-"));
+  const path = join(dir, "sample.mp4");
+  try {
+    await runBin(ffmpegStatic, [
+      "-hide_banner", "-loglevel", "error", "-y",
+      "-f", "lavfi", "-i", `testsrc2=size=1280x720:rate=24:duration=${seconds}`,
+      "-f", "lavfi", "-i", `sine=frequency=600:duration=${seconds}`,
+      "-map", "0:v", "-map", "1:a",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "64k", "-shortest",
+      path,
+    ]);
+    return await readFile(path);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
 /** Drive a full upload: begin (device-signed) → chunks → complete (device-signed). */
-async function upload(media, member, bytes, { beginOverrides = {}, commitOverrides = {} } = {}) {
-  const declare = { scope: "media-upload", size: bytes.length, contentType: "image/jpeg", ...beginOverrides.payload };
+async function upload(media, member, bytes, { contentType = "image/jpeg", beginOverrides = {}, commitOverrides = {} } = {}) {
+  const declare = { scope: "media-upload", size: bytes.length, contentType, ...beginOverrides.payload };
   const begin = await media.beginUpload({
     accessToken: member.token,
-    payload: beginOverrides.payload ?? { scope: "media-upload", size: bytes.length, contentType: "image/jpeg" },
+    payload: beginOverrides.payload ?? { scope: "media-upload", size: bytes.length, contentType },
     signature: member.dev.signPayload(declare),
   });
   const chunkCount = Math.ceil(bytes.length / begin.chunkSize);
@@ -90,12 +145,17 @@ async function upload(media, member, bytes, { beginOverrides = {}, commitOverrid
   return { ...committed, uploadId: begin.uploadId };
 }
 
+/** Video uploads ride the same signed flow with a video content type. */
+async function mediaVideoUpload(fx, member, bytes) {
+  return upload(fx.media, member, bytes, { contentType: "video/mp4" });
+}
+
 /* ---- ac-1: originals immutable, resumable upload ----------------------- */
 
 test("ac-1: originals stored once, immutable, at full original quality", async () => {
   const fx = mediaFixture();
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
-  const bytes = Buffer.from("JPEGORIGINALBYTES:the-full-quality-family-photo-record", "utf8");
+  const bytes = await sampleImageBytes();
   const committed = await upload(fx.media, susan, bytes);
 
   // Commit declaration echoes the original's full bytes and sha256 — the
@@ -131,7 +191,7 @@ test("ac-1: originals stored once, immutable, at full original quality", async (
 test("ac-1: resumable chunked upload — status read, idempotent chunks, resume to commit", async () => {
   const fx = mediaFixture();
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
-  const bytes = Buffer.from("0123456789abcdef0123456789abcdef0123456789abcdef", "utf8");
+  const bytes = await sampleImageBytes({ seed: 11 });
   const begin = await fx.media.beginUpload({
     accessToken: susan.token,
     payload: { scope: "media-upload", size: bytes.length, contentType: "image/jpeg" },
@@ -300,7 +360,7 @@ test("ac-1: scheduled garbage collection aborts idle incomplete uploads, frees c
 test("ac-2: the hub generates the rendition set on the server, idempotently, inside the budget", async () => {
   const fx = mediaFixture();
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
-  const bytes = Buffer.concat([Buffer.from("JPEG.".repeat(512), "utf8"), Buffer.from("X".repeat(1024), "utf8")]);
+  const bytes = await sampleImageBytes({ width: 1600, height: 1067, seed: 47 });
   const committed = await upload(fx.media, susan, bytes);
 
   // Feed thumb, detail, album — all generated at ingest, all on the hub
@@ -329,15 +389,72 @@ test("ac-2: the hub generates the rendition set on the server, idempotently, ins
   assert.ok(rows.reduce((total, row) => total + row.bytes, 0) > committed.bytes);
 });
 
-test("ac-2: renditions are deterministic hub-side derivatives of the original", () => {
-  const bytes = Buffer.from("DETERMINISTIC-ORIGINAL-CONTENT".repeat(64), "utf8");
-  const thumb = renditionBytes(bytes, "feed-thumb", 0.15);
-  assert.deepEqual(thumb, renditionBytes(bytes, "feed-thumb", 0.15));
-  const linebreak = thumb.indexOf("\n");
-  const header = JSON.parse(thumb.subarray(0, linebreak).toString("utf8"));
-  assert.equal(header.format, "porchlight-rendition/1");
-  assert.equal(header.renditionKind, "feed-thumb");
-  assert.equal(header.sourceSha256, sha256Hex(bytes));
+test("ac-2: renditions are browser-renderable pixels of the rung ladder (PORCH-044)", async () => {
+  const fx = mediaFixture();
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const bytes = await sampleImageBytes({ width: 1600, height: 1067, seed: 37 });
+  const committed = await upload(fx.media, susan, bytes);
+
+  // The stored original carries the hub-side probe's display dims.
+  const original = (await fx.collections.media_assets.find({ _id: committed.mediaId }))[0];
+  assert.equal(original.kind, "original");
+  assert.equal(original.width, 1600);
+  assert.equal(original.height, 1067);
+
+  // Every image rung renders: WebP bytes with the rung's width (clamped to
+  // the original), aspect-true (the rung never distorts).
+  const rungs = rungsForContentType(DEFAULT_RENDITION_RUNGS, "image/jpeg");
+  for (const [kind, targetWidth] of Object.entries(rungs)) {
+    const rendition = await fx.media.serveRendition({ accessToken: susan.token, mediaId: committed.mediaId, renditionKind: kind });
+    const shape = await sharp(rendition.bytes).metadata();
+    assert.equal(shape.format, "webp");
+    assert.ok(shape.width <= targetWidth, `rung ${kind} rendered wider than configured (${shape.width} > ${targetWidth})`);
+    assert.ok(shape.width <= original.width, `rung ${kind} upscaled the original`);
+    assert.ok(
+      Math.abs(shape.width / shape.height - original.width / original.height) < 0.02,
+      `rung ${kind} distorts the aspect ratio`,
+    );
+    assert.ok(rendition.width === shape.width && rendition.height === shape.height);
+  }
+
+  // The ladder is configuration of record: rungs documented (packages/shared
+  // DEFAULT_CONFIG.media) and validated at the service boundary.
+  assert.deepEqual(DEFAULT_RENDITION_RUNGS, { image: { "feed-thumb": 640, album: 1080, detail: 1600 }, video: { poster: 640, playable: 1280 } });
+  await assert.rejects(async () => normalizeRenditionRungs({ image: { "feed-thumb": 100, mystery: 640 } }), (error) => error.code === "E_RENDITION_RUNG_INVALID");
+  await assert.rejects(async () => normalizeRenditionRungs({ video: { playable: 0 } }), (error) => error.code === "E_RENDITION_RUNG_INVALID");
+  // Audio carries no ladder rung at all.
+  assert.deepEqual(rungsForContentType(DEFAULT_RENDITION_RUNGS, "audio/mpeg"), {});
+});
+
+test("ac-4: video posts carry the poster + playable rendition set (PORCH-044)", async () => {
+  const fx = mediaFixture({ chunkSize: 1024 * 1024 });
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const bytes = await sampleVideoBytes({ seconds: 1 });
+  const committed = await mediaVideoUpload(fx, susan, bytes);
+
+  // The set of record: a decodable poster frame (≤ poster rung, never the
+  // original quality) plus a playable rendition (≤ playable rung).
+  const assets = await fx.collections.media_assets.find({ networkId: FAMILY, originalId: committed.mediaId, kind: "rendition" });
+  assert.deepEqual(assets.map((row) => row.renditionKind).sort(), ["playable", "poster"]);
+  const poster = assets.find((row) => row.renditionKind === "poster");
+  const playable = assets.find((row) => row.renditionKind === "playable");
+  assert.equal(poster.contentType, "image/jpeg");
+  assert.equal(playable.contentType, "video/mp4");
+  assert.ok(poster.width <= 640, `poster rung rendered wider than configured (${poster.width})`);
+  assert.ok(playable.width <= 1280 && playable.width <= 1280, "playable rung upscaled the original");
+
+  // The served bytes decode: poster via sharp, playable as a parseable MP4.
+  const posterBytes = await fx.media.serveRendition({ accessToken: susan.token, mediaId: committed.mediaId, renditionKind: "poster" });
+  const posterShape = await sharp(posterBytes.bytes).metadata();
+  assert.equal(posterShape.format, "jpeg");
+  const original = (await fx.collections.media_assets.find({ _id: committed.mediaId }))[0];
+  assert.equal(original.width, 1280);
+  assert.equal(original.height, 720);
+  assert.ok(original.durationSeconds > 0, "the video probe records the duration for the poster seek");
+
+  // Original-quality playback remains the explicit archive action.
+  const originalBytes = await fx.media.serveOriginal({ accessToken: susan.token, mediaId: committed.mediaId });
+  assert.deepEqual(originalBytes.bytes, bytes);
 });
 
 /* ---- ac-3: rendition-default serving, explicit originals, export ------- */
@@ -346,7 +463,7 @@ test("ac-3: serving defaults to renditions; original retrieval is the explicit a
   const fx = mediaFixture();
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
   const june = await admitted(fx, { networkId: FAMILY, did: JUNE, device: fx.juneDev });
-  const bytes = Buffer.from("THE FULL QUALITY ARCHIVAL RECORD", "utf8");
+  const bytes = await sampleImageBytes({ seed: 13 });
   const committed = await upload(fx.media, susan, bytes);
 
   // Default serve path: the rendition, by kind.
@@ -377,7 +494,7 @@ test("ac-3: serving defaults to renditions; original retrieval is the explicit a
 test("ac-3: signed archive export streams the authored history with per-item signatures", async () => {
   const fx = mediaFixture();
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
-  const bytes = Buffer.from("family-photo-archival-record", "utf8");
+  const bytes = await sampleImageBytes({ seed: 17 });
   const committed = await upload(fx.media, susan, bytes);
   const payload = { type: "photo", mediaRefs: [committed.mediaId], caption: "the pier" };
   await fx.mod.postService.create({ accessToken: susan.token, payload, signature: susan.dev.signPayload(payload) });
@@ -472,7 +589,7 @@ test("ac-4: renditions and derived artifacts count against the same ceiling", as
     { _id: FAMILY },
     { $set: { quota: { storageCeilingMb: 1, retentionDays: null } } },
   );
-  const bytes = Buffer.from("filler".repeat(1024), "utf8"); // 6 KB original
+  const bytes = await sampleImageBytes({ seed: 19 }); // a realistic original
   const committed = await upload(fx.media, susan, bytes);
   // Ledger rows: original + 3 renditions; used bytes exceed the original's.
   const rows = await fx.collections.artifacts.find({ networkId: FAMILY });
@@ -494,7 +611,7 @@ test("ac-4: disk guard — soft threshold warns, hard stop halts new uploads, re
   assert.equal(status.warning, false);
   assert.equal(status.uploadsHalted, false);
 
-  const bytes = Buffer.from("read-continues-at-every-threshold", "utf8");
+  const bytes = await sampleImageBytes({ seed: 23 });
   const committed = await upload(fx.media, susan, bytes);
 
   // Soft band (90%–95% used): the owner console sees the warning; the
@@ -538,7 +655,7 @@ test("ac-4: retention sweep — expired artifacts cascade media rows and blob by
     { _id: FAMILY },
     { $set: { quota: { storageCeilingMb: 1, retentionDays: 1 } } },
   );
-  const bytes = Buffer.from("retention-cascade-record", "utf8");
+  const bytes = await sampleImageBytes({ seed: 29 });
   const committed = await upload(fx.media, susan, bytes);
   const assets = await fx.collections.media_assets.find({ networkId: FAMILY });
   assert.equal(assets.length, 4); // original + 3 renditions
@@ -570,7 +687,7 @@ test("ac-1/ac-3: the media API surface serves the full browser flow end to end",
   const base = `http://127.0.0.1:${server.address().port}/api/social`;
 
   try {
-    const bytes = Buffer.from("BROWSER-UPLOAD-RESUMABLE-BYTES-FULL-QUALITY", "utf8");
+    const bytes = await sampleImageBytes({ seed: 31 });
     // POST /media/uploads — device-signed begin.
     const declare = { scope: "media-upload", size: bytes.length, contentType: "image/jpeg" };
     const beginResponse = await fetch(`${base}/media/uploads`, {
@@ -603,18 +720,41 @@ test("ac-1/ac-3: the media API surface serves the full browser flow end to end",
     const committed = await completeResponse.json();
     assert.equal(committed.sha256, sha256Hex(bytes));
 
-    // GET rendition — the default serve path returns rendition bytes.
+    // GET rendition — the default serve path returns rendition bytes,
+    // content-addressed + immutable (PORCH-044 ac-3): long-lived private
+    // Cache-Control, a strong ETag riding the content address, and a
+    // bodyless 304 for a browser's conditional revalidation.
     const renditionResponse = await fetch(`${base}/media/${committed.mediaId}/renditions/album`, {
       headers: { authorization: `Bearer ${susan.token}` },
     });
     assert.equal(renditionResponse.status, 200);
     assert.ok((await renditionResponse.arrayBuffer()).byteLength > 0);
+    const renditionSha = renditionResponse.headers.get("x-porchlight-sha256");
+    assert.equal(renditionResponse.headers.get("cache-control"), "private, max-age=31536000, immutable");
+    assert.equal(renditionResponse.headers.get("etag"), `"${renditionSha}"`);
 
-    // GET original — the explicit archive action returns exact bytes.
+    // The wrong content address is not this rendition (content-addressed
+    // URLs are load-bearing, not decorative).
+    const mismatched = await fetch(`${base}/media/${committed.mediaId}/renditions/album?v=${"f".repeat(64)}`, {
+      headers: { authorization: `Bearer ${susan.token}` },
+    });
+    assert.equal(mismatched.status, 404);
+    assert.equal((await mismatched.json()).code, "E_RENDITION_NOT_FOUND");
+
+    // A repeat fetch revalidating the same address: bodyless 304, no
+    // network round trip of bytes.
+    const conditional = await fetch(`${base}/media/${committed.mediaId}/renditions/album?v=${renditionSha}`, {
+      headers: { authorization: `Bearer ${susan.token}`, "if-none-match": `"${renditionSha}"` },
+    });
+    assert.equal(conditional.status, 304);
+
+    // GET original — the explicit archive action returns exact bytes and
+    // is NEVER pre-cached (no-store).
     const originalResponse = await fetch(`${base}/media/${committed.mediaId}/original`, {
       headers: { authorization: `Bearer ${susan.token}` },
     });
     assert.equal(originalResponse.status, 200);
+    assert.equal(originalResponse.headers.get("cache-control"), "no-store");
     assert.equal(originalResponse.headers.get("x-porchlight-sha256"), sha256Hex(bytes));
     assert.deepEqual(Buffer.from(await originalResponse.arrayBuffer()), bytes);
 
@@ -630,6 +770,91 @@ test("ac-1/ac-3: the media API surface serves the full browser flow end to end",
     assert.equal(disk.hardThreshold.toFixed(2), "0.95");
   } finally {
     server.close();
+  }
+});
+
+/* ---- PORCH-044 rendering, caching, and hydration -------------------------- */
+
+test("PORCH-044: an undecodable upload is refused before anything is stored", async () => {
+  const fx = mediaFixture();
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const bytes = Buffer.from("this is not a pixel in any container", "utf8");
+  await assert.rejects(
+    () => upload(fx.media, susan, bytes),
+    (error) => error.code === "E_MEDIA_UNDECODABLE",
+  );
+  // Nothing landed: no assets, no ledger rows, the upload stays open (the
+  // member can retry a real file or abandon it to GC).
+  assert.equal((await fx.collections.media_assets.find({ networkId: FAMILY })).length, 0);
+  assert.equal((await fx.collections.artifacts.find({ networkId: FAMILY })).length, 0);
+  const status = await fx.media.uploadStatus({ accessToken: susan.token, uploadId: (await fx.collections.media_uploads.find({ networkId: FAMILY }))[0]._id });
+  assert.equal(status.state, "open");
+});
+
+test("PORCH-044: a pre-v2 rendition self-heals to the renderable format on read", async () => {
+  const fx = mediaFixture();
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const bytes = await sampleImageBytes({ seed: 41 });
+  const committed = await upload(fx.media, susan, bytes);
+  const before = (await fx.collections.media_assets.find({ networkId: FAMILY, originalId: committed.mediaId, kind: "rendition" }))
+    .find((row) => row.renditionKind === "album");
+
+  // Simulate the pre-PORCH-044 archive: the derivative format of record
+  // behind this task (browser-unrenderable headers + sampled bytes).
+  await fx.collections.media_assets.updateOne(
+    { _id: before._id },
+    { $set: { format: "porchlight-rendition/1", blobKey: before.blobKey } },
+  );
+  await fx.blobs.delete(before.blobKey);
+  await fx.blobs.put(before.blobKey, Buffer.concat([Buffer.from(JSON.stringify({ format: "porchlight-rendition/1" }) + "\n"), Buffer.from(before.blobKey.slice(0, 8))]));
+
+  // The read regenerates and then serves renderable bytes.
+  const served = await fx.media.serveRendition({ accessToken: susan.token, mediaId: committed.mediaId, renditionKind: "album" });
+  assert.equal((await sharp(served.bytes).metadata()).format, "webp");
+  const healed = (await fx.collections.media_assets.find({ networkId: FAMILY, originalId: committed.mediaId, kind: "rendition" }))
+    .find((row) => row.renditionKind === "album");
+  assert.equal(healed.format, "porchlight-rendition/2");
+  assert.ok(healed.width && healed.height);
+});
+
+test("PORCH-044: every feed surface hydrates mediaMeta — the rendition set of record", async () => {
+  const fx = mediaFixture({ chunkSize: 1024 * 1024 });
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const june = await admitted(fx, { networkId: FAMILY, did: JUNE, device: fx.juneDev });
+  const bytes = await sampleImageBytes({ seed: 43 });
+  const video = await sampleVideoBytes({ seconds: 1 });
+  const photo = await upload(fx.media, susan, bytes);
+  const clip = await mediaVideoUpload(fx, susan, video);
+  const photoPayload = { type: "photo", mediaRefs: [photo.mediaId], caption: "the pier" };
+  const videoPayload = { type: "video", mediaRefs: [clip.mediaId], caption: "the ferry" };
+  await fx.mod.postService.create({ accessToken: susan.token, payload: photoPayload, signature: susan.dev.signPayload(photoPayload) });
+  await fx.mod.postService.create({ accessToken: susan.token, payload: videoPayload, signature: susan.dev.signPayload(videoPayload) });
+
+  for (const surface of [
+    fx.mod.feedService.timeline({ accessToken: june.token }),
+    fx.mod.feedService.ranked({ accessToken: june.token }),
+    fx.mod.feedService.search({ accessToken: june.token, query: "pier" }),
+    fx.mod.postService.get({ accessToken: june.token, postId: (await fx.collections.posts.find({ originNetworkId: FAMILY }))[0]._id }),
+  ]) {
+    const result = await surface;
+    const views = result.posts ?? [result.post];
+    for (const view of views) {
+      if ((view.mediaRefs ?? []).length === 0) continue;
+      for (const id of view.mediaRefs) {
+        const meta = view.mediaMeta?.[id];
+        assert.ok(meta, `surface carries hydrated mediaMeta for ${id}`);
+        assert.ok(meta.contentType.startsWith("image/") || meta.contentType.startsWith("video/"));
+        assert.ok(meta.renditions.length > 0, "the rendition set of record rides the view");
+        for (const rung of meta.renditions) {
+          assert.match(rung.sha256, /^[a-f0-9]{64}$/);
+          assert.ok(rung.width > 0 && rung.height > 0);
+        }
+        if (meta.poster) {
+          assert.equal(meta.poster.kind, "poster");
+          assert.match(meta.poster.sha256, /^[a-f0-9]{64}$/);
+        }
+      }
+    }
   }
 });
 

@@ -340,11 +340,17 @@ export const socialModels = {
     },
   },
   /**
-   * Media asset (PORCH-008). Either the immutable original (the archival
-   * record, full original quality) or a hub-generated rendition
-   * (renditionKind: feed-thumb | detail | album) derived from it.
-   * blobKey is the sha256 content address — originals are immutable by
-   * construction and renditions are derived artifacts of their original.
+   * Media asset (PORCH-008, PORCH-044). Either the immutable original (the
+   * archival record, full original quality) or a hub-generated rendition
+   * derived from it (renditionKind: feed-thumb | album | detail image
+   * rungs; poster | playable for video). blobKey is the sha256 content
+   * address — originals are immutable by construction and renditions are
+   * derived artifacts of their original. width/height are the hub-side
+   * probe's effective display dims (EXIF-rotated; null for audio);
+   * durationSeconds rides video originals (the poster seek). format stamps
+   * the rendition derivation of record — rendition rows at an older format
+   * are regenerated (the pre-PORCH-044 byte-derivative set was not
+   * browser-renderable).
    */
   mediaAsset: {
     type: "object",
@@ -355,11 +361,15 @@ export const socialModels = {
       did: { type: "string" },
       kind: { type: "string", enum: ["original", "rendition"] },
       renditionKind: { type: ["string", "null"] },
+      format: { type: ["string", "null"] },
       originalId: { type: ["string", "null"] },
       contentType: { type: "string" },
       blobKey: { type: "string" },
       sha256: { type: "string" },
       bytes: { type: "integer" },
+      width: { type: ["integer", "null"] },
+      height: { type: ["integer", "null"] },
+      durationSeconds: { type: ["number", "null"] },
       immutable: { type: "boolean" },
       deviceSignature: { type: ["string", "null"] },
       uploadId: { type: ["string", "null"] },

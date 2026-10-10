@@ -17,6 +17,7 @@ import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk
 import { resolveStoredNames } from "./name-heal.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
 import { waitUntilHubHealthy } from "./update.js";
+import { registerMediaTransport, syncMediaTransport } from "./media-transport.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
@@ -247,6 +248,21 @@ function App() {
     window.addEventListener("online", online);
     return () => window.removeEventListener("online", online);
   }, [reload]);
+  // Media transport (PORCH-044): the rendition worker registers once at
+  // boot; member surfaces render rendition URLs directly (srcset/sizes,
+  // video poster/src) once it is live, and fall back to the authorized-
+  // fetch blob loader where a worker can't register (insecure origins).
+  const [mediaTransport, setMediaTransport] = useState(false);
+  useEffect(() => {
+    void registerMediaTransport().then((ready) => setMediaTransport(ready));
+  }, []);
+  // The token set rides every renewal: relay it to the rendition worker so
+  // its authenticated cache never presents a superseded token (a stale
+  // token just 401s into the next relay, the rendition set is untouched).
+  const mediaTokenSignature = identityConnections.map((c) => `${new URL(c.url).origin}:${c.token}`).join("|");
+  useEffect(() => {
+    syncMediaTransport(Object.fromEntries(identityConnections.map((c) => [new URL(c.url).origin, c.token])));
+  }, [mediaTokenSignature]);
   useEffect(() => {
     if (!active?.identityToken) return undefined;
     const check = async () => {
@@ -351,10 +367,15 @@ function App() {
       // rendered as a who-reacted inspection surface (PORCH-036).
       return (result.reactions || []).filter((row) => row.emoji);
     },
-    getMedia: async (mediaId, kind = "feed-thumb", postOrigin = active?.url) => {
+    getMedia: async (mediaId, kind = "feed-thumb", postOrigin = active?.url, version = null) => {
       const connection = identityConnections.find((item) => new URL(item.url).origin === postOrigin);
       if (!connection?.token) throw new Error("Connect to that family server to see this moment.");
-      const path = kind === "original" ? `media/${encodeURIComponent(mediaId)}/original` : `media/${encodeURIComponent(mediaId)}/renditions/${encodeURIComponent(kind)}`;
+      // Rendition requests carry the content address (PORCH-044 ac-3): the
+      // `v` sha256 pins the immutable pixels; the browser cache answers
+      // repeats without touching the network.
+      const path = kind === "original"
+        ? `media/${encodeURIComponent(mediaId)}/original`
+        : `media/${encodeURIComponent(mediaId)}/renditions/${encodeURIComponent(kind)}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
       const response = await fetch(new URL(`/api/social/${path}`, connection.url), { headers: { authorization: `Bearer ${connection.token}` } });
       if (!response.ok) throw new Error(`This moment could not be loaded (${response.status}).`);
       return response.blob();
@@ -595,7 +616,11 @@ function App() {
     },
     groupMemberCandidates: (q = "") => fetchMentionCandidates(active, q),
     search: (query) => request(active, `social/search?q=${encodeURIComponent(query)}`),
-  }), [hidden, connections, active, identity, navigate, reload, posts, network]);
+    // Rendition transport readiness (PORCH-044): true once the auth-relaying
+    // rendition worker is live — surfaces then load rendition URLs directly
+    // (srcset/sizes, video poster/src) and the browser cache answers repeats.
+    mediaTransport,
+  }), [hidden, connections, active, identity, navigate, reload, posts, network, mediaTransport]);
 
   const data = {
     posts, ranked, groups, albums: [], connections, network: { name: active?.name || network?.name || null, id: active?.networkId || network?._id },

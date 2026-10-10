@@ -64,6 +64,9 @@ import { createSocialRouter } from "./routes.js";
  *     softUsedRatio?: number,
  *     hardUsedRatio?: number,
  *     chunkSize?: number,
+ *     renditions?: { image?: Record<string, number>, video?: Record<string, number> },
+ *       The rendition ladder rungs (PORCH-044), forwarded from the hub
+ *       config (owner-readable configuration values, packages/shared).
  *   },
  * }} [options]
  */
@@ -113,6 +116,35 @@ export function assembleSocialModule(store, options = {}) {
   const quotaService = new QuotaService({ artifacts, networks, audit });
   const groupService = new GroupService({ groups, memberships, membership: membershipService });
   const notificationService = new NotificationService({ notifications, membership: membershipService });
+  // Media pipeline (PORCH-008): the blob store is content-addressed —
+  // filesystem-backed for the real hub (mediaRoot), memory for tests and
+  // daemon-less runs. The disk probe reads the live filesystem unless a
+  // test injects its own. The rendition ladder rungs (PORCH-044) are
+  // owner-readable configuration forwarded from the hub config.
+  const mediaConfig = options.media ?? {};
+  const blobs = mediaConfig.store ?? (mediaConfig.mediaRoot ? createFileMediaStore(mediaConfig.mediaRoot) : createMemoryMediaStore());
+  const diskProbe = mediaConfig.diskProbe ?? (() => {
+    const root = mediaConfig.mediaRoot;
+    return root ? nodeDiskProbe(root) : Promise.resolve({ totalBytes: 0, freeBytes: 0 });
+  });
+  const mediaService = new MediaService(
+    {
+      uploads: mediaUploads,
+      assets: mediaAssets,
+      artifacts,
+      membership: membershipService,
+      quota: quotaService,
+      blobs,
+      diskProbe,
+      audit,
+    },
+    {
+      softUsedRatio: mediaConfig.softUsedRatio,
+      hardUsedRatio: mediaConfig.hardUsedRatio,
+      chunkSize: mediaConfig.chunkSize,
+      renditionRungs: mediaConfig.renditions,
+    },
+  );
   const postService = new PostService({
     posts,
     comments,
@@ -123,6 +155,7 @@ export function assembleSocialModule(store, options = {}) {
     artifacts,
     groups,
     membership: membershipService,
+    media: mediaService,
     audit,
   });
   const interactionService = new InteractionService({
@@ -141,33 +174,8 @@ export function assembleSocialModule(store, options = {}) {
     groups,
     membership: membershipService,
     ranking: rankingService,
+    media: mediaService,
   });
-  // Media pipeline (PORCH-008): the blob store is content-addressed —
-  // filesystem-backed for the real hub (mediaRoot), memory for tests and
-  // daemon-less runs. The disk probe reads the live filesystem unless a
-  // test injects its own.
-  const mediaConfig = options.media ?? {};
-  const blobs = mediaConfig.store ?? (mediaConfig.mediaRoot ? createFileMediaStore(mediaConfig.mediaRoot) : createMemoryMediaStore());
-  const mediaService = new MediaService(
-    {
-      uploads: mediaUploads,
-      assets: mediaAssets,
-      artifacts,
-      membership: membershipService,
-      quota: quotaService,
-      blobs,
-      diskProbe: mediaConfig.diskProbe ?? (() => {
-        const root = mediaConfig.mediaRoot;
-        return root ? nodeDiskProbe(root) : Promise.resolve({ totalBytes: 0, freeBytes: 0 });
-      }),
-      audit,
-    },
-    {
-      softUsedRatio: mediaConfig.softUsedRatio,
-      hardUsedRatio: mediaConfig.hardUsedRatio,
-      chunkSize: mediaConfig.chunkSize,
-    },
-  );
   const exportService = new ExportService({
     posts,
     comments,

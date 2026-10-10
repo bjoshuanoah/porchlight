@@ -7,6 +7,10 @@ import {
 import { AddReactionOutlined } from '@mui/icons-material';
 import { tokens } from './theme.js';
 import { photoFirst } from './photo-first.js';
+import {
+  renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
+  playableVideoUrl, posterUrl, rungKindForViewport,
+} from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction } from './reactions.js';
@@ -63,35 +67,58 @@ function useOperation() {
 }
 
 function MediaItem({ id, post, actions, detail = false }) {
+  // Rendition delivery (PORCH-044): the hydrated payload carries the
+  // rendition set of record (mediaMeta, service-side); once the auth-
+  // relaying rendition worker is live, media renders straight from
+  // content-addressed rendition URLs — img srcset/sizes pick the rung,
+  // video renders its poster + playable rendition, and the browser cache
+  // answers repeats. "Get original" stays the only path to archive bytes.
+  const meta = post?.mediaMeta?.[id] ?? null;
+  const direct = Boolean(meta && actions?.mediaTransport);
   const [resource, setResource] = useState(null);
   const [loadError, setLoadError] = useState('');
   const operation = useOperation();
   const getMedia = actions?.getMedia;
   const origin = post?.origin ?? originOf(post);
   useEffect(() => {
+    if (direct) return undefined;
+    // Loader fallback: insecure origins (no service worker) fetch the
+    // rendition bytes through the authorized call; a payload without the
+    // hydrated mediaMeta (a stale pre-PORCH-044 timeline or hub) keeps the
+    // pre-PORCH-044 behavior — its renditions are not decodable, so the
+    // bytes that render at all are the explicit original.
     let active = true;
     let url;
+    let posterUrlObj;
     setResource(null);
     setLoadError('');
-    // Browsing renditions are not decodable in the current hub. Retrieve the original.
+    const kind = meta ? rungKindForViewport(meta, window.innerWidth, window.devicePixelRatio) : 'original';
     Promise.resolve().then(() => {
       if (typeof getMedia !== 'function') throw new Error('Media is not available here yet.');
-      return getMedia(id, 'original', origin);
-    }).then(async (blob) => {
+      const version = kind ? meta?.renditions?.find((rung) => rung.kind === kind)?.sha256 : null;
+      const bytesPromise = getMedia(id, kind ?? 'original', origin, version);
+      if (post.type === 'video' && meta?.poster?.sha256) {
+        // The poster rides the video post's own rendition set in fallback
+        // mode too: poster + playable, fetched through the authorized call.
+        return Promise.all([bytesPromise, getMedia(id, 'poster', origin, meta.poster.sha256).catch(() => null)]);
+      }
+      return Promise.all([bytesPromise, Promise.resolve(null)]);
+    }).then(async ([blob, posterBlob]) => {
       if (!(blob instanceof Blob)) throw new Error('Your hub did not return the media.');
       if (!active) return;
       // PORCH-043 ac-7: decode before the first paint, then reserve layout
       // space through CSS aspect-ratio in the same render that shows the
       // media — dimensions resolving can never relayout the feed, and the
       // only placeholder is this spinner (no shimmer anywhere).
-      const shape = await mediaShape(blob, post.type);
+      const shape = (meta && meta.width) ? { width: meta.width, height: meta.height } : await mediaShape(blob, post.type);
       if (active) {
         url = URL.createObjectURL(blob);
-        setResource({ blob, url, ...shape });
+        if (posterBlob instanceof Blob) posterUrlObj = URL.createObjectURL(posterBlob);
+        setResource({ blob, url, posterUrl: posterUrlObj ?? null, ...shape });
       }
     }).catch((error) => { if (active) setLoadError(messageOf(error)); });
-    return () => { active = false; if (url) URL.revokeObjectURL(url); };
-  }, [id, getMedia, origin]);
+    return () => { active = false; if (url) URL.revokeObjectURL(url); if (posterUrlObj) URL.revokeObjectURL(posterUrlObj); };
+  }, [id, getMedia, origin, direct]);
   // Timeline media treatment (PORCH-043): natural aspect ratio governs; the
   // 85vh object-fit-contain cap is the single exception for extreme images.
   // Media escapes the text rail — edge-to-edge against the viewport on
@@ -119,16 +146,35 @@ function MediaItem({ id, post, actions, detail = false }) {
   };
   // Layout reservation (ac-7): CSS aspect-ratio in place from the first
   // paint; the 85vh cap only letterboxes (object-fit contain), never crops.
-  const fitSx = media && (resource?.width ?? 0) && (resource?.height ?? 0)
-    ? { aspectRatio: `${resource.width} / ${resource.height}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' }
+  // The rendition payload carries the display dims, so the reservation is
+  // exact before the first byte arrives; the decoded blob path (fallback)
+  // resolves the same way after the blob decodes.
+  const fitSx = media && (resource?.width ?? meta?.width ?? 0) && (resource?.height ?? meta?.height ?? 0)
+    ? { aspectRatio: `${resource?.width ?? meta.width} / ${resource?.height ?? meta.height}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' }
     : {};
+  // Posters fill the media width (timeline build contract): the poster rung
+  // rides video width 100% with no letterboxing, and the playable
+  // rendition loads behind it.
+  const videoPoster = meta ? posterUrl(meta, origin) : null;
+  const videoPlayable = meta ? playableVideoUrl(meta, origin) : null;
   return <Box>
-    {resource && post.type === 'photo' && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
+    {post.type === 'photo' && direct && <Box component="img"
+      src={renditionSrc(meta, origin) ?? playableVideoUrl(meta, origin)}
+      srcSet={renditionSrcset(meta, origin) || undefined}
+      sizes={detail ? detailImageSizes(meta) : timelineImageSizes()}
+      alt={post.caption || 'Shared photo'} loading="lazy" decoding="async"
+      onError={() => setLoadError('Your hub did not return the media.')}
       sx={{ ...mediaSx, ...fitSx }} />}
-    {resource && post.type === 'video' && <Box component="video" src={resource.url} controls preload="metadata"
+    {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
       sx={{ ...mediaSx, ...fitSx }} />}
-    {resource && post.type === 'audio' && <Box component="audio" src={resource.url} controls preload="none" sx={{ width: '100%' }} />}
-    {!resource && !loadError && <CircularProgress size={20} aria-label="Loading media" />}
+    {post.type === 'video' && direct && <Box component="video" src={videoPlayable} poster={videoPoster} controls preload="metadata"
+      onLoadedMetadata={(event) => { if (!meta.width && event.target) setResource({ width: event.target.videoWidth, height: event.target.videoHeight }); }}
+      onError={() => setLoadError('Your hub did not return the media.')}
+      sx={{ ...mediaSx, ...fitSx }} />}
+    {post.type === 'video' && !direct && resource && <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined} controls preload="metadata"
+      sx={{ ...mediaSx, ...fitSx }} />}
+    {post.type === 'audio' && <Box component="audio" src={resource?.url} controls preload="none" sx={{ width: '100%' }} />}
+    {!resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" />}
     {loadError && <Alert severity="error">{loadError}</Alert>}
     <Button size="small" disabled={operation.busy} onClick={() => operation.run(async () => {
       const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);

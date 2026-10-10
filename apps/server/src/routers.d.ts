@@ -97,6 +97,8 @@ declare module "@porchlight/social" {
         softUsedRatio?: number;
         hardUsedRatio?: number;
         chunkSize?: number;
+        /** PORCH-044: the rendition ladder rungs (owner-readable config). */
+        renditions?: { image?: Record<string, number>; video?: Record<string, number> };
       };
     },
   ): SocialModule;

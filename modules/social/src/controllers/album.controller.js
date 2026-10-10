@@ -8,8 +8,16 @@
  * Serve paths stream bytes exactly like the media surface (integrity
  * header X-Porchlight-Sha256). The album rendition is the default serve
  * path; the original-quality retrieval is the explicit, audited member
- * action against the archive.
+ * action against the archive. The rendition/original cache policy is the
+ * media pipeline's single contract (PORCH-044 ac-3).
  */
+import {
+  RENDITION_CACHE_CONTROL,
+  ORIGINAL_CACHE_CONTROL,
+  contentAddressMatches,
+  ifNoneMatchSatisfied,
+} from "./media-response.js";
+
 export class AlbumController {
   /**
    * @param {object} deps
@@ -78,7 +86,15 @@ export class AlbumController {
         mediaId: req.params?.mediaId,
         renditionKind: req.params?.kind,
       });
+      if (!contentAddressMatches(req.query?.v ?? null, rendition.sha256)) {
+        return res.status(404).json({ error: "That rendition has not been generated yet.", code: "E_RENDITION_NOT_FOUND" });
+      }
+      res.set("Cache-Control", RENDITION_CACHE_CONTROL);
+      res.set("ETag", `"${rendition.sha256}"`);
       res.set("X-Porchlight-Sha256", rendition.sha256);
+      if (ifNoneMatchSatisfied(req, rendition.sha256)) {
+        return res.status(304).end();
+      }
       return res.status(200).type(rendition.contentType).send(rendition.bytes);
     } catch (error) {
       return this.memberError(res, error);
@@ -93,6 +109,7 @@ export class AlbumController {
         name: req.params?.name,
         mediaId: req.params?.mediaId,
       });
+      res.set("Cache-Control", ORIGINAL_CACHE_CONTROL);
       res.set("X-Porchlight-Sha256", original.sha256);
       return res.status(200).type(original.contentType).send(original.bytes);
     } catch (error) {
@@ -138,6 +155,7 @@ export class AlbumController {
       E_RENDITION_KIND_UNKNOWN: 400,
       E_RENDITION_BUDGET_EXCEEDED: 500,
       E_BLOB_MISSING: 500,
+      E_MEDIA_UNDECODABLE: 415,
     };
     const status = statusByCode[error.code];
     if (status) {

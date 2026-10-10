@@ -3,6 +3,8 @@ import { createMemoryStore } from "@porchlight/shared";
 import { InviteService } from "../../src/services/invite.service.js";
 import { MembershipService } from "../../src/services/membership.service.js";
 import { QuotaService } from "../../src/services/quota.service.js";
+import { MediaService } from "../../src/services/media.service.js";
+import { createMemoryMediaStore } from "../../src/services/media.store.js";
 import { PostService } from "../../src/services/post.service.js";
 import { NotificationService } from "../../src/services/notification.service.js";
 import { InteractionService } from "../../src/services/interaction.service.js";
@@ -58,6 +60,18 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     audit,
   });
   const quota = new QuotaService({ artifacts: collections.artifacts, networks: collections.networks, audit });
+  // The media pipeline rides every content surface (PORCH-044): post views
+  // hydrate mediaMeta through the real pipeline, so the fixture's member
+  // views match the shape the assembled module serves.
+  const media = new MediaService({
+    uploads: store.collection("media_uploads"),
+    assets: store.collection("media_assets"),
+    artifacts: collections.artifacts,
+    membership,
+    quota,
+    blobs: createMemoryMediaStore(),
+    audit,
+  });
   const groups = new GroupService({ groups: collections.groups, memberships: collections.memberships });
   const notifications = new NotificationService({ notifications: collections.notifications, membership });
   const posts = new PostService({
@@ -70,6 +84,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     artifacts: collections.artifacts,
     groups: collections.groups,
     membership,
+    media,
     audit,
   });
   const interactions = new InteractionService({
@@ -105,5 +120,5 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     return admitted;
   };
 
-  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, audit: { events: collections.auditEvents }, admit, device };
+  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, audit: { events: collections.auditEvents }, admit, device };
 }

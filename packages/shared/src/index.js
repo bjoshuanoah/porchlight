@@ -96,6 +96,21 @@ export const DEFAULT_CONFIG = Object.freeze({
     storageCeilingMb: null,
     retentionDays: null,
   },
+  /**
+   * Media pipeline rendition ladder (PORCH-044, media pipeline TS 5). The
+   * rungs are owner-readable configuration values, documented here:
+   * image rungs are pixel widths for the photo-first treatments —
+   * feed-thumb = full-bleed mobile, album = contained desktop cards,
+   * detail = the detail view — and video posts carry the poster + playable
+   * set. Widths clamp to the original at generation (never upscaled), and
+   * the whole ladder generation lands inside the ≤2–4x rendition budget.
+   */
+  media: {
+    renditions: {
+      image: { "feed-thumb": 640, album: 1080, detail: 1600 },
+      video: { poster: 640, playable: 1280 },
+    },
+  },
 });
 
 export function configPath(root) {
@@ -115,6 +130,14 @@ export function normalizeConfig(raw) {
   merged.quota = { ...merged.quota, ...src.quota };
   merged.hub = { ...merged.hub, ...src.hub, tunnel: { ...merged.hub.tunnel, ...src.hub?.tunnel } };
   merged.identity = { ...merged.identity, ...src.identity };
+  merged.media = {
+    ...merged.media,
+    ...src.media,
+    renditions: {
+      image: { ...merged.media.renditions.image, ...src.media?.renditions?.image },
+      video: { ...merged.media.renditions.video, ...src.media?.renditions?.video },
+    },
+  };
   // An incoming schemaVersion is honored, never silently defaulted: a file
   // written by a newer reader must fail loudly at read time (bootstrap
   // diagnostics contract).
@@ -125,6 +148,17 @@ export function normalizeConfig(raw) {
   const modes = ["self-hosted", "hosted", "identity-only"];
   if (!modes.includes(merged.mode.deploymentMode)) {
     throw new Error(`config mode.deploymentMode must be one of ${modes.join(", ")}`);
+  }
+  // Rendition ladder rungs (PORCH-044): the documented configuration values
+  // — known kinds only, integer pixel widths inside the generation range.
+  // Validation mirrors normalizeRenditionRungs (media.service) at config
+  // normalize time so a bad owner edit fails loudly at boot.
+  for (const group of ["image", "video"]) {
+    for (const [kind, width] of Object.entries(merged.media.renditions[group])) {
+      if (!Number.isInteger(width) || width < 16 || width > 8192) {
+        throw new Error(`config media.renditions.${group}.${kind} must be an integer width between 16 and 8192`);
+      }
+    }
   }
   for (const portField of [
     ["hub.httpPort", merged.hub.httpPort],

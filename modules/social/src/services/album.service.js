@@ -112,7 +112,12 @@ export class AlbumService {
     newestFirstByActivity(items);
     return {
       album: { name: normalized, itemCount: items.length },
-      posts: await this.#withAttribution(items.map((post) => postView(post)), session.networkId),
+      // Album item views ride the same member-view plane as the timeline:
+      // attribution + hydrated mediaMeta (PORCH-044), one code path.
+      posts: await this.media.withMediaMeta(
+        await this.#withAttribution(items.map((post) => postView(post)), session.networkId),
+        session.networkId,
+      ),
       did: session.did,
     };
   }

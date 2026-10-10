@@ -1,0 +1,127 @@
+// Media delivery (PORCH-044): the responsive rendition ladder, the
+// content-addressed browser-cache contract, and the service-worker
+// rendition transport. The pure ladder helpers are pinned as a contract
+// module; the worker and the wiring are pinned as source contracts (same
+// style as the photo-first pins).
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import {
+  renditionSrcset,
+  timelineImageSizes,
+  detailImageSizes,
+  playableVideoUrl,
+  posterUrl,
+  rungKindForViewport,
+} from "../src/media-rung.js";
+import { photoFirst } from "../src/photo-first.js";
+
+const webRoot = fileURLToPath(new URL("../", import.meta.url));
+const src = async (file) => await readFile(join(webRoot, file), "utf8");
+
+const ORIGIN = "https://hub.family";
+const imageMeta = {
+  mediaId: "med_1",
+  contentType: "image/jpeg",
+  width: 4032,
+  height: 3024,
+  poster: null,
+  renditions: [
+    { kind: "detail", sha256: "cc".repeat(32), width: 1600, height: 1200, bytes: 100 },
+    { kind: "feed-thumb", sha256: "aa".repeat(32), width: 640, height: 480, bytes: 40 },
+    { kind: "album", sha256: "bb".repeat(32), width: 1080, height: 810, bytes: 70 },
+  ],
+};
+const videoMeta = {
+  mediaId: "med_2",
+  contentType: "video/mp4",
+  width: 1920,
+  height: 1080,
+  poster: { kind: "poster", sha256: "dd".repeat(32), width: 640, height: 360, bytes: 12 },
+  renditions: [{ kind: "playable", sha256: "ee".repeat(32), width: 1280, height: 720, bytes: 900 }],
+};
+
+test("PORCH-044 ac-2: the ladder builds an ascending srcset from the hydrated meta", () => {
+  const srcset = renditionSrcset(imageMeta, ORIGIN);
+  const parts = srcset.split(", ");
+  assert.deepEqual(parts.map((part) => part.split(" ").pop()), ["640w", "1080w", "1600w"]);
+  assert.ok(parts[0].startsWith(`${ORIGIN}/api/social/media/med_1/renditions/feed-thumb?v=${"aa".repeat(32)}`));
+  // Content-addressed: no query version, no URL reuse of the original.
+  for (const part of parts) assert.ok(/\?v=[0-9a-f]{64} /.test(`${part} `));
+});
+
+test("PORCH-044 ac-2: sizes match the photo-first treatments", () => {
+  // Timeline: full-bleed mobile (breakout), the desktop card interior past
+  // the card padding.
+  const sizes = timelineImageSizes();
+  assert.ok(sizes.startsWith(`(max-width: ${photoFirst.mobileBelow - 1}px) 100vw`));
+  assert.ok(sizes.endsWith(`calc(min(780px, 100vw - 40px) + ${2 * photoFirst.postPad}px)`));
+  // Detail: capped by the 720px height cap and the media's own aspect.
+  // 720 × (4032/3024) = 960 — wider renders clamp at the detail width cap.
+  assert.equal(
+    detailImageSizes(imageMeta),
+    `(max-width: ${photoFirst.mobileBelow - 1}px) 100vw, 820px`,
+  );
+});
+
+test("PORCH-044 ac-2: detail sizes follow the payload aspect", () => {
+  const portrait = { ...imageMeta, width: 3024, height: 4032 };
+  // 720 × (3024/4032) = 540 → the widest useful detail render.
+  assert.ok(detailImageSizes(portrait).endsWith("540px"));
+});
+
+test("PORCH-044 ac-4: video meta exposes the playable rendition + poster, images none", () => {
+  assert.ok(playableVideoUrl(videoMeta, ORIGIN).endsWith(`/renditions/playable?v=${"ee".repeat(32)}`));
+  assert.ok(posterUrl(videoMeta, ORIGIN).endsWith(`/renditions/poster?v=${"dd".repeat(32)}`));
+  assert.equal(playableVideoUrl(imageMeta, ORIGIN), null);
+  assert.equal(posterUrl(imageMeta, ORIGIN), null);
+});
+
+test("PORCH-044 ac-2: the blob-loader fallback picks the nearest fitting rung", () => {
+  // 320 CSS px @ 2 DPR over a 4032-wide original → 640 rung fits first.
+  assert.equal(rungKindForViewport(imageMeta, 320, 2), "feed-thumb");
+  assert.equal(rungKindForViewport(imageMeta, 460, 2), "album");
+  assert.equal(rungKindForViewport(imageMeta, 640, 2), "detail");
+  // A never-upscale cap: nothing renders wider than the original.
+  assert.equal(rungKindForViewport({ ...imageMeta, width: 512, height: 384 }, 400, 4), "feed-thumb");
+  // Video posts ride the playable rendition in fallback mode.
+  assert.equal(rungKindForViewport(videoMeta, 390, 3), "playable");
+});
+
+test("PORCH-044 ac-3: the rendition worker cache-firsts content-addressed URLs only", async () => {
+  const worker = await src("public/sw.js");
+  // The worker intercepts rendition requests only — originals bypass (no
+  // pre-cached archive bytes) and only authenticated, content-addressed
+  // responses enter the store.
+  assert.match(worker, /pathname\.includes\("\/renditions\/"\)/);
+  assert.match(worker, /searchParams\.has\("v"\)/);
+  assert.match(worker, /"media-auth"/);
+  assert.match(worker, /porchlight-renditions-v1/);
+  assert.doesNotMatch(worker, /\/original/);
+});
+
+test("PORCH-044 ac-3: originals resolve with no-store from the client action", async () => {
+  const main = await src("src/main.jsx");
+  // The getMedia original path stays the explicit archive action; rendition
+  // requests carry the content address for the immutable cache.
+  assert.match(main, /kind === "original"\s*\?\s*`media\/\$\{encodeURIComponent\(mediaId\)\}\/original`/);
+  assert.match(main, /\?v=\$\{encodeURIComponent\(version\)\}/);
+  assert.match(main, /registerMediaTransport/);
+  assert.match(main, /syncMediaTransport/);
+});
+
+test("PORCH-044 ac-1/ac-2: member surfaces render the ladder, originals stay explicit", async () => {
+  const social = await src("src/social.jsx");
+  // Direct images carry the ladder + sizes; the video element renders its
+  // poster and playable rendition; the explicit original remains "Get original".
+  assert.match(social, /srcSet=\{renditionSrcset\(meta, origin\)/);
+  assert.match(social, /sizes=\{detail \? detailImageSizes\(meta\) : timelineImageSizes\(\)\}/);
+  assert.match(social, /component="video" src=\{videoPlayable\} poster=\{videoPoster\}/);
+  assert.match(social, />Get original<\/Button>/);
+  // No surface fetches original bytes for rendering anymore — the original
+  // rides only the explicit download action and the pre-PORCH-044 legacy
+  // payload fallback.
+  assert.ok(!/getMedia\(id, 'original', origin\);\s*\n\s*\}\)\.then\(async \(blob\) => [\s\S]*component="img"/.test(social));
+});

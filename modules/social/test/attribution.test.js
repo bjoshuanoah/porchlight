@@ -47,6 +47,7 @@ function feedOver(fx) {
     groups: fx.collections.groups,
     membership: fx.membership,
     ranking: { rank: (rows) => rows.map((post) => ({ post })) },
+    media: fx.media,
   });
 }
 
