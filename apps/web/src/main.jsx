@@ -108,7 +108,7 @@ function App() {
   }));
   const [identity, setIdentity] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? initialConnections[0].identity || null : null);
   const [groups, setGroups] = useState([]);
-  const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, update: null, availability: {} });
+  const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, update: null, mediaRoot: null, availability: {} });
   const [network, setNetwork] = useState(null);
   const [networkLoaded, setNetworkLoaded] = useState(false);
   const [newDevices, setNewDevices] = useState([]);
@@ -262,7 +262,7 @@ function App() {
     const identityConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
     const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], ranked: [], failures: [] };
     applyFeeds(result, { notice: "Your family server is unreachable. Showing saved moments where available." });
-    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult] = await Promise.allSettled([
+    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult, mediaRootResult] = await Promise.allSettled([
       // Member-plane groups (PORCH-030): the Groups page reads the group
       // containers the member's own token can read — creation is open to
       // every member, so an owner-gated console read would leave every
@@ -276,6 +276,11 @@ function App() {
       // Owner-initiated release check (PORCH-040): the registry is consulted
       // server-side ONLY because the owner opened the console's update card.
       request(liveActive, "social/console/update"),
+      // Media-root setting (PORCH-054): the read behind the Storage tab's
+      // media-root card (PORCH-057); the hub endpoint is unchanged, a
+      // non-owner's 403 degrades to the availability flag like every other
+      // console read.
+      request(liveActive, "social/console/media-root"),
     ]);
     const value = (result, fallback) => result.status === "fulfilled" ? result.value : fallback;
     setGroups(value(groupResult, {}).groups || []);
@@ -286,13 +291,14 @@ function App() {
       allDevices: value(allDevicesResult, {}).devices || null,
       deviceLinks: value(linksResult, {}).deviceLinks || null,
       update: value(updateResult, null)?.release || null,
+      mediaRoot: value(mediaRootResult, null),
       availability: {
         groups: groupResult.status === "fulfilled", members: memberResult.status === "fulfilled",
         invites: inviteResult.status === "fulfilled", settings: limitResult.status === "fulfilled",
         disk: diskResult.status === "fulfilled", audit: auditResult.status === "fulfilled",
         devices: deviceResult.status === "fulfilled",
         allDevices: allDevicesResult.status === "fulfilled", deviceLinks: linksResult.status === "fulfilled",
-        update: updateResult.status === "fulfilled",
+        update: updateResult.status === "fulfilled", mediaRoot: mediaRootResult.status === "fulfilled",
       },
     });
     if (deviceResult.status === "fulfilled") observeDevices(deviceResult.value.registrations || [], liveActive);
@@ -609,6 +615,10 @@ function App() {
       return result;
     },
     updateSettings: async (settings) => { const result = await request(active, "social/console/limits", { method: "PUT", body: JSON.stringify(settings) }); await reload(); return result; },
+    // Media-root edit (PORCH-054's hub surface, rendered by PORCH-057's Storage
+    // tab): a failing path is refused with the check's named reason and the
+    // surface carries it verbatim; media never moves on its own.
+    editMediaRoot: async (root) => { const result = await request(active, "social/console/media-root", { method: "PUT", body: JSON.stringify({ root }) }); await reload(); return result; },
     revokeMember: async (member) => {
       const result = await request(active, "social/console/members/revoke", {
         method: "POST", body: JSON.stringify({ memberId: member._id || member.id }),
@@ -804,6 +814,7 @@ function App() {
     identity, members: owner.members, devices: owner.devices, settings: owner.settings,
     invites: owner.invites, audit: owner.audit, disk: owner.disk, availability: owner.availability,
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
+    mediaRoot: owner.mediaRoot,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline, membershipEnded,
   };
   // The Profile appearance control is bound to the stored *preference*
