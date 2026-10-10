@@ -25,6 +25,10 @@ import { registerMediaTransport, syncMediaTransport } from "./media-transport.js
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
+// PORCH-051: the Add to Home Screen machinery — the decision logic module
+// and its two surfaces (the Android custom CTA, the iOS guided card).
+import { consumeInstallPrompt, installSuppressed, isStandaloneLaunch, surfaceInstallKind, webkitClass } from "./install.js";
+import { InstallCta } from "./install.jsx";
 
 // PORCH-042: both modes' custom properties land in one static <style> block
 // before the first render — component CSS resolves from the token layer with
@@ -91,6 +95,16 @@ function App() {
   const identityEndedRef = useRef(false);
   const [notice, setNotice] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
+  // PORCH-051: the Add to Home Screen machinery. The captured
+  // beforeinstallprompt is stored, never discarded; the dismissal window and
+  // the standalone launch check ride this origin's browser-local storage
+  // and display-mode capability — never a server write.
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [installDismissedAt, setInstallDismissedAt] = useState(() => readLocal(stored, origin, "install-dismissed-at", 0));
+  const [standaloneLaunch, setStandaloneLaunch] = useState(() => isStandaloneLaunch({
+    navigatorStandalone: window.navigator.standalone,
+    standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
+  }));
   const [identity, setIdentity] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? initialConnections[0].identity || null : null);
   const [groups, setGroups] = useState([]);
   const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, update: null, availability: {} });
@@ -342,6 +356,26 @@ function App() {
   // video poster/src) once it is live, and fall back to the authorized-
   // fetch blob loader where a worker can't register (insecure origins).
   const [mediaTransport, setMediaTransport] = useState(false);
+  useEffect(() => {
+    // PORCH-051: Android/Chrome — prevent the default install banner and
+    // store the deferred prompt so the custom CTA can fire it (once); the
+    // surfaces retire when the app installs (appinstalled or the
+    // display-mode standalone check — an installed surface is never
+    // asked again). No second service worker is involved anywhere: the
+    // single registration stays in media-transport.js.
+    const onPrompt = (event) => { event.preventDefault(); setInstallPrompt(event); };
+    const onInstalled = () => { setInstallPrompt(null); setStandaloneLaunch(true); };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    const modeQuery = window.matchMedia("(display-mode: standalone)");
+    const onMode = (event) => setStandaloneLaunch(event.matches || Boolean(window.navigator.standalone));
+    modeQuery.addEventListener("change", onMode);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+      modeQuery.removeEventListener("change", onMode);
+    };
+  }, []);
   useEffect(() => {
     void registerMediaTransport().then((ready) => setMediaTransport(ready));
   }, []);
@@ -810,10 +844,36 @@ function App() {
   else if (route === "/members") page = <Members {...props} />;
   else if (!connections.length) page = <Join {...props} />;
   else page = <Timeline {...props} />;
+  // PORCH-051: which install surface this device earns — capability checks
+  // only (standalone outranks everything; a captured prompt marks the
+  // Android/Chrome class; otherwise touch-capable WebKit is the iOS class,
+  // iPadOS included, since it presents as desktop Mac). A dismissal inside
+  // the suppression window hides both surfaces.
+  const installKind = surfaceInstallKind({
+    standalone: standaloneLaunch,
+    canPrompt: Boolean(installPrompt),
+    touchCapable: window.navigator.maxTouchPoints > 0,
+    webkit: webkitClass(window.navigator.userAgent),
+  });
+  const installHidden = installSuppressed(installDismissedAt);
+  const dismissInstall = () => {
+    const dismissedAt = Date.now();
+    writeLocal(stored, origin, "install-dismissed-at", dismissedAt);
+    setInstallDismissedAt(dismissedAt);
+  };
+  const installNow = () => {
+    void consumeInstallPrompt(installPrompt).then((choice) => {
+      // The deferred prompt is consumed exactly once; the CTA retires
+      // either way, and only the dismissed outcome enters the suppression
+      // window (accepting installs — appinstalled retires the surfaces).
+      setInstallPrompt(null);
+      if (!choice || choice.outcome !== "accepted") dismissInstall();
+    });
+  };
 
   return <ThemeProvider theme={muiTheme}><CssBaseline />
     {!frontDoor && <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(12px)", background: `var(--porch-appbar-bg)` }}>
-      <Toolbar sx={{ minHeight: { xs: 56, lg: 64 }, maxWidth: 1180, width: "100%", mx: "auto", px: { xs: 2, lg: 4 } }}>
+      <Toolbar sx={{ minHeight: { xs: 56, lg: 64 }, maxWidth: 1180, width: "100%", mx: "auto", px: { xs: 2, lg: 4 }, pt: "env(safe-area-inset-top)" }}>
         {/* Brand lockup (PORCH-032): the new lamp mark plus the navy wordmark. */}
         <Lockup onClick={() => navigate("/timeline")} size={30} sx={{ cursor: "pointer", flex: { xs: 1, lg: 0 }, minWidth: { lg: 180 } }} />
         <Stack direction="row" spacing={3} alignItems="center" sx={{ display: { xs: "none", lg: "flex" }, flex: 1, justifyContent: "center" }}>
@@ -855,6 +915,7 @@ function App() {
         }}>No, remove it</Button>
       </DialogActions>
     </Dialog>
+    <InstallCta kind={installHidden ? null : installKind} onInstall={installNow} onDismiss={dismissInstall} />
     <Snackbar open={Boolean(notice)} autoHideDuration={8000} onClose={() => setNotice("")} message={notice} />
   </ThemeProvider>;
 }

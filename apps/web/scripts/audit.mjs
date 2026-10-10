@@ -83,6 +83,19 @@ for (const [asset, attribute] of expectedLinks) {
 
 try {
   const manifest = JSON.parse(await readFile(join(publicDir, "manifest.webmanifest"), "utf8"));
+  // Installability audit (PORCH-051 ac-1): the manifest carries the app
+  // identity, the standalone display, the timeline-root start_url, and the
+  // porch-warm splash tokens; placeholder icons pass the audit from day one.
+  const expectField = (field, value) => {
+    if (manifest[field] !== value) failures.push(`manifest.webmanifest: ${field} is ${JSON.stringify(manifest[field])}, expected ${JSON.stringify(value)}`);
+  };
+  expectField("name", "Porchlight");
+  expectField("short_name", "Porchlight");
+  expectField("start_url", "/?");
+  expectField("display", "standalone");
+  expectField("orientation", "portrait-primary");
+  expectField("background_color", "#F7F5F0");
+  expectField("theme_color", "#F7F5F0");
   const purposes = manifest.icons ?? [];
   const missing = [
     ["any", "192x192"], ["any", "512x512"], ["maskable", "192x192"], ["maskable", "512x512"],

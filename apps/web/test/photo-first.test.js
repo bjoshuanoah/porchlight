@@ -45,7 +45,9 @@ test("PORCH-043 ac-3: natural ratios govern; the 85vh contain cap is the only ex
 
 test("PORCH-043 ac-4: the SPA document carries the locked viewport meta", async () => {
   const html = await readFile(join(webRoot, "index.html"), "utf8");
-  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"\s*\/>/);
+  // Amended by PORCH-051: viewport-fit=cover rides the locked value so the
+  // shell consumes env(safe-area-inset-*) in standalone launch.
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"\s*\/>/);
 });
 
 test("PORCH-043 ac-4: the PWA manifest keeps standalone display (meta equivalents match)", async () => {
