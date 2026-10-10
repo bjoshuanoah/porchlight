@@ -37,3 +37,11 @@ export const photoFirst = {
     endToDivider: 16,
   },
 };
+// PORCH-045 (Brian, Oct 14, 2026): the carousel's position math. The
+// scroll-snap track's slide is the one nearest the scroll offset — release
+// snapping to the nearest slide is the contract (ac-2), so position derives
+// by rounding, never truncation.
+export function carouselIndex(scrollLeft, slideWidth, count) {
+  if (!(slideWidth > 0) || !(count > 0)) return 0;
+  return Math.min(count - 1, Math.max(0, Math.round(scrollLeft / slideWidth)));
+}

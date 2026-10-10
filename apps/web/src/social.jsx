@@ -4,9 +4,9 @@ import {
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
   ListItemText, MenuItem, Paper, Popover, Select, Stack, TextField, Typography,
 } from '@mui/material';
-import { AddReactionOutlined } from '@mui/icons-material';
+import { AddReactionOutlined, ChevronLeft, ChevronRight } from '@mui/icons-material';
 import { tokens } from './theme.js';
-import { photoFirst } from './photo-first.js';
+import { carouselIndex, photoFirst } from './photo-first.js';
 import {
   renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
   playableVideoUrl, posterUrl, rungKindForViewport,
@@ -66,7 +66,7 @@ function useOperation() {
   return { busy, error, setError, run };
 }
 
-function MediaItem({ id, post, actions, detail = false }) {
+function MediaItem({ id, post, actions, detail = false, slide = false }) {
   // Rendition delivery (PORCH-044): the hydrated payload carries the
   // rendition set of record (mediaMeta, service-side); once the auth-
   // relaying rendition worker is live, media renders straight from
@@ -124,9 +124,12 @@ function MediaItem({ id, post, actions, detail = false }) {
   // Media escapes the text rail — edge-to-edge against the viewport on
   // mobile (the post container is already full-width) and against the card
   // interior on desktop (margin: 0 calc(var(--post-pad) * -1)); media never
-  // nests inside another padded media card (ac-1, ac-6).
+  // nests inside another padded media frame (PORCH-043 ac-1, ac-6). In the
+  // PORCH-045 carousel the slide mode omits the breakout: the track owns it
+  // once for every slide, so a slide is exactly the media width and the
+  // media rules can never double-apply.
   const media = post.type === 'photo' || post.type === 'video';
-  const breakout = !detail && media;
+  const breakout = !detail && media && !slide;
   const mediaSx = breakout ? {
     // img/video are replaced elements: the breakout needs both the negative
     // rail margins and the matching width so the element spans the full
@@ -141,7 +144,7 @@ function MediaItem({ id, post, actions, detail = false }) {
     display: 'block',
     width: media || post.type === 'audio' ? '100%' : undefined,
     maxHeight: detail ? 720 : undefined,
-    borderRadius: detail ? 2 : undefined,
+    borderRadius: detail ? 2 : slide ? 0 : undefined,
     bgcolor: 'background.default',
   };
   // Layout reservation (ac-7): CSS aspect-ratio in place from the first
@@ -151,6 +154,15 @@ function MediaItem({ id, post, actions, detail = false }) {
   // resolves the same way after the blob decodes.
   const fitSx = media && (resource?.width ?? meta?.width ?? 0) && (resource?.height ?? meta?.height ?? 0)
     ? { aspectRatio: `${resource?.width ?? meta.width} / ${resource?.height ?? meta.height}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' }
+    : {};
+  // Slide mode (PORCH-045): the media spans the full slide width above, so
+  // the textual lines below it ride the 16px mobile rail and the card
+  // padding on desktop, exactly as media-owning posts line them up.
+  const slideRailSx = slide
+    ? {
+        pl: { xs: `${photoFirst.rail}px`, lg: `${photoFirst.postPad}px` },
+        pr: { xs: `${photoFirst.rail}px`, lg: `${photoFirst.postPad}px` },
+      }
     : {};
   // Posters fill the media width (timeline build contract): the poster rung
   // rides video width 100% with no letterboxing, and the playable
@@ -174,8 +186,8 @@ function MediaItem({ id, post, actions, detail = false }) {
     {post.type === 'video' && !direct && resource && <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined} controls preload="metadata"
       sx={{ ...mediaSx, ...fitSx }} />}
     {post.type === 'audio' && <Box component="audio" src={resource?.url} controls preload="none" sx={{ width: '100%' }} />}
-    {!resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" />}
-    {loadError && <Alert severity="error">{loadError}</Alert>}
+    {!resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" sx={slideRailSx} />}
+    {loadError && <Alert severity="error" sx={slideRailSx}>{loadError}</Alert>}
     <Button size="small" disabled={operation.busy} onClick={() => operation.run(async () => {
       const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
       if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
@@ -185,8 +197,8 @@ function MediaItem({ id, post, actions, detail = false }) {
       anchor.download = `${id}`;
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    })} sx={{ mt: 1, px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Get original</Button>
-    {operation.error && <Alert severity="error">{operation.error}</Alert>}
+    })} sx={{ ...(slide ? slideRailSx : {}), mt: 1, px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Get original</Button>
+    {operation.error && <Alert severity="error" sx={slideRailSx}>{operation.error}</Alert>}
   </Box>;
 }
 
@@ -214,17 +226,146 @@ async function mediaShape(blob, type) {
   return {};
 }
 
+// Shared snap-track treatment (PORCH-045): one component shape for the
+// post carousel and the composer preview. Palette and photo-first tokens
+// only — no literal colors in screen code (Display Modes token contract).
+const carouselTrackSx = {
+  display: 'flex',
+  overflowX: 'auto',
+  scrollSnapType: 'x mandatory',
+  // One slide per horizontal gesture (ac-2): scroll-snap-stop always halts
+  // momentum at the adjacent slide and release snaps to the nearest one,
+  // while near-vertical drags keep scrolling the timeline because the
+  // track's pan is horizontal-only.
+  touchAction: 'pan-y',
+  overscrollBehaviorX: 'contain',
+  alignItems: 'flex-start',
+  scrollbarWidth: 'none',
+  '&::-webkit-scrollbar': { display: 'none' },
+};
+const carouselSlideSx = {
+  flex: '0 0 100%',
+  width: '100%',
+  minWidth: 0,
+  scrollSnapAlign: 'start',
+  scrollSnapStop: 'always',
+};
+// The track (or its wrapper) owns the photo-first breakout once for the
+// whole series: edge-to-edge on mobile, full card-interior width on desktop
+// (PORCH-043). Slides render inside it without their own breakout, so media
+// never nests inside a padded frame.
+const carouselBreakoutSx = {
+  width: { xs: `calc(100% + ${2 * photoFirst.rail}px)`, lg: `calc(100% + ${2 * photoFirst.postPad}px)` },
+  mx: { xs: -photoFirst.rail / 8, lg: -photoFirst.postPad / 8 },
+  borderRadius: { xs: 0, lg: `${photoFirst.desktopMediaRadius}px` },
+  overflow: 'hidden',
+};
+
+// Desktop arrow affordances (ac-2): quiet controls riding the media edges.
+// Mobile hides them — swipe is the gesture there.
+function CarouselArrows({ atStart, atEnd, onPrev, onNext }) {
+  const base = {
+    position: 'absolute',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    display: { xs: 'none', lg: 'inline-flex' },
+    width: 44,
+    height: 48,
+    color: 'text.primary',
+    bgcolor: 'background.paper',
+    border: '1px solid',
+    borderColor: 'divider',
+    '&:hover': { bgcolor: 'action.hover' },
+  };
+  return <>
+    <IconButton aria-label="Previous image" disabled={atStart} onClick={onPrev} sx={{ ...base, left: 12 }}><ChevronLeft /></IconButton>
+    <IconButton aria-label="Next image" disabled={atEnd} onClick={onNext} sx={{ ...base, right: 12 }}><ChevronRight /></IconButton>
+  </>;
+}
+
+// PORCH-045 (Brian, Oct 14, 2026): a multi-image post renders as a single
+// swipeable carousel, one image at a time, on every breakpoint — superseding
+// the Oct 9 multi-image grid treatments and the "+3" overlay. The position
+// indicator carries media quantity only ("2/5"; quantity-versus-engagement
+// boundary) and the slide position is presentation-only state: reactions,
+// votes, and replies stay bound to the post in PostCard and this component
+// calls no interaction action (ac-5).
+function MediaCarousel({ ids, post, actions, detail = false }) {
+  const trackRef = useRef(null);
+  const [position, setPosition] = useState(0);
+  const count = ids.length;
+  const slideBy = (step) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const next = Math.min(count - 1, Math.max(0, carouselIndex(track.scrollLeft, track.clientWidth, count) + step));
+    track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
+  };
+  return <Box sx={{ mt: detail ? 2 : photoFirst.spacing.captionMedia / 8 }}>
+    <Box sx={{ position: 'relative', ...(!detail ? carouselBreakoutSx : {}) }}>
+      <Box ref={trackRef} onScroll={(event) => setPosition(carouselIndex(event.currentTarget.scrollLeft, event.currentTarget.clientWidth, count))} sx={carouselTrackSx}>
+        {ids.map((id, index) => (
+          <Box key={`${id}-${index}`} aria-roledescription="slide" aria-label={`Image ${index + 1} of ${count}`} sx={carouselSlideSx}>
+            <MediaItem id={id} post={post} actions={actions} detail={detail} slide />
+          </Box>
+        ))}
+      </Box>
+      <CarouselArrows atStart={position === 0} atEnd={position === count - 1} onPrev={() => slideBy(-1)} onNext={() => slideBy(1)} />
+    </Box>
+    <Typography component="div" aria-label={`Image ${position + 1} of ${count}`} sx={{ mt: 0.5, px: 0, fontSize: 12, lineHeight: '17px', color: 'porchlight.muted' }}>{position + 1}/{count}</Typography>
+  </Box>;
+}
+
+// PORCH-045: upload previews in the composer render the same carousel
+// preview shape — one attached photo at a time on the same snap track with
+// the same quantity indicator, before any upload starts.
+function ComposerPreviewCarousel({ files }) {
+  const trackRef = useRef(null);
+  const [position, setPosition] = useState(0);
+  const [urls, setUrls] = useState([]);
+  useEffect(() => {
+    const created = (files ?? []).map((file) => URL.createObjectURL(file));
+    setUrls(created);
+    return () => created.forEach((url) => URL.revokeObjectURL(url));
+  }, [files]);
+  const count = urls.length;
+  const slideBy = (step) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const next = Math.min(count - 1, Math.max(0, carouselIndex(track.scrollLeft, track.clientWidth, count) + step));
+    track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
+  };
+  if (!count) return null;
+  return <Box sx={{ mt: 1, borderRadius: '10px', overflow: 'hidden' }}>
+    <Box sx={{ position: 'relative', borderRadius: '10px' }}>
+      <Box ref={trackRef} onScroll={(event) => setPosition(carouselIndex(event.currentTarget.scrollLeft, event.currentTarget.clientWidth, count))} sx={carouselTrackSx}>
+        {urls.map((url, index) => (
+          <Box key={url} aria-roledescription="slide" aria-label={`Attached photo ${index + 1} of ${count}`} sx={carouselSlideSx}>
+            <Box component="img" src={url} alt={files[index]?.name ?? 'Attached photo'} sx={{ display: 'block', width: '100%', maxHeight: 320, objectFit: 'contain', bgcolor: 'porchlight.subtle' }} />
+          </Box>
+        ))}
+      </Box>
+      {count > 1 && <CarouselArrows atStart={position === 0} atEnd={position === count - 1} onPrev={() => slideBy(-1)} onNext={() => slideBy(1)} />}
+    </Box>
+    {count > 1 && <Typography component="div" aria-label={`Attached photo ${position + 1} of ${count}`} sx={{ mt: 0.5, fontSize: 12, color: 'porchlight.muted' }}>{position + 1}/{count}</Typography>}
+  </Box>;
+}
+
 function Media({ post, actions, detail = false }) {
   const media = Array.isArray(post?.mediaRefs) ? post.mediaRefs : [];
-  if (!media.length) return null;
-  // PORCH-043 rhythm: caption→media 12px on the timeline surface; multiple
-  // media items render flush (continuous album); detail keeps its own
-  // treatment. PORCH-045 replaces this stack with the ruled carousel.
+  const ids = media.map((entry) => typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id).filter(Boolean);
+  if (!ids.length) return null;
+  // PORCH-045: multi-image posts render as a single swipeable carousel on
+  // every breakpoint (Brian, Oct 14, 2026) — the Oct 9 grid treatments and
+  // the +3 overlay are superseded and render nowhere. Video stays out of
+  // the carousel until asked for, so every other shape keeps the plain
+  // multi-item stack.
+  if (ids.length > 1 && post.type === 'photo') {
+    return <MediaCarousel ids={ids} post={post} actions={actions} detail={detail} />;
+  }
   return <Stack spacing={0} sx={{ mt: detail ? 2 : photoFirst.spacing.captionMedia / 8 }}>
-    {media.map((entry, index) => {
-      const id = typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id;
-      return id ? <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} detail={detail} /> : null;
-    })}
+    {ids.map((id, index) => (
+      <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} detail={detail} />
+    ))}
   </Stack>;
 }
 
@@ -823,7 +964,9 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
         {data.offline && <Alert severity="warning">Posting is unavailable while your family server is unreachable. Your draft stays here.</Alert>}
         <FormControl fullWidth><InputLabel id="post-type-label">Post type</InputLabel><Select labelId="post-type-label" label="Post type" value={type} onChange={(event) => { setType(event.target.value); setFiles([]); }}><MenuItem value="text">Text</MenuItem><MenuItem value="photo">Photo</MenuItem><MenuItem value="video">Video</MenuItem><MenuItem value="audio">Audio</MenuItem></Select></FormControl>
         {groups.length > 0 && <FormControl fullWidth><InputLabel id="post-group-label">Group (optional)</InputLabel><Select labelId="post-group-label" label="Group (optional)" value={groupId} onChange={(event) => setGroupId(event.target.value)}><MenuItem value="">Entire network</MenuItem>{groups.map((group) => <MenuItem key={identityOf(group)} value={identityOf(group)}>{group.name}</MenuItem>)}</Select></FormControl>}
-        {mediaType ? <><Button variant="outlined" component="label">Choose {type}<input hidden type="file" accept={type === 'photo' ? 'image/*' : `${type}/*`} multiple={type === 'photo'} onChange={(event) => { setFiles(Array.from(event.target.files || [])); event.target.value = ''; }} /></Button><Typography variant="body2" color="text.secondary">{files.length ? files.map((file) => file.name).join(', ') : 'Choose an original file to upload before publishing.'}</Typography><TextField label="Caption (optional)" multiline minRows={2} value={caption} onChange={(event) => setCaption(event.target.value)} /></> : <TextField autoFocus label="Your post" multiline minRows={4} value={body} onChange={(event) => setBody(event.target.value)} />}
+        {mediaType ? <><Button variant="outlined" component="label">Choose {type}<input hidden type="file" accept={type === 'photo' ? 'image/*' : `${type}/*`} multiple={type === 'photo'} onChange={(event) => { setFiles(Array.from(event.target.files || [])); event.target.value = ''; }} /></Button><Typography variant="body2" color="text.secondary">{files.length ? files.map((file) => file.name).join(', ') : 'Choose an original file to upload before publishing.'}</Typography>
+        {type === 'photo' && <ComposerPreviewCarousel files={files} />}
+        <TextField label="Caption (optional)" multiline minRows={2} value={caption} onChange={(event) => setCaption(event.target.value)} /></> : <TextField autoFocus label="Your post" multiline minRows={4} value={body} onChange={(event) => setBody(event.target.value)} />}
         {operation.error && <Alert severity="error">{operation.error}</Alert>}
       </Stack></DialogContent>
       <DialogActions><Button disabled={operation.busy} onClick={onClose}>Cancel</Button><Button variant="contained" type="submit" disabled={operation.busy || data.offline || (mediaType ? !files.length : !body.trim())}>{operation.busy ? <CircularProgress size={20} color="inherit" /> : 'Publish'}</Button></DialogActions>
