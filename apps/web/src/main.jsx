@@ -17,6 +17,8 @@ import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk
 import { resolveStoredNames } from "./name-heal.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates } from "./member-actions.js";
 import { waitUntilHubHealthy } from "./update.js";
+import { arrivalPollMs } from "./live.js";
+import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport } from "./media-transport.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin } from "./identity.jsx";
@@ -100,14 +102,35 @@ function App() {
     writeLocal(stored, origin, field, [...new Set([...(previous || []), ...ids])]);
   }, []);
 
+  // Feed context preservation (PORCH-046 ac-3): leaving a route notes the
+  // reading offset; returning to it — through navigation, Back, or the
+  // conversation dismiss-and-return path — recalls the exact position.
+  const scrollMemoryRef = useRef(createScrollMemory());
+  const restoreScroll = useCallback((targetRoute) => {
+    const saved = scrollMemoryRef.current.recall(targetRoute);
+    if (saved !== null) {
+      // Two frames: the first commit mounts the new surface; the second
+      // scrolls once the feed's layout-reserved height exists again.
+      requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, saved)));
+    } else window.scrollTo(0, 0);
+  }, []);
   const navigate = useCallback((path) => {
     const next = path.startsWith("/") ? path : `/${path}`;
     if (next === "/compose") { setComposeOpen(true); return; }
+    if (window.location.pathname !== next) scrollMemoryRef.current.note(window.location.pathname, window.scrollY);
     window.history.pushState({}, "", next);
     setRoute(next);
-    window.scrollTo(0, 0);
-  }, []);
-  useEffect(() => { const pop = () => setRoute(routeOf()); window.addEventListener("popstate", pop); return () => window.removeEventListener("popstate", pop); }, []);
+    restoreScroll(next);
+  }, [restoreScroll]);
+  useEffect(() => {
+    const pop = () => {
+      const next = routeOf();
+      setRoute(next);
+      restoreScroll(window.location.pathname);
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, [restoreScroll]);
   useEffect(() => {
     request({ url: origin }, "social/network").then((result) => setNetwork(result.network || null)).catch(() => {}).finally(() => setNetworkLoaded(true));
   }, []);
@@ -185,6 +208,24 @@ function App() {
   // Reads never ride a stale connections closure: renewal saves new tokens to
   // browser storage BEFORE state settles, so reads take the storage copy —
   // always exactly what the vault last issued.
+  // Live arrival application (PORCH-046 ac-1): every feed apply — initial
+  // load, member-write reconcile, or arrival refresh — captures the reading
+  // anchor before the replace and compensates scrollTop exactly once after
+  // the merge paints, so arriving content never repositions the reader.
+  const applyFeeds = useCallback((result, { notice: noticeText } = {}) => {
+    const before = captureFeedAnchor();
+    setOffline(result.failures.length > 0);
+    if (!result.failures.length) {
+      setPosts(result.posts);
+      saveTimeline(stored, `${origin}:${identity?.id}`, result.posts);
+    } else if (noticeText) setNotice(noticeText);
+    setRanked(result.ranked);
+    if (before) {
+      requestAnimationFrame(() => {
+        applyFeedCompensation(before, captureFeedAnchor());
+      });
+    }
+  }, [identity]);
   const reload = useCallback(async () => {
     if (!identity?.id) return;
     const live = readConnections(stored, origin);
@@ -192,12 +233,7 @@ function App() {
     if (!liveActive) return;
     const identityConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
     const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], ranked: [], failures: [] };
-    setOffline(result.failures.length > 0);
-    if (!result.failures.length) {
-      setPosts(result.posts);
-      saveTimeline(stored, `${origin}:${identity.id}`, result.posts);
-    } else setNotice("Your family server is unreachable. Showing saved moments where available.");
-    setRanked(result.ranked);
+    applyFeeds(result, { notice: "Your family server is unreachable. Showing saved moments where available." });
     const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult] = await Promise.allSettled([
       // Member-plane groups (PORCH-030): the Groups page reads the group
       // containers the member's own token can read — creation is open to
@@ -232,7 +268,7 @@ function App() {
       },
     });
     if (deviceResult.status === "fulfilled") observeDevices(deviceResult.value.registrations || [], liveActive);
-  }, [identity, observeDevices]);
+  }, [identity, observeDevices, applyFeeds]);
   useEffect(() => {
     // First load waits for the silent renewal: an expired access token must
     // re-credential BEFORE reads, or the page would render failure states.
@@ -248,6 +284,36 @@ function App() {
     window.addEventListener("online", online);
     return () => window.removeEventListener("online", online);
   }, [reload]);
+  // Live arrival (PORCH-046 ac-1): new posts land without a manual refresh.
+  // The hub carries no realtime event surface yet (the PORCH-047 companion),
+  // so this is the REST-refresh degrade: a background full read at a fixed
+  // cadence, only while the tab is visible and never on scroll, applied
+  // through applyFeeds so arriving content reflects in place and the
+  // reading place is compensated (no scroll-jack). Poll failures stay
+  // quiet — the next tick and the offline surfaces name the connection.
+  const arrivingRef = useRef(false);
+  useEffect(() => {
+    if (!identity?.id) return undefined;
+    const arrived = async () => {
+      if (document.hidden || document.visibilityState !== "visible" || arrivingRef.current) return;
+      arrivingRef.current = true;
+      try {
+        const live = readConnections(stored, origin);
+        const liveConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
+        if (liveConnections.length) {
+          applyFeeds(await loadFeeds(liveConnections));
+        }
+      } catch { /* the next scheduled arrival rides again */ }
+      finally { arrivingRef.current = false; }
+    };
+    const timer = setInterval(() => void arrived(), arrivalPollMs);
+    const visible = () => { if (document.visibilityState === "visible") void arrived(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [identity, applyFeeds]);
   // Media transport (PORCH-044): the rendition worker registers once at
   // boot; member surfaces render rendition URLs directly (srcset/sizes,
   // video poster/src) once it is live, and fall back to the authorized-
@@ -353,6 +419,10 @@ function App() {
   // Card- and detail-level writes resolve the post's own origin connection
   // through the shared resolver (PORCH-038 ac-4); card and detail ride one
   // routing rule, so a card write lands in the same conversation detail loads.
+  // Reaction and reply writes are optimistic in the surfaces (PORCH-046
+  // ac-2): the card reflects immediately and rolls back on failure, so no
+  // full feed reload rides a card interaction. A vote still reconciles —
+  // prominence order is the server's own computation.
   const connectionForPost = (post) => connectionForPostOrigin(post, identityConnections, active);
   const actions = useMemo(() => ({
     isHidden: (post) => hidden.has(`${post.origin || origin}:${post._id || post.id}`),
@@ -571,10 +641,10 @@ function App() {
     // No server-side origin confirmation event exists yet. Never dismiss by pretending.
     confirmDevice: unsupported,
     vote: async (post, value) => { const result = await publishVote(connectionForPost(post), post, value); await reload(); return result; },
-    react: async (post, emoji) => { const result = await publishReaction(connectionForPost(post), post, emoji); await reload(); return result; },
-    unreact: async (post, emoji) => { const result = await unpublishReaction(connectionForPost(post), post, emoji); await reload(); return result; },
+    react: async (post, emoji) => publishReaction(connectionForPost(post), post, emoji),
+    unreact: async (post, emoji) => unpublishReaction(connectionForPost(post), post, emoji),
     submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
-    submitReply: async (post, body, parentId, mentions = []) => { const result = await publishReply(connectionForPost(post), post, body, parentId, mentions); await reload(); return result; },
+    submitReply: async (post, body, parentId, mentions = []) => publishReply(connectionForPost(post), post, body, parentId, mentions),
     // Mention roster (PORCH-037): same-origin members by name, fetched at
     // the post's own origin so candidates never ride another connection.
     mentionCandidates: (post, q = "") => fetchMentionCandidates(connectionForPost(post), q),

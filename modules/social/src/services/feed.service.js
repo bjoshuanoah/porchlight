@@ -1,4 +1,5 @@
 import { typedError, postView, newestFirstByActivity } from "./post.service.js";
+import { InteractionService } from "./interaction.service.js";
 import { socialModels } from "../models.js";
 
 export const FEED_MESSAGES = {
@@ -7,6 +8,9 @@ export const FEED_MESSAGES = {
   E_GROUP_UNKNOWN: "That group doesn't exist in this network.",
   E_SEARCH_QUERY_REQUIRED: "Search needs a plain-text query.",
 };
+
+/** Conversation slice window (PORCH-046 ac-5): the card carries the five most recent replies. */
+export const REPLY_SLICE_LIMIT = 5;
 
 /**
  * Feed service (PORCH-007): timeline ordering and feed assembly.
@@ -39,17 +43,26 @@ export class FeedService {
    * @param {import("./membership.service.js").MembershipService} deps.membership
    * @param {import("./ranking.service.js").RankingService} deps.ranking
    * @param {import("./media.service.js").MediaService} deps.media
+   * @param {import("@porchlight/shared").CollectionLike} deps.comments
+   *   Conversation previews (PORCH-046): the feed read decorates each post
+   *   view with its latest-five reply slice and reply count so cards render
+   *   the conversation without follow-up per-card requests.
+   * @param {import("@porchlight/shared").CollectionLike} deps.reactions
+   *   Reaction rows ride the member view as authored (PORCH-046): cards
+   *   reflect arriving reactions in place from the same feed read.
    *   Post views hydrate `mediaMeta` — the rendition set of record + display
    *   dims — so every feed surface carries what the client's srcset/sizes
    *   and the video poster need (PORCH-044 ac-2).
    */
-  constructor({ posts, derivedData, groups, membership, ranking, media }) {
+  constructor({ posts, derivedData, groups, membership, ranking, media, comments, reactions }) {
     this.posts = posts;
     this.derivedData = derivedData;
     this.groups = groups;
     this.membership = membership;
     this.ranking = ranking;
     this.media = media;
+    this.comments = comments;
+    this.reactions = reactions;
     this.models = socialModels;
   }
 
@@ -157,7 +170,8 @@ export class FeedService {
   /** Member views plus read-time member attribution (PORCH-034) and mediaMeta (PORCH-044). */
   async #decorate(views, networkId) {
     const attributed = await this.#withAttribution(await this.#withGroupChips(views, networkId), networkId);
-    return this.media.withMediaMeta(attributed, networkId);
+    const withConversation = await this.#withConversationPreviews(attributed, networkId);
+    return this.media.withMediaMeta(withConversation, networkId);
   }
 
   /**
@@ -185,6 +199,70 @@ export class FeedService {
     return views.map((view) =>
       view.groupId && names.has(view.groupId) ? { ...view, groupName: names.get(view.groupId) } : view,
     );
+  }
+
+  /**
+   * Conversation previews (PORCH-046 ac-5/ac-6): one origin-scoped read of
+   * the network's replies and reaction rows decorates every post view, so a
+   * card renders its latest-five reply slice, its "(and N more)" count, and
+   * the reactions rendered as given — all in one feed read, and arriving
+   * activity reflects in place on the next read without per-card requests.
+   *
+   * - The slice is the LENGTH of the conversation rendered as content
+   *   quantity ("and 47 more" expander, Brian Oct 14 2026; quantity-versus-
+   *   engagement boundary) — never an engagement count and never a
+   *   reaction count; reaction rows render as given without numbers
+   *   (PORCH-036) and votes never enter any read (vote privacy contract).
+   * - Origin containment applies to the decoration itself: only the token's
+   *   network rows are read, so a foreign-network reply never rides a view,
+   *   live or cached (PORCH-046 ac-4).
+   */
+  async #withConversationPreviews(views, networkId) {
+    if (!views.length) return views;
+    const [comments, reactions] = await Promise.all([
+      this.comments.find({ networkId }),
+      this.reactions.find({ networkId }),
+    ]);
+    const names = await this.membership.attributionNames({
+      networkId,
+      dids: [...new Set(comments.map((comment) => comment.authorDid))],
+    });
+    return FeedService.withConversationPreviews(views, comments, reactions, names);
+  }
+
+  /**
+   * Pure decoration (unit-pinned): group the origin's comments and reaction
+   * rows by post, attach each post's latest-five chronological reply slice
+   * with read-time attribution, the conversation reply total, and the
+   * reaction rows as authored — the exact member views the member surfaces
+   * already serve through the interactions read paths.
+   */
+  static withConversationPreviews(views, comments, reactions, names) {
+    const commentsByPost = new Map();
+    for (const comment of comments ?? []) {
+      if (!commentsByPost.has(comment.postId)) commentsByPost.set(comment.postId, []);
+      commentsByPost.get(comment.postId).push(comment);
+    }
+    const rowsByPost = new Map();
+    for (const row of reactions ?? []) {
+      if (!rowsByPost.has(row.postId)) rowsByPost.set(row.postId, []);
+      rowsByPost.get(row.postId).push(InteractionService.reactionView(row));
+    }
+    return views.map((view) => {
+      const mine = (commentsByPost.get(view._id) ?? [])
+        .slice()
+        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+      const slice = mine.slice(-REPLY_SLICE_LIMIT).map((comment) => ({
+        ...InteractionService.commentView(comment),
+        authorName: names.get(String(comment.authorDid)) ?? null,
+      }));
+      return {
+        ...view,
+        replySlice: slice,
+        replyTotal: mine.length,
+        reactionRows: rowsByPost.get(view._id) ?? [],
+      };
+    });
   }
 
   async #originOf(accessToken) {

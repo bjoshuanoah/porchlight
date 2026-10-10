@@ -27,13 +27,17 @@ export const photoFirst = {
   desktopMediaRadius: 12,
   // Mobile vertical rhythm in px — 25–30% tighter than the Oct 9 spacing:
   // Header→caption 8–12; Caption→media 12; Media→utility 8; Utility→actions
-  // 16; Actions→reactions 12; Reactions→divider (no slice) 16.
+  // 16; Actions→reactions 12; Reactions→conversation slice 8 (PORCH-046);
+  // slice→divider 16.
   spacing: {
     headerCaption: 8,
     captionMedia: 12,
     mediaUtility: 8,
     utilityActions: 16,
     actionsReactions: 12,
+    // PORCH-046: Reactions → conversation slice sits 8px above the card's
+    // last text on the 16px mobile rail (build contract rhythm table).
+    reactionsSlice: 8,
     endToDivider: 16,
   },
 };

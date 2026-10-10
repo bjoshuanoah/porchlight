@@ -1,10 +1,10 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
+  DialogContent, DialogTitle, Divider, Drawer, FormControl, IconButton, InputLabel, List, ListItemButton,
   ListItemText, MenuItem, Paper, Popover, Select, Stack, TextField, Typography,
 } from '@mui/material';
-import { AddReactionOutlined, ChevronLeft, ChevronRight } from '@mui/icons-material';
+import { AddReactionOutlined, ChevronLeft, ChevronRight, CloseOutlined } from '@mui/icons-material';
 import { tokens } from './theme.js';
 import { carouselIndex, photoFirst } from './photo-first.js';
 import {
@@ -13,20 +13,18 @@ import {
 } from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { LampMark } from './brand.jsx';
-import { reactionRowsOf, ownEmojiRows, reflectReaction } from './reactions.js';
+import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from './reactions.js';
 import { groupRows, groupMemberRows, canManageGroup, addableCandidates } from './groups.js';
+import { dateOf, relativeTime } from './time.js';
+import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, visibleFeedPosts } from './feed-filter.js';
+import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, pendingReply, conversationOf } from './slice.js';
+import { useMediaQuery } from '@mui/material';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
 const EmojiPicker = lazy(() => import('./emoji-picker.jsx'));
 
 const rows = (value) => Array.isArray(value) ? value : Array.isArray(value?.posts) ? value.posts : [];
-const identityOf = (row) => String(row?._id ?? row?.id ?? '');
-const originOf = (post) => post?.originNetworkId ?? post?.networkId ?? post?.origin?.id;
-const networkId = (data) => data?.network?._id ?? data?.network?.id;
-const originName = (post, data) => post?.origin?.name ?? post?.network ?? (String(originOf(post)) === String(networkId(data)) || !originOf(post) ? data?.network?.name : null) ?? originOf(post) ?? 'This network';
-const visibleAtOrigin = (post, data) => !originOf(post) || !networkId(data) || String(originOf(post)) === String(networkId(data)) || data.connections?.some((connection) => String(connection.networkId) === String(originOf(post)) || (post.origin && String(connection.url).replace(/\/$/, '') === String(post.origin).replace(/\/$/, '')));
-const postKey = (post) => `${post?.origin ?? originOf(post) ?? ''}:${identityOf(post)}`;
 const atCurrentOrigin = (post, data) => post.origin ? post : { ...post, origin: data.server?.url, network: data.network?.name };
 // Attribution (PORCH-034): the hub resolves each author's family-facing
 // name at read time (post.authorName / reply.authorName). This fallback
@@ -35,10 +33,6 @@ const atCurrentOrigin = (post, data) => post.origin ? post : { ...post, origin: 
 // fallback ("Member"), never a generic placeholder string.
 const memberName = (id, data) => id && id === data.identity?.id ? data.identity.name || 'You' : 'Member';
 const messageOf = (error) => error?.message || 'That did not work. Please try again.';
-const dateOf = (value) => {
-  if (!value || Number.isNaN(new Date(value).valueOf())) return '';
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value));
-};
 
 function invoke(actions, key, ...args) {
   if (typeof actions?.[key] !== 'function') throw new Error('This action is not available here yet.');
@@ -48,7 +42,7 @@ function invoke(actions, key, ...args) {
 function useOperation() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  async function run(callback, onSuccess) {
+  async function run(callback, onSuccess, onFailure) {
     setError('');
     setBusy(true);
     try {
@@ -58,6 +52,7 @@ function useOperation() {
       return result;
     } catch (failure) {
       setError(messageOf(failure));
+      onFailure?.(failure);
       return undefined;
     } finally {
       setBusy(false);
@@ -383,27 +378,67 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2 }) 
   // column reflect ONE origin conversation — when reactionState is provided
   // both bars render the PostDetail owner's rows and every toggle lands in
   // both columns from the same routine.
-  const [internalRows, setInternalRows] = useState(null);
+  const [internalRows, setInternalRows] = useState(() =>
+    // Decorated cards seed synchronously from the feed read (first paint
+    // carries arriving reactions; no loader fetch rides them). The
+    // controlled detail surface stays null until its own load runs.
+    reactionState ? null : reactionRowsOf(post?.reactionRows));
   const rows = reactionState?.rows ?? internalRows;
   const setRows = reactionState?.setRows ?? setInternalRows;
   const [anchor, setAnchor] = useState(null);
   const operation = useOperation();
   const ownDid = data.identity ? String(data.identity.id) : '';
+
+  // In-place reflection (PORCH-046 ac-2): a card's rows seed straight from
+  // the feed read's decoration (no per-card fetch), and a read whose rows
+  // changed — another member's reaction arriving — replaces the rows in
+  // place while no own write is in flight. A row the own optimistic toggle
+  // already reflected keeps its local copy until the read that includes it
+  // (the optimistic row is idempotent, never a duplicate).
+  const serverRows = reactionRowsOf(post?.reactionRows);
+  const serverSignature = serverRows.map((row) => `${row.emoji}:${row.memberDid ?? ''}:${row._id ?? ''}`).join('|');
+  const lastServerRef = useRef(null);
   useEffect(() => {
+    if (!Object.prototype.hasOwnProperty.call(post ?? {}, 'reactionRows')) return;
+    if (lastServerRef.current === serverSignature) return;
+    lastServerRef.current = serverSignature;
+    setRows(serverRows);
+    // The payload's decorated rows are the seed and every later reflection;
+    // no loader fetch rides a decorated surface.
+  }, [serverSignature]);
+
+  useEffect(() => {
+    // Undecorated surfaces (the post detail read) keep the PORCH-036 loader.
+    if (Object.prototype.hasOwnProperty.call(post ?? {}, 'reactionRows')) return undefined;
     let current = true;
     setRows(null);
     Promise.resolve().then(() => invoke(actions, 'loadReactions', post))
       .then((value) => { if (current) setRows(reactionRowsOf(value)); })
       .catch(() => { if (current) setRows([]); });
     return () => { current = false; };
-  }, [identityOf(post), actions.loadReactions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one load per surfaced post
+  }, [identityOf(post)]);
   const own = ownEmojiRows(rows, ownDid);
   const toggle = (emoji, isOwn) => {
     setAnchor(null);
     if (!ownDid || operation.busy) return;
-    operation.run(() => invoke(actions, isOwn ? 'unreact' : 'react', post, emoji), (result) => {
-      setRows((current) => reflectReaction(current, { emoji, ownDid, isOwn, reaction: result?.reaction }));
-    });
+    // Optimistic first (ac-2): the row renders immediately, in the one pure
+    // step both surfaces share; the failure path rolls back to the exact
+    // prior rows; success swaps the local copy for the confirmed row.
+    const before = rows;
+    setRows(optimisticToggle(rows ?? [], { emoji, ownDid, isOwn }));
+    operation.run(
+      () => invoke(actions, isOwn ? 'unreact' : 'react', post, emoji),
+      (result) => {
+        if (result?.reaction && !isOwn) {
+          setRows((current) => reflectReaction(current ?? [], {
+            emoji, ownDid, isOwn: false, reaction: result.reaction,
+          }));
+        }
+      },
+      // Rollback (ac-2): a failed write never leaves a phantom reaction.
+      () => setRows(before),
+    );
   };
   return <Stack
     direction="row"
@@ -458,8 +493,59 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   // member never navigates to post detail to answer.
   const [replying, setReplying] = useState(false);
   const operation = useOperation();
+  // Conversation slice state (PORCH-046): pending replies (write in flight,
+  // rolled back on failure) and acknowledged replies (write confirmed, next
+  // read pending) render through sliceDisplay with the server's slice.
+  const [localConversation, setLocalConversation] = useState(() => ({ pending: [], confirmed: [] }));
+  const replyCountRef = useRef(0);
+  const [conversationOpen, setConversationOpen] = useState(false);
+  const sliceIdentity = post
+    ? `${identityOf(post)}:${Array.isArray(post.replySlice) ? post.replySlice.map((reply) => reply._id).join('|') : ''}:${Number.isFinite(post.replyTotal) ? post.replyTotal : ''}`
+    : '';
+  useEffect(() => {
+    // Reconcile (ac-2): an acknowledged reply retires the moment a feed read
+    // can hold it — never rendered twice, never dropped before its write
+    // landed in a read's quantity.
+    setLocalConversation((current) => ({
+      ...current,
+      confirmed: reconcileConfirmed(current.confirmed, post ? conversationOf(post).total : null),
+    }));
+    // The slice identity rides the post's read, not the object identity: a
+    // poll that changes nothing reconciles nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reconcile rides the server slice signature
+  }, [sliceIdentity]);
   if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
   const openPost = () => navigate?.(`/posts/${encodeURIComponent(identityOf(post))}`);
+  // Card-level optimistic reply (PORCH-046 ac-2): the row renders in the
+  // slice immediately; a confirmed write joins the acknowledged list (it
+  // keeps rendering until a read counts it); a failure rolls back cleanly.
+  const submitOptimistic = (body, parentId, mentions) => {
+    const localId = `local:reply-${Date.now()}-${(replyCountRef.current += 1)}`;
+    const optimisticRow = pendingReply(post, body, {
+      did: data.identity ? String(data.identity.id) : null,
+      name: data.identity?.name ?? 'You',
+      localId,
+    });
+    setLocalConversation((current) => ({ ...current, pending: [...current.pending, optimisticRow] }));
+    const revert = () => setLocalConversation((current) => ({ ...current, pending: current.pending.filter((row) => row._id !== localId) }));
+    return Promise.resolve()
+      .then(() => invoke(actions, 'submitReply', post, body, parentId, mentions))
+      .then((result) => {
+        if (!result?.comment || !identityOf(result.comment)) {
+          revert();
+          throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
+        }
+        setLocalConversation((current) => ({
+          pending: current.pending.filter((row) => row._id !== localId),
+          confirmed: [...current.confirmed, {
+            reply: { ...result.comment, postId: result.comment.postId ?? identityOf(post) },
+            basis: conversationOf(post).total,
+          }],
+        }));
+        return result;
+      }, (failure) => { revert(); throw failure; });
+  };
+  const displaySlice = detail ? null : sliceDisplay(post, localConversation);
   // PORCH-043 mobile post container (below 900px): width 100%, no radius,
   // no side borders, no shadow — the Feed's 1px warm-neutral divider
   // provides post separation (continuous album, no card gap mode). Desktop
@@ -477,7 +563,9 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   const actionSx = detail
     ? undefined
     : { fontSize: 14, fontWeight: 600, justifyContent: 'center' };
-  return <Card sx={cardSx}>
+  // The feed-entry anchor (PORCH-046 ac-1): a stable per-post measurement
+  // point for the reading-place compensation during live arrival.
+  return <Card sx={cardSx} data-feed-entry={postKey(post) || undefined}>
     <CardContent sx={{ p: detail ? '20px' : { xs: '16px', lg: '20px' }, '&:last-child': { pb: detail ? '20px' : { xs: '16px', lg: '20px' } } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
         <Stack direction="row" spacing={1.5} alignItems="center">
@@ -520,16 +608,175 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
         offline={data.offline}
         post={post}
         actions={actions}
-        onSubmit={(body, mentions) => invoke(actions, 'submitReply', post, body, null, mentions)}
+        onSubmit={(body, mentions) => submitOptimistic(body, null, mentions)}
       />}
       <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} spacingY={detail ? 2 : photoFirst.spacing.actionsReactions / 8} />
+      {/* Conversation preview (PORCH-046 ac-5): the latest five replies,
+          readable and joinable without opening the post; the expander opens
+          the conversation in place (ac-6), quantity only. */}
+      {!detail && <ReplySliceBlock slice={displaySlice} data={data} actions={actions} onOpenConversation={() => setConversationOpen(true)} offline={data.offline} />}
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
+      {/* The in-place conversation surface: no navigation, so the feed's
+          reading place survives open and dismissal untouched (ac-3, ac-6).
+          The route surface (/posts/:id) remains the standalone full-history
+          view (PORCH-041). */}
+      {!detail && <ConversationOverlay open={conversationOpen} onClose={() => setConversationOpen(false)} postId={identityOf(post)} seed={post} data={data} actions={actions} navigate={navigate} />}
     </CardContent>
   </Card>;
 }
 
 function Heading({ title, subtitle }) {
   return <Box sx={{ mb: 3 }}><Typography variant="h1" component="h1" fontWeight={650}>{title}</Typography>{subtitle && <Typography variant="body1" color="text.secondary">{subtitle}</Typography>}</Box>;
+}
+
+// Conversation preview slice (PORCH-046 ac-5, build contract): the card's
+// five most-recent replies in reading direction between the reaction row
+// and the post divider, each riding the ReplyItem treatment (30px avatar,
+// name, relative time, text). The expander is the quiet amber text action
+// "(and N more)" and carries the conversation-length quantity only — never
+// an engagement count (quantity-versus-engagement boundary).
+function ReplySliceBlock({ slice, data, actions, onOpenConversation, offline }) {
+  const more = expanderCount(slice.total);
+  if (!slice.replies.length && more === 0) return null;
+  return <Stack spacing={1} sx={{ mt: photoFirst.spacing.reactionsSlice / 8 }}>
+    {slice.replies.map((reply) => (
+      <Stack key={identityOf(reply)} direction="row" spacing={1} alignItems="flex-start">
+        <Avatar sx={{ width: 30, height: 30, fontSize: 13 }}>{(reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)).trim().charAt(0).toUpperCase()}</Avatar>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="caption" color="porchlight.muted">
+            {reply.authorName ?? memberName(reply.authorDid, data)} · {relativeTime(reply.createdAt)}
+          </Typography>
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data)}</Typography>
+        </Box>
+      </Stack>
+    ))}
+    {more > 0 && <Button
+      size="small"
+      onClick={offline ? undefined : onOpenConversation}
+      aria-label={`Open the conversation — ${more} more replies`}
+      sx={{ alignSelf: 'flex-start', px: 0, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'secondary.main' }}
+    >{`(and ${more} more)`}</Button>}
+  </Stack>;
+}
+
+// The in-place conversation surface (PORCH-046 ac-6): mobile bottom sheet
+// (24px top corners), desktop side panel — one component, two responsive
+// forms, never a navigation. Dismissal restores the feed where it was (no
+// scroll was touched, so the reading place survives open AND dismissal).
+// The thread loads only on open; the same loadPost/loadComments path the
+// detail route rides keeps one conversation source.
+function ConversationOverlay({ open, onClose, postId, seed, data, actions, navigate }) {
+  const isWide = useMediaQuery('@media (min-width: 900px)');
+  const [thread, setThread] = useState(null);
+  const [pending, setPending] = useState([]);
+  const [reactionRows, setReactionRows] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const replyCountRef = useRef(0);
+  useEffect(() => {
+    if (!open || !postId) return undefined;
+    let current = true;
+    setLoading(true);
+    setThread(null);
+    setPending([]);
+    setReactionRows(null);
+    setLoadError('');
+    Promise.resolve().then(async () => {
+      const postResult = await invoke(actions, 'loadPost', postId);
+      if (!postResult?.post || identityOf(postResult.post) !== String(postId)) throw new Error('The family server did not return this post.');
+      const commentsResult = await invoke(actions, 'loadComments', postResult.post);
+      if (!Array.isArray(commentsResult?.comments)) throw new Error('The family server did not return this conversation.');
+      return { post: postResult.post, comments: commentsResult.comments };
+    }).then((result) => {
+      if (current) { setThread(result); if (result.post?.reactionRows) setReactionRows(reactionRowsOf(result.post.reactionRows)); setLoading(false); }
+    }).catch((error) => {
+      if (current) { setLoadError(messageOf(error)); setLoading(false); }
+    });
+    return () => { current = false; };
+  }, [open, postId]);
+  const post = thread?.post ?? (open ? seed : null);
+  const comments = thread?.comments ?? [];
+  // The rendered thread carries the load's rows plus the member's
+  // optimistic replies; confirmed rows swap for the server's copies.
+  const rowIds = new Set(comments.map((reply) => identityOf(reply)));
+  const rendered = [...comments, ...pending.filter((reply) => !rowIds.has(identityOf(reply)))];
+  const submit = async (body, parentId, mentions) => {
+    if (!thread) throw new Error('The conversation is still loading. Try again once it opens.');
+    const localId = `local:reply-${Date.now()}-${(replyCountRef.current += 1)}`;
+    const optimisticRow = pendingReply(thread.post, body, {
+      did: data.identity ? String(data.identity.id) : null,
+      name: data.identity?.name ?? 'You',
+      localId,
+    });
+    // The optimistic row joins the thread in place (ac-2); nesting under its
+    // parent renders with the same Reply treatment.
+    setPending((current) => [...current, { ...optimisticRow, parentId: parentId ?? null }]);
+    const revert = () => setPending((current) => current.filter((row) => row._id !== localId));
+    try {
+      const result = await invoke(actions, 'submitReply', thread.post, body, parentId, mentions);
+      if (!result?.comment || !identityOf(result.comment) || result.comment.postId !== identityOf(thread.post)) {
+        throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
+      }
+      // The confirmed server copy retires the optimistic row under its own
+      // _id: one copy renders in the thread, exactly once.
+      setPending((current) => current.filter((row) => row._id !== localId));
+      setThread((current) => current ? { ...current, comments: [...current.comments, result.comment] } : current);
+      return result;
+    } catch (failure) {
+      revert();
+      throw failure;
+    }
+  };
+  const filtered = rendered.filter((reply) => (!reply.postId || reply.postId === identityOf(post)) && (!reply.networkId || !post || !originOf(post) || String(reply.networkId) === String(originOf(post))));
+  return <Drawer
+    open={Boolean(open)}
+    onClose={onClose}
+    anchor={isWide ? 'right' : 'bottom'}
+    aria-label="Conversation"
+    slotProps={{ paper: {
+      sx: {
+        ...(isWide
+          ? { width: 480, borderTopLeftRadius: '18px', borderBottomLeftRadius: '18px' }
+          : { borderTopLeftRadius: '24px', borderTopRightRadius: '24px', maxHeight: '85vh' }),
+        display: 'flex',
+        flexDirection: 'column',
+      },
+    } }}
+  >
+    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+      <Typography variant="h3" component="h2" fontWeight={650}>Replies</Typography>
+      <IconButton aria-label="Close conversation" onClick={onClose}><CloseOutlined fontSize="small" /></IconButton>
+    </Stack>
+    <Box sx={{ overflowY: 'auto', flex: 1, p: 2 }}>
+      {loading && <CircularProgress aria-label="Loading conversation" size={24} />}
+      {loadError && <Alert severity="error">{loadError}</Alert>}
+      {post && !loadError && <Stack spacing={2}>
+        <PostCard post={post} data={data} actions={actions} navigate={navigate} detail
+          reactionState={{ rows: reactionRows, setRows: setReactionRows }} />
+        <PresentReactions post={post} data={data} actions={actions} reactionState={{ rows: reactionRows, setRows: setReactionRows }} />
+        <Typography variant="h6">Replies</Typography>
+        {thread && (rendered.length ? <ReplyThread comments={filtered} post={post} data={data} actions={actions} navigate={navigate} offline={data.offline} onReply={submit} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
+      </Stack>}
+    </Box>
+  </Drawer>;
+}
+
+// The pending copy swaps for the confirmed server row by id: the confirm
+// response carries the real _id, so the local row retires and the confirmed
+// one renders exactly once under the same conversation.
+
+// The nested reply tree (PORCH-046/PORCH-041): one structure shared by the
+// post detail route and the in-place conversation surface.
+function ReplyThread({ comments, post, data, actions, navigate, offline, onReply }) {
+  const byParent = repliesByParent(comments);
+  const render = (parentId = '', depth = 0, seen = new Set()) => (byParent.get(parentId) || [])
+    .filter((reply) => !seen.has(identityOf(reply)))
+    .map((reply, index) => {
+      const nextSeen = new Set(seen);
+      nextSeen.add(identityOf(reply));
+      return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} offline={offline} data={data} post={post} actions={actions} navigate={navigate} onReply={onReply}>{render(identityOf(reply), depth + 1, nextSeen)}</Reply>;
+    });
+  return <>{render()}</>;
 }
 
 // PORCH-043: the mobile feed breaks out of the page gutter so posts span
@@ -541,7 +788,10 @@ const feedBreakout = { mx: { xs: -2, lg: 0 } };
 const albumDivider = <Box sx={{ height: '1px', flexShrink: 0, width: '100%', bgcolor: photoFirst.dividerColor, display: { xs: 'block', lg: 'none' } }} aria-hidden="true" />;
 
 function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
-  const visible = rows(posts).filter((post) => visibleAtOrigin(post, data) && !hidden?.has(postKey(post)) && !actions?.isHidden?.(post));
+  // The one privacy filter every render rides (PORCH-046 ac-4): loaded
+  // feed, live arrival, and cached timeline all drop hidden and
+  // foreign-origin posts here, never downstream.
+  const visible = visibleFeedPosts(rows(posts), data, hidden).filter((post) => !actions?.isHidden?.(post));
   return visible.length
     ? <Box sx={feedBreakout}><Stack spacing={{ xs: 0, lg: 2 }} divider={albumDivider}>{visible.map((post, index) => <PostCard key={postKey(post) || index} post={post} data={data} actions={actions} navigate={navigate} onHide={onHide} />)}</Stack></Box>
     : <Alert severity="info">{empty}</Alert>;
@@ -888,23 +1138,12 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const post = thread?.id === selectedId ? thread.post : saved;
   const comments = thread?.id === selectedId ? thread.comments : [];
   const replies = comments.filter((reply) => (!reply.postId || reply.postId === identityOf(post)) && (!reply.networkId || !originOf(post) || String(reply.networkId) === String(originOf(post))));
-  const byParent = new Map();
-  for (const reply of replies) {
-    const key = reply.parentId || '';
-    if (!byParent.has(key)) byParent.set(key, []);
-    byParent.get(key).push(reply);
-  }
   const submit = async (body, parentId, mentions) => {
     const result = await invoke(actions, 'submitReply', post, body, parentId, mentions);
     if (!result?.comment || identityOf(result.comment) === '' || result.comment.postId !== identityOf(post)) throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
     setThread((current) => current?.id === selectedId ? { ...current, comments: [...current.comments, result.comment] } : current);
     return result;
   };
-  const renderReplies = (parentId = '', depth = 0, seen = new Set()) => (byParent.get(parentId) || []).filter((reply) => !seen.has(identityOf(reply))).map((reply, index) => {
-    const nextSeen = new Set(seen);
-    nextSeen.add(identityOf(reply));
-    return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} offline={data.offline} data={data} post={post} actions={actions} navigate={navigate} onReply={submit}>{renderReplies(identityOf(reply), depth + 1, nextSeen)}</Reply>;
-  });
   return <Box sx={{ maxWidth: 1120, mx: 'auto' }}>
     <Button onClick={() => navigate?.('/timeline')} sx={{ mb: 2 }}>Back to timeline</Button>
     {loading && !data.offline && <CircularProgress aria-label="Loading conversation" />}
@@ -922,7 +1161,7 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
       <Box sx={{ minWidth: 0 }}>
         <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />
         <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Replies</Typography>
-        {!data.offline && (replies.length ? renderReplies() : <Typography color="text.secondary">Be the first to reply.</Typography>)}
+        {!data.offline && (replies.length ? <ReplyThread comments={replies} post={post} data={data} actions={actions} navigate={navigate} offline={data.offline} onReply={submit} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
         {!data.offline && <ReplyForm label="Write a reply" post={post} actions={actions} onSubmit={(body, mentions) => submit(body, null, mentions)} />}
       </Box>
     </Box>}

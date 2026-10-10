@@ -175,6 +175,8 @@ export function assembleSocialModule(store, options = {}) {
     membership: membershipService,
     ranking: rankingService,
     media: mediaService,
+    comments,
+    reactions,
   });
   const exportService = new ExportService({
     posts,
