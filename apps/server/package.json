@@ -29,7 +29,8 @@
     "express": "^4.19.2",
     "mongodb": "^6.10.0",
     "redis": "^4.7.0",
-    "socket.io": "^4.8.4"
+    "socket.io": "^4.8.4",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@porchlight/web": "0.1.0",

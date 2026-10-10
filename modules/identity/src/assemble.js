@@ -22,11 +22,13 @@ import { createIdentityRouter, createWellKnownRouter } from "./routes.js";
  * identity by DID only and never imports this file's internals.
  *
  * @param {import("@porchlight/shared").StoreLike} store
- * @param {{ hubUrl?: () => string|null, ledger?: { record: (step: string, detail?: object) => Promise<void> }, adoptionEnabled?: boolean, log?: ((line: string) => void) | null }} [options]
+ * @param {{ hubUrl?: () => string|null, ledger?: { record: (step: string, detail?: object) => Promise<void> }, adoptionEnabled?: boolean, log?: ((line: string) => void) | null, onDeviceLinkMinted?: (event: { did: string, grantId: string }) => unknown }} [options]
  *        `adoptionEnabled` (PORCH-026) re-enters second-hub identity
  *        adoption: flag-hidden by default (V1 build offers creation only).
  *        `log` (PORCH-019) is the auth-failure capture sink; defaults to
  *        console.log (the hub supervisor pipes it into logs/hub.log).
+ *        `onDeviceLinkMinted` (PORCH-059) is the device-notifications
+ *        observer the hub runtime wires to the social push pipeline.
  */
 export function assembleIdentityModule(store, options = {}) {
   const hubUrlFn = options.hubUrl ?? (() => null);
@@ -40,6 +42,7 @@ export function assembleIdentityModule(store, options = {}) {
     deviceLinks: collection("device_links"),
     sessions: collection("sessions"),
     hash: sha256,
+    onDeviceLinkMinted: options.onDeviceLinkMinted ?? null,
   });
   const authService = new AuthService({
     challenges: collection("challenges"),

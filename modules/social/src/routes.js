@@ -19,7 +19,7 @@ import express, { Router } from "express";
  */
 export function createSocialRouter(controllers) {
   const router = Router();
-  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums, groups } = controllers;
+  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums, groups, push } = controllers;
 
   // Bootstrap-era network + invite surface (PORCH-003 contract; unchanged).
   router.get("/network", bootstrap.get);
@@ -101,6 +101,17 @@ export function createSocialRouter(controllers) {
   router.get("/albums/:name/media", albums.mediaList);
   router.get("/albums/:name/media/:mediaId/renditions/:kind", albums.serveRendition);
   router.get("/albums/:name/media/:mediaId/original", albums.serveOriginal);
+
+  // Device notifications (PORCH-059): Web Push transport — the subscription
+  // route serves the VAPID public key, registration binds identity-scoped
+  // subscriptions (re-registration replaces, never duplicates), and the
+  // member's settings carry the hub-enforced gates (global switch, per-event
+  // toggles, per-network mutes) the send pipeline reads at send time.
+  router.get("/push/vapid", push.vapid);
+  router.post("/push/subscriptions", push.register);
+  router.delete("/push/subscriptions", push.unregister);
+  router.get("/push/settings", push.getSettings);
+  router.put("/push/settings", push.updateSettings);
 
   // Owner console server behaviors (PORCH-005 ac-1/3/4) + group containers.
   router.get("/console/ranking", ownerConsole.getRanking);

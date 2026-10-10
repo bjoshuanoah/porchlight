@@ -112,8 +112,12 @@ export class MembershipService {
    *   PORCH-047: invoked the moment a member's sessions die at revocation —
    *   the real-time surface closes the member's live subscriptions in the
    *   same instant (revocation is active, not "at next request").
+   * @param {(event: { networkId: string, did: string, membershipId: string }) => Promise<void>} [deps.onJoined]
+   *   PORCH-059: invoked the moment a fresh membership row lands at
+   *   admission — the push surface notifies the network's owner and
+   *   delegates in the same write (the "new member joined" event class).
    */
-  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey, authFailureSink, memberNames, onRevoked }) {
+  constructor({ memberships, membershipSessions, deviceKeys, invites, verifyMemberIdToken, networks, audit, registeredDeviceKey, authFailureSink, memberNames, onRevoked, onJoined }) {
     this.memberships = memberships;
     this.membershipSessions = membershipSessions;
     this.deviceKeys = deviceKeys;
@@ -123,6 +127,7 @@ export class MembershipService {
     this.registeredDeviceKey = registeredDeviceKey ?? null;
     this.memberNames = memberNames ?? null;
     this.onRevoked = onRevoked ?? null;
+    this.onJoined = onJoined ?? null;
     this.authFailureSink = authFailureSink ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
@@ -201,6 +206,9 @@ export class MembershipService {
         revokedAt: null,
       };
       await this.memberships.insertOne(membership);
+      // PORCH-059: the "new member joined" event class fires at the same
+      // write the membership lands — owner and delegates learn it instantly.
+      await this.onJoined?.({ networkId, did: membership.did, membershipId: membership._id });
     }
 
     await this.enrollDevice({ networkId, did: membership.did, deviceId, publicKeyJwk: devicePublicKeyJwk });

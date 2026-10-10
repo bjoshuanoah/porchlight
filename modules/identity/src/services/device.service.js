@@ -29,13 +29,18 @@ export class DeviceService {
    * @param {import("@porchlight/shared").CollectionLike} deps.deviceLinks
    * @param {import("@porchlight/shared").CollectionLike} deps.sessions
    * @param {(value: string) => string} deps.hash sha256 of the code/token value
+   * @param {(event: { did: string, grantId: string }) => unknown} [deps.onDeviceLinkMinted]
+   *   PORCH-059: device notifications — invoked when an owner-routed
+   *   device link is minted so the origin networks' owners can be pushed.
+   *   Fire-and-observe; mint behavior never depends on the hook.
    */
-  constructor({ deviceRegistrations, pairingCodes, deviceLinks, sessions, hash }) {
+  constructor({ deviceRegistrations, pairingCodes, deviceLinks, sessions, hash, onDeviceLinkMinted }) {
     this.deviceRegistrations = deviceRegistrations;
     this.pairingCodes = pairingCodes;
     this.deviceLinks = deviceLinks;
     this.sessions = sessions;
     this.hash = hash;
+    this.onDeviceLinkMinted = onDeviceLinkMinted ?? null;
   }
 
   /** Owner/member view: active AND revoked rows stay visible. */
@@ -136,6 +141,13 @@ export class DeviceService {
       createdAt: at.toISOString(),
     };
     await this.deviceLinks.insertOne(row);
+    // PORCH-059: device notifications observe the mint — fire-and-observe;
+    // mint behavior never depends on the hook.
+    try {
+      this.onDeviceLinkMinted?.({ did, grantId: row._id });
+    } catch {
+      // Never fail the mint over an observer.
+    }
     return { grantId: row._id, token, expiresAt: row.expiresAt };
   }
 

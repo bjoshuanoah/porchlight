@@ -36,16 +36,20 @@ export class InteractionService {
    * @param {import("@porchlight/shared").CollectionLike} deps.votes
    * @param {import("./membership.service.js").MembershipService} deps.membership
    * @param {import("./notification.service.js").NotificationService} deps.notifications
+   * @param {import("./push.service.js").PushService} [deps.push]
+   *   PORCH-059: the push send pipeline — reactions to your post fan out to
+   *   the post's author through it (live membership + settings at send time).
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
    * @param {import("./link-preview.service.js").LinkPreviewService} [deps.previews]
    */
-  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews }) {
+  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews, push }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
     this.votes = votes;
     this.membership = membership;
     this.notifications = notifications;
+    this.push = push ?? null;
     this.previews = previews ?? null;
     this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
@@ -158,6 +162,19 @@ export class InteractionService {
       type: "reaction.applied",
       postId: payload.postId,
       content: InteractionService.reactionView(reaction),
+    });
+    // PORCH-059: "reactions to your post" — the post's author gets the push
+    // through the send pipeline (live membership + settings at send time);
+    // they authored the target, so the caption/excerpt rides. The reactor
+    // never receives their own reaction.
+    const target = await this.posts.findOne({ _id: payload.postId });
+    await this.push?.notify({
+      networkId,
+      type: "reaction",
+      targetDids: [target?.authorId ?? ""],
+      postId: payload.postId,
+      actorDid: session.did,
+      excerpt: target?.caption ?? target?.body ?? null,
     });
     return { reaction: InteractionService.reactionView(reaction) };
   }

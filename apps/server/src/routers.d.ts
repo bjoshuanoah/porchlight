@@ -28,7 +28,7 @@ declare module "@porchlight/identity" {
   }
   export function assembleIdentityModule(
     store: { collection(name: string): unknown },
-    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null },
+    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null; /** PORCH-059: the device-notifications observer (social push wiring). */ onDeviceLinkMinted?: (event: { did: string; grantId: string }) => unknown },
   ): IdentityModule;
   export function createWellKnownRouter(wellKnownController: unknown): import("express").Router;
   export class TrustService {
@@ -64,6 +64,8 @@ declare module "@porchlight/social" {
         flag: string | null;
       }>;
     };
+    /** PORCH-059: the Web Push send pipeline (identity-scoped subscriptions + settings). */
+    pushService: PushService;
     /** PORCH-047: the real-time event surface (subscribe/catch-up/revoke). */
     realtimeService: unknown;
     controllers: unknown;
@@ -126,6 +128,13 @@ declare module "@porchlight/social" {
         plane?: unknown | null;
         replayHours?: number;
       };
+      /** PORCH-059: the Web Push transport (hub runtime wiring). */
+      push?: {
+        /** The hub's VAPID material (runtime-setup state); null skips sending. */
+        vapid?: { publicKey: string; privateKey: string; subject: string } | null;
+        /** Injected send transport; defaults to the web-push client. */
+        sender?: (options: { subscription: unknown; plaintext: unknown }) => Promise<unknown>;
+      };
     },
   ): SocialModule;
   export function createMemoryEventPlane(options?: { maxEntries?: number }): {
@@ -157,6 +166,17 @@ declare module "@porchlight/social" {
   }
   export class NotificationService {
     inbox(options?: { accessToken?: string | null }): Promise<{ notifications: Array<Record<string, unknown>> }>;
+  }
+  /** PORCH-059: the device-notifications send pipeline. */
+  export class PushService {
+    vapidKey(): { publicKey: string | null; available: boolean };
+    registerSubscription(options?: { accessToken?: string | null; endpoint?: string }): Promise<{ subscription: Record<string, unknown> }>;
+    unregisterSubscription(options?: { accessToken?: string | null; endpoint?: string }): Promise<{ removed: boolean }>;
+    memberSettings(options?: { accessToken?: string | null }): Promise<{ settings: { enabled: boolean; events: Record<string, boolean>; mutes: string[] } }>;
+    updateSettings(options?: { accessToken?: string | null; enabled?: boolean; events?: Record<string, boolean>; mutes?: string[] }): Promise<{ settings: { enabled: boolean; events: Record<string, boolean>; mutes: string[] } }>;
+    notify(options?: Record<string, unknown>): Promise<{ sent: number; skipped: number; failed?: boolean }>;
+    notifyNewMember(options?: { networkId?: string; did?: string }): Promise<{ sent: number; skipped: number }>;
+    notifyDeviceLink(options?: { did?: string }): Promise<{ sent: number; skipped: number }>;
   }
   export class GroupService {
     constructor(deps: { groups: unknown; memberships: unknown });

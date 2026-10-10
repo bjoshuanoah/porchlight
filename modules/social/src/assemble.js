@@ -7,6 +7,7 @@ import { AuditService } from "./services/audit.service.js";
 import { PostService } from "./services/post.service.js";
 import { InteractionService } from "./services/interaction.service.js";
 import { NotificationService } from "./services/notification.service.js";
+import { PushService } from "./services/push.service.js";
 import { RealtimeService, createMemoryEventPlane } from "./services/realtime.service.js";
 import { GroupService } from "./services/group.service.js";
 import { RankingService, normalizeRankingConfig } from "./services/ranking.service.js";
@@ -26,6 +27,7 @@ import { ConsoleController } from "./controllers/console.controller.js";
 import { GroupsController } from "./controllers/groups.controller.js";
 import { MediaController } from "./controllers/media.controller.js";
 import { AlbumController } from "./controllers/album.controller.js";
+import { PushController } from "./controllers/push.controller.js";
 import { createSocialRouter } from "./routes.js";
 
 /**
@@ -81,6 +83,17 @@ import { createSocialRouter } from "./routes.js";
  *       The bounded replay window behind the REST catch-up (24h, config
  *       value `realtime.replayHours`, packages/shared).
  *   },
+ *   push?: {
+ *     PORCH-059: the Web Push transport (identity-scoped subscriptions +
+ *     hub-enforced member settings).
+ *     vapid?: { publicKey: string, privateKey: string, subject: string } | null,
+ *       The hub's VAPID material, generated at first run by the runtime
+ *       setup and held in hub server state (never committed); absent
+ *       material only skips sending (log-only).
+ *     sender?: ({ statusCode: number }) => Promise<unknown>,
+ *       Injected send transport (tests run a local capture server or a
+ *       stub); defaults to the web-push Push API client (aes128gcm).
+ *   },
  * }} [options]
  */
 export function assembleSocialModule(store, options = {}) {
@@ -114,6 +127,10 @@ export function assembleSocialModule(store, options = {}) {
   // metadata cache (quantity-only, no engagement data).
   const linkPreviews = collection("link_previews");
   const linkPreviewCache = collection("link_preview_cache");
+  // Device notifications (PORCH-059): identity-scoped push subscriptions +
+  // the hub-enforced member settings (read at send time, never cached).
+  const pushSubscriptions = collection("push_subscriptions");
+  const pushSettings = collection("push_settings");
 
   const auditService = new AuditService(auditEvents, ledger);
   const audit = auditService.recorderFor(null);
@@ -137,11 +154,31 @@ export function assembleSocialModule(store, options = {}) {
     // subscriptions in the same write that kills the sessions (late-bound
     // ref — the realtime service is assembled after the membership service).
     onRevoked: (event) => realtimeService?.killMembership(event.membershipId),
+    // PORCH-059: the push surface notifies the owner and delegates in the
+    // same write a membership lands (late-bound ref — the push service is
+    // assembled after the membership service).
+    onJoined: (event) => pushService?.notifyNewMember(event),
     audit,
   });
   const quotaService = new QuotaService({ artifacts, networks, audit });
   const groupService = new GroupService({ groups, memberships, membership: membershipService });
-  const notificationService = new NotificationService({ notifications, membership: membershipService });
+  // Device notifications (PORCH-059): the Web Push send pipeline. The
+  // VAPID material is injected by the hub runtime (generated at first run
+  // by the runtime setup, held in hub server state — never committed);
+  // absent material only skips sending (log-only), it never breaks writes.
+  // The sender is injectable: tests run a local capture server (or a stub);
+  // production defaults to the web-push Push API client (aes128gcm).
+  const pushService = new PushService({
+    subscriptions: pushSubscriptions,
+    settings: pushSettings,
+    memberships,
+    networks,
+    membership: membershipService,
+    vapid: options.push?.vapid ?? null,
+    sender: options.push?.sender ?? null,
+    log: options.log ?? null,
+  });
+  const notificationService = new NotificationService({ notifications, membership: membershipService, push: pushService });
   // Real-time event delivery (PORCH-047): the event plane is injected by
   // the hub runtime (Redis-backed fan-out + replay window) and defaults to
   // the in-memory plane (tests, daemon-less runs). The service needs only
@@ -243,6 +280,7 @@ export function assembleSocialModule(store, options = {}) {
     audit,
     realtime: realtimeService,
     previews: linkPreviewService,
+    push: pushService,
   });
   const interactionService = new InteractionService({
     posts,
@@ -254,6 +292,7 @@ export function assembleSocialModule(store, options = {}) {
     audit,
     realtime: realtimeService,
     previews: linkPreviewService,
+    push: pushService,
   });
   const rankingService = new RankingService({ config: options.rankingConfig ? normalizeRankingConfig(options.rankingConfig) : undefined });
   const feedService = new FeedService({
@@ -320,6 +359,7 @@ export function assembleSocialModule(store, options = {}) {
     }),
     media: new MediaController({ media: mediaService, export: exportService }),
     albums: new AlbumController({ albums: albumService }),
+    push: new PushController({ push: pushService }),
     groups: new GroupsController({
       groups: groupService,
       membership: membershipService,
@@ -338,6 +378,7 @@ export function assembleSocialModule(store, options = {}) {
     postService,
     interactionService,
     notificationService,
+    pushService,
     realtimeService,
     rankingService,
     feedService,
