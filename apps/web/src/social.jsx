@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, Drawer, FormControl, IconButton, InputLabel, List, ListItemButton,
@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import { AddReactionOutlined, ChevronLeft, ChevronRight, CloseOutlined } from '@mui/icons-material';
 import { cssVars } from './theme.js';
-import { carouselIndex, photoFirst } from './photo-first.js';
+import { adaptiveTrackHeight, carouselIndex, photoFirst } from './photo-first.js';
 import {
   renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
   playableVideoUrl, posterUrl, rungKindForViewport, stampedAspect,
@@ -293,6 +293,11 @@ async function mediaShape(blob, type) {
 const carouselTrackSx = {
   display: 'flex',
   overflowX: 'auto',
+  // The visible window adopts the active slide's height (useAdaptiveTrackHeight):
+  // neighboring slides keep their natural height and are clipped here, never
+  // cropped — vertical panning stays chained to the page because the track
+  // has no scrollable vertical overflow.
+  overflowY: 'hidden',
   scrollSnapType: 'x mandatory',
   // One slide per horizontal gesture (ac-2): scroll-snap-stop always halts
   // momentum at the adjacent slide and release snaps to the nearest one.
@@ -324,6 +329,37 @@ const carouselBreakoutSx = {
   borderRadius: { xs: 0, lg: `${photoFirst.desktopMediaRadius}px` },
   overflow: 'hidden',
 };
+
+// PORCH-045 (Brian, Oct 10, 2026 user-testing note, "as the swiping happens
+// that the page slides into the right size as different aspect ratios are
+// loaded per image"): the active slide owns the visible height. The track's
+// height interpolates between the bounding slides' heights from the scroll
+// fraction (adaptiveTrackHeight), so it follows the finger through the swipe;
+// a ResizeObserver re-measures whenever a slide's box changes because its
+// real aspect ratio resolved on load (legacy media without stamped
+// geometry). Slides stay top-aligned at their natural photo-first heights:
+// only the window height adapts, so nothing is cropped.
+function useAdaptiveTrackHeight(trackRef, count) {
+  const [adaptiveHeight, setAdaptiveHeight] = useState(null);
+  const measure = useCallback(() => {
+    const track = trackRef.current;
+    if (!track || count < 2 || !(track.clientWidth > 0)) return;
+    const heights = Array.from(track.children, (slide) => slide.getBoundingClientRect().height);
+    setAdaptiveHeight(adaptiveTrackHeight(heights, track.scrollLeft / track.clientWidth));
+  }, [trackRef, count]);
+  // Layout effect: the first height lands before paint, so the track never
+  // opens at the tallest slide's height and then jumps.
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (!track || count < 2) return undefined;
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(track);
+    Array.from(track.children).forEach((slide) => observer.observe(slide));
+    return () => observer.disconnect();
+  }, [trackRef, count, measure]);
+  return [adaptiveHeight, measure];
+}
 
 // Desktop arrow affordances (ac-2): quiet controls riding the media edges.
 // Mobile hides them — swipe is the gesture there.
@@ -358,6 +394,7 @@ function MediaCarousel({ ids, post, actions, detail = false }) {
   const trackRef = useRef(null);
   const [position, setPosition] = useState(0);
   const count = ids.length;
+  const [adaptiveHeight, measure] = useAdaptiveTrackHeight(trackRef, count);
   const slideBy = (step) => {
     const track = trackRef.current;
     if (!track) return;
@@ -366,7 +403,11 @@ function MediaCarousel({ ids, post, actions, detail = false }) {
   };
   return <Box sx={{ mt: detail ? 2 : photoFirst.spacing.captionMedia / 8 }}>
     <Box sx={{ position: 'relative', ...(!detail ? carouselBreakoutSx : {}) }}>
-      <Box ref={trackRef} onScroll={(event) => setPosition(carouselIndex(event.currentTarget.scrollLeft, event.currentTarget.clientWidth, count))} sx={carouselTrackSx}>
+      <Box ref={trackRef} onScroll={(event) => {
+        const target = event.currentTarget;
+        setPosition(carouselIndex(target.scrollLeft, target.clientWidth, count));
+        measure();
+      }} style={adaptiveHeight != null ? { height: adaptiveHeight } : undefined} sx={carouselTrackSx}>
         {ids.map((id, index) => (
           <Box key={`${id}-${index}`} aria-roledescription="slide" aria-label={`Image ${index + 1} of ${count}`} sx={carouselSlideSx}>
             <MediaItem id={id} post={post} actions={actions} detail={detail} slide />
@@ -386,12 +427,13 @@ function ComposerPreviewCarousel({ files }) {
   const trackRef = useRef(null);
   const [position, setPosition] = useState(0);
   const [urls, setUrls] = useState([]);
+  const count = urls.length;
+  const [adaptiveHeight, measure] = useAdaptiveTrackHeight(trackRef, count);
   useEffect(() => {
     const created = (files ?? []).map((file) => URL.createObjectURL(file));
     setUrls(created);
     return () => created.forEach((url) => URL.revokeObjectURL(url));
   }, [files]);
-  const count = urls.length;
   const slideBy = (step) => {
     const track = trackRef.current;
     if (!track) return;
@@ -401,7 +443,11 @@ function ComposerPreviewCarousel({ files }) {
   if (!count) return null;
   return <Box sx={{ mt: 1, borderRadius: '10px', overflow: 'hidden' }}>
     <Box sx={{ position: 'relative', borderRadius: '10px' }}>
-      <Box ref={trackRef} onScroll={(event) => setPosition(carouselIndex(event.currentTarget.scrollLeft, event.currentTarget.clientWidth, count))} sx={carouselTrackSx}>
+      <Box ref={trackRef} onScroll={(event) => {
+        const target = event.currentTarget;
+        setPosition(carouselIndex(target.scrollLeft, target.clientWidth, count));
+        measure();
+      }} style={adaptiveHeight != null ? { height: adaptiveHeight } : undefined} sx={carouselTrackSx}>
         {urls.map((url, index) => (
           <Box key={url} aria-roledescription="slide" aria-label={`Attached photo ${index + 1} of ${count}`} sx={carouselSlideSx}>
             <Box component="img" src={url} alt={files[index]?.name ?? 'Attached photo'} sx={{ display: 'block', width: '100%', maxHeight: 320, objectFit: 'contain', bgcolor: 'porchlight.subtle' }} />

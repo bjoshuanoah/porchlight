@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { carouselIndex, photoFirst } from '../src/photo-first.js';
+import { adaptiveTrackHeight, carouselIndex, photoFirst } from '../src/photo-first.js';
 
 const social = readFileSync(fileURLToPath(new URL('../src/social.jsx', import.meta.url)), 'utf8');
 
@@ -99,9 +99,50 @@ test('PORCH-045 ac-5: interactions bind to the post, never the slide', () => {
 test('PORCH-045: composer upload previews render the carousel preview shape', () => {
   assert.match(social, /function ComposerPreviewCarousel\(\{ files \}\)/);
   assert.match(social, /type === 'photo' && <ComposerPreviewCarousel files=\{files\} \/>/);
-  // Same snap track, same slide treatment, same quantity indicator.
+  // Same snap track, same slide treatment, same quantity indicator,
+  // same adaptive height behavior (user-testing amendment below).
   const preview = social.slice(social.indexOf('function ComposerPreviewCarousel'), social.indexOf('function Media('));
   assert.match(preview, /sx=\{carouselTrackSx\}/);
   assert.match(preview, /carouselSlideSx/);
   assert.match(preview, /\{position \+ 1\}\/\{count\}/);
+});
+
+// PORCH-045 (Brian, Oct 10, 2026 user-testing note): "as the swiping happens
+// that the page slides into the right size as different aspect ratios are
+// loaded per image". The track height follows the swipe — interpolating
+// between the bounding slides from the scroll fraction — and re-measures
+// when a slide's real aspect ratio resolves on load. Slides keep their
+// natural photo-first heights; only the visible window adapts, so nothing
+// is cropped to a track height.
+test('PORCH-045: the page slides into the right size across differing slide heights', () => {
+  // Interpolation between the bounding slides from the scroll fraction.
+  assert.equal(adaptiveTrackHeight([422, 760, 300], 0), 422);
+  assert.equal(adaptiveTrackHeight([422, 760, 300], 0.5), 591);
+  assert.equal(adaptiveTrackHeight([422, 760, 300], 1), 760);
+  assert.equal(adaptiveTrackHeight([422, 760, 300], 2), 300);
+  // Fractions outside the slide range clamp to the outermost slides.
+  assert.equal(adaptiveTrackHeight([422, 760], 1.25), 760);
+  assert.equal(adaptiveTrackHeight([422, 760], -0.5), 422);
+  // Slides not yet laid out (height 0 / non-finite) never produce a bogus
+  // height; measured neighbors carry the interpolation until they resolve
+  // (legacy media without stamped geometry), and a fully unmeasured
+  // series leaves the track at its natural height.
+  assert.equal(adaptiveTrackHeight(null, 0), null);
+  assert.equal(adaptiveTrackHeight([], 0), null);
+  assert.equal(adaptiveTrackHeight([0, NaN], 0), null);
+  assert.equal(adaptiveTrackHeight([422, 0], 1), 422);
+  assert.equal(adaptiveTrackHeight([422, 0, 300], 0.5), 422);
+  assert.equal(adaptiveTrackHeight([422, 0, 300], 1.5), 361);
+  // Both carousel surfaces (post and composer preview) ride the same
+  // adaptive hook: measured slide heights land before paint (layout
+  // effect), scroll events re-derive the height, and a ResizeObserver
+  // re-measures whenever a slide's box resolves on load. The track clips
+  // its own vertical overflow so neighbors keep natural height, never crop.
+  const trackShape = social.slice(social.indexOf('// Shared snap-track treatment'), social.indexOf('function useAdaptiveTrackHeight('));
+  assert.match(trackShape, /overflowY: 'hidden'/);
+  assert.match(social, /function useAdaptiveTrackHeight\(trackRef, count\)/);
+  assert.equal(social.match(/\[adaptiveHeight, measure\] = useAdaptiveTrackHeight\(trackRef, count\)/g).length, 2);
+  assert.match(social, /useLayoutEffect\(\(\) => \{/);
+  assert.match(social, /new ResizeObserver\(measure\)/);
+  assert.equal(social.match(/style=\{adaptiveHeight != null \? \{ height: adaptiveHeight \} : undefined\}/g).length, 2);
 });
