@@ -301,6 +301,109 @@ test("ac-2: the global switch and per-event toggles gate at send time — never 
   assert.equal(sender.sends[1].subscription.identityId, ALICE);
 });
 
+test("ac-2: the gating matrix is enforced over ROUTE-persisted settings — every matrix element rides HTTP routes", async () => {
+  const sender = senderOf(201);
+  const { mod, devs, tokens, settings, subs } = await pushFixture({ sender });
+  const { base, close } = await serve(mod);
+  const route = async (path, token, body, method = "POST") => {
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      ...(method === "GET" || method === "DELETE" ? {} : { body: JSON.stringify(body) }),
+    });
+    assert.ok([200, 201].includes(res.status), `${method} ${path} succeeded`);
+    return res.json();
+  };
+  const putSettings = async (body) => route("/push/settings", tokens.alice, body, "PUT");
+  try {
+    // Registration, authorship, settings writes, and every trigger below
+    // ride the routes on the real express vertical — nothing about this
+    // matrix is service-injected.
+    await route("/push/subscriptions", tokens.alice, { endpoint: "https://push.example.com/routes", keys: { p256dh: "B_routes", auth: "A_routes" } });
+    await route("/push/subscriptions", tokens.bob, { endpoint: "https://push.example.com/revoked", keys: { p256dh: "B_revoked", auth: "A_revoked" } });
+    const { post: sunday } = await route("/posts", tokens.alice, {
+      payload: { type: "text", body: "Sunday dinner at six" },
+      signature: devs.alice.signPayload({ type: "text", body: "Sunday dinner at six" }),
+    });
+    const react = (emoji) =>
+      route(`/posts/${sunday._id}/reactions`, tokens.bob, {
+        payload: { postId: sunday._id, emoji },
+        signature: devs.bob.signPayload({ postId: sunday._id, emoji }),
+      });
+
+    // The global switch gates at send time — the PUT route persisted it.
+    await putSettings({ enabled: false });
+    await react("❤️");
+    assert.equal(sender.sends.length, 0, "the route-persisted switch stops the send");
+
+    // Per-event toggles gate at send time, on the same persisted row.
+    await putSettings({ enabled: true, events: { reaction: false } });
+    await react("🎉");
+    assert.equal(sender.sends.length, 0, "the toggled-off event type produces no send attempt");
+    await putSettings({ enabled: true, events: { reaction: true } });
+    await react("🔥");
+    assert.equal(sender.sends.length, 1, "enabled pairs deliver over the route-registered subscription");
+
+    // Per-network mutes gate at send time — and the GET route's read-back
+    // is the same persisted row the pipeline reads on the next send.
+    await putSettings({ enabled: true, mutes: [FAMILY] });
+    const readBack = await route("/push/settings", tokens.alice, null, "GET");
+    assert.deepEqual(readBack.settings.mutes, [FAMILY]);
+    const [persisted] = await settings.find({});
+    assert.deepEqual(persisted.mutes, [FAMILY], "the pipeline's enforcement source is the route-persisted row");
+    assert.equal(persisted.events.reaction, true);
+    await react("🥳");
+    assert.equal(sender.sends.length, 1, "the muted origin stays silent");
+    await putSettings({ enabled: true, mutes: [] });
+    await react("💯");
+    assert.equal(sender.sends.length, 2, "clearing the mute restores delivery");
+
+    // Reply trigger through the comment route: a root comment carries no
+    // covered trigger; the nested reply delivers.
+    const root = await route(`/posts/${sunday._id}/comments`, tokens.alice, {
+      payload: { postId: sunday._id, parentId: null, body: "Root" },
+      signature: devs.alice.signPayload({ postId: sunday._id, parentId: null, body: "Root" }),
+    });
+    await route(`/posts/${sunday._id}/comments`, tokens.bob, {
+      payload: { postId: sunday._id, parentId: root.comment._id, body: "We'll bring pie" },
+      signature: devs.bob.signPayload({ postId: sunday._id, parentId: root.comment._id, body: "We'll bring pie" }),
+    });
+    assert.equal(sender.sends.length, 3, "enabled reply pairs deliver through the comment route");
+    assert.equal(sender.sends[2].plaintext.type, "reply");
+
+    // The member-controlled groupPost toggle gates through the routes.
+    const { group } = await route("/groups", tokens.alice, { name: "Picnic", members: [OWNER, ALICE, BOB] });
+    await putSettings({ enabled: true, events: { groupPost: true } });
+    await route("/posts", tokens.bob, {
+      payload: { type: "text", groupId: group._id, body: "Potluck list" },
+      signature: devs.bob.signPayload({ type: "text", groupId: group._id, body: "Potluck list" }),
+    });
+    assert.equal(sender.sends[3].plaintext.type, "groupPost", "the toggle-on member receives the group post");
+    await putSettings({ enabled: true, events: { groupPost: false } });
+    await route("/posts", tokens.bob, {
+      payload: { type: "text", groupId: group._id, body: "Rain check" },
+      signature: devs.bob.signPayload({ type: "text", groupId: group._id, body: "Rain check" }),
+    });
+    assert.equal(sender.sends.length, 4, "the toggled-off groupPost class produces no further send");
+
+    // Removed member: bob's post still stands, alice reacts — deliverability
+    // died at the revocation write (revoked through the console route).
+    const { post: bobPost } = await route("/posts", tokens.bob, {
+      payload: { type: "text", body: "Before leaving" },
+      signature: devs.bob.signPayload({ type: "text", body: "Before leaving" }),
+    });
+    await route("/console/members/revoke", tokens.owner, { did: BOB });
+    await route(`/posts/${bobPost._id}/reactions`, tokens.alice, {
+      payload: { postId: bobPost._id, emoji: "👋" },
+      signature: devs.alice.signPayload({ postId: bobPost._id, emoji: "👋" }),
+    });
+    assert.equal(sender.sends.length, 4, "the removed member produces no send attempt");
+    assert.equal((await subs.find({})).length, 2, "bob's subscription survives for OTHER networks' reach");
+  } finally {
+    close();
+  }
+});
+
 test("ac-2: muted networks produce no send attempt", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
@@ -642,6 +745,68 @@ test("ac-5: the settings routes read and update the hub-enforced member controls
       body: JSON.stringify({ enabled: true, mutes: ["net_stranger"] }),
     });
     assert.equal(refused.status, 403);
+  } finally {
+    close();
+  }
+});
+
+/* ---- ac-2: the gating matrix rides the ROUTES ----------------------------- */
+
+test("ac-2: settings written through the PUT route gate real trigger writes — the matrix against persisted route state", async () => {
+  const sender = senderOf(201);
+  const { mod, devs, tokens } = await pushFixture({ sender });
+  await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/routed", keys: { p256dh: "B_r", auth: "A_r" } });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const react = (emoji) =>
+    mod.interactionService.react({
+      accessToken: tokens.bob,
+      payload: { postId: post._id, emoji },
+      signature: devs.bob.signPayload({ postId: post._id, emoji }),
+    });
+  const put = (body) =>
+    fetch(`${base}/push/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${tokens.alice}` },
+      body: JSON.stringify(body),
+    });
+  const { base, close } = await serve(mod);
+  try {
+    // Every gate below is written through the HTTP route (the same
+    // route → controller → service → model path the hub serves) into
+    // the persisted push_settings row — the send pipeline enforces those
+    // rows at send time; nothing is ever fixture-injected. PUT is a
+    // full-row replace (absent event keys reset to defaults), so each
+    // gate's PUT carries the toggles it intends: the previous gate's
+    // state is turned back on so exactly one gate is operative per step.
+    await put({ enabled: false });
+    await react("1️⃣");
+    assert.equal(sender.sends.length, 0, "the route-written global switch stops the send");
+
+    await put({ enabled: true, events: { reaction: false } });
+    await react("2️⃣");
+    assert.equal(sender.sends.length, 0, "the route-written toggled-off event type produces no send attempt");
+
+    await put({ enabled: true, events: { reaction: true }, mutes: [FAMILY] });
+    await react("3️⃣");
+    assert.equal(sender.sends.length, 0, "the route-written network mute stops the send with the type toggle back on");
+
+    await put({ enabled: true, events: { reaction: false }, mutes: [] });
+    const aliceComment = await mod.interactionService.comment({
+      accessToken: tokens.alice,
+      payload: { postId: post._id, parentId: null, body: "Root" },
+      signature: devs.alice.signPayload({ postId: post._id, parentId: null, body: "Root" }),
+    });
+    await mod.interactionService.comment({
+      accessToken: tokens.bob,
+      payload: { postId: post._id, parentId: aliceComment.comment._id, body: "Real reply" },
+      signature: devs.bob.signPayload({ postId: post._id, parentId: aliceComment.comment._id, body: "Real reply" }),
+    });
+    assert.equal(sender.sends.length, 1, "the enabled pair delivers against the persisted route state");
+    assert.equal(sender.sends[0].plaintext.type, "reply", "the deliver rides the reply trigger while the reaction toggle stays off");
+
+    // GET over the wire reads back the same persisted row the sends gated on.
+    const read = await (await fetch(`${base}/push/settings`, { headers: { authorization: `Bearer ${tokens.alice}` } })).json();
+    assert.deepEqual(read.settings, { enabled: true, events: { ...DEFAULT_EVENT_SWITCHES, reaction: false }, mutes: [] });
   } finally {
     close();
   }
