@@ -8,10 +8,10 @@ import {
   sign,
   type KeyObject,
 } from "node:crypto";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, createMemoryStore, normalizeConfig } from "@porchlight/shared";
+import { DEFAULT_CONFIG, createMemoryStore, normalizeConfig, saveConfig } from "@porchlight/shared";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
 import { canonicalJson } from "@porchlight/social";
 import { BootstrapService } from "../src/services/bootstrap.service.js";
@@ -33,6 +33,7 @@ interface Json {
 interface TestHub {
   db: StoreLike;
   bootstrap: BootstrapService;
+  configDir: string;
   close: () => void;
   port: Promise<number>;
 }
@@ -44,6 +45,10 @@ function testHub(version: string | null = "9.9.9-test"): TestHub {
   // probe reads real numbers (the owner console's disk-status consumer).
   const configDir = mkdtempSync(join(tmpdir(), "porchlight-owner-console-"));
   mkdirSync(join(configDir, "media"), { recursive: true });
+  // The hub's runtime setup writes the config file before the hub starts
+  // (the CLI setup step); the owner's media-root edit re-reads it through
+  // createServer's persistRoot — production shape, not an optional extra.
+  saveConfig(configDir, config);
   const bootstrap = new BootstrapService(db, config, configDir);
   const app = createServer({ store: db, readiness: OK_PROBES, config, bootstrap, hubUrl: () => "https://hub.test", version });
   const { promise, resolve } = Promise.withResolvers<number>();
@@ -51,6 +56,7 @@ function testHub(version: string | null = "9.9.9-test"): TestHub {
   return {
     db,
     bootstrap,
+    configDir,
     close: () => {
       listener.closeIdleConnections();
       listener.close();
@@ -544,4 +550,78 @@ test("ac-3 (PORCH-029): the member directory reflects live membership state on t
   const directoryFinal = await call(port, `${OWNER_CONSOLE}/members`, { headers: owner.auth });
   const finalRow = ((directoryFinal.body.members as Json[]).find((row) => row.did === member.did) as Json);
   assert.equal(finalRow.state, "revoked");
+});
+
+// PORCH-054 route-surface pin (stage-2 finding, Oct 12 user-testing round): the
+// media-root console pair must exist on the REAL apps/server vertical — the
+// module-assembled e2e can't catch a registration that never ships. GET/PUT
+// ride /api/social/console/media-root exactly as every other console surface;
+// the health doc carries the same readiness state through the late-bound
+// provider the router wires (hub.setMediaStatus).
+test("PORCH-054: media-root console pair is served by the real vertical — owner-only GET/PUT, refused edits name the check, health carries the readiness state", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+  const owner = await bootOwner(port);
+  const member = await bootMember(hub, port, owner.auth, "Tom", "dev_media");
+
+  // Owner-only: a member's token reads 403 like every console surface.
+  const denied = await call(port, `${OWNER_CONSOLE}/media-root`, { headers: member.auth });
+  assert.equal(denied.status, 403);
+
+  // GET: the default root (the hub data directory's media path) with its
+  // readiness state and the no-migration copy carried plainly.
+  const mediaDefault = join(hub.configDir, "media");
+  const got = await call(port, `${OWNER_CONSOLE}/media-root`, { headers: owner.auth });
+  assert.equal(got.status, 200);
+  assert.equal(got.body.root, mediaDefault);
+  assert.equal(got.body.state, "ready");
+  assert.equal(got.body.check, null);
+  assert.match(String(got.body.note), /move/);
+
+  // The health doc carries the same root + state via the wired provider.
+  const health = await call(port, "/api/health");
+  assert.equal(health.status, 200);
+  assert.equal(((health.body.media as Json) ?? {}).root, mediaDefault);
+  assert.equal((health.body.media as Json).state, "ready");
+
+  // PUT with a path failing the five startup checks: refused 422 with the
+  // check named, and nothing persisted to the config file (it is never
+  // written before a passing edit).
+  const refused = await call(port, `${OWNER_CONSOLE}/media-root`, {
+    method: "PUT",
+    headers: owner.auth,
+    body: JSON.stringify({ root: join(hub.configDir, "not-a-volume") }),
+  });
+  assert.equal(refused.status, 422);
+  assert.equal(refused.body.code, "E_MEDIA_ROOT_REFUSED");
+  assert.match(String(refused.body.check), /volume|writable|capacity|filesystem|masquerade/);
+  const persistedBefore = JSON.parse(readFileSync(join(hub.configDir, "config.json"), "utf8")) as Json;
+  assert.equal((persistedBefore.media as Json).root ?? null, null, "a refused edit persists nothing");
+
+  // PUT with a passing path: re-points the running vertical, persists the
+  // config edit (single source of truth), audits mediaMoved:false — and the
+  // subsequent GET/health read the new root (no automatic migration).
+  const dirB = mkdtempSync(join(tmpdir(), "porchlight-media-root-"));
+  t.after(() => rmSync(dirB, { recursive: true, force: true }));
+  const put = await call(port, `${OWNER_CONSOLE}/media-root`, {
+    method: "PUT",
+    headers: owner.auth,
+    body: JSON.stringify({ root: dirB }),
+  });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.root, dirB);
+  assert.equal(put.body.state, "ready");
+  const persistedAfter = JSON.parse(readFileSync(join(hub.configDir, "config.json"), "utf8")) as Json;
+  assert.equal((persistedAfter.media as Json).root, dirB);
+  const after = await call(port, `${OWNER_CONSOLE}/media-root`, { headers: owner.auth });
+  assert.equal(after.status, 200);
+  assert.equal(after.body.root, dirB);
+  const healthAfter = await call(port, "/api/health");
+  assert.equal((healthAfter.body.media as Json).root, dirB);
+  const audit = await call(port, `${OWNER_CONSOLE}/audit`, { headers: owner.auth });
+  assert.equal(audit.status, 200);
+  const change = ((audit.body.events as Json[]).find((event) => event.action === "media_root_change") ?? null) as Json | null;
+  assert.ok(change, "a media-root edit is audited");
+  assert.equal(((change.detail as Json) ?? {}).mediaMoved, false);
 });
