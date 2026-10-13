@@ -1,18 +1,34 @@
-name: Deploy
+name: npm-publish
 
-# Deploy pipeline (PORCH-002 ac-2): version → build → npm publish with
-# provenance → GitHub Release with signed artifacts. npm is the ONLY install
-# surface (Brian, Oct 13, 2026 — brew/curl ruled out of V1); npm publish runs
-# first, GitHub Releases are the signed supply-chain anchor of record per
-# Distribution and Licensing (Porchlight Server TS 2). All steps run on
-# GitHub-hosted runners only (Brian, Oct 8, 2026).
+# npm publish pipeline (PORCH-002 ac-2, PORCH-062): version → build → npm
+# publish via OIDC trusted publishing → GitHub Release with signed artifacts.
+# npm is the ONLY install surface (Brian, Oct 13, 2026 — brew/curl ruled out
+# of V1); npm publish runs first, GitHub Releases are the signed supply-chain
+# anchor of record per Distribution and Licensing (Porchlight Server TS 2).
+# All steps run on GitHub-hosted runners only (Brian, Oct 8, 2026).
+#
+# Authentication is npm OIDC trusted publishing (PORCH-062 ac-1): the
+# id-token: write permission lets npm exchange the GitHub OIDC token for a
+# short-lived publish credential via the trusted-publisher binding on
+# npmjs.com (github.com/bjoshuanoah/porchlight + workflow filename
+# npm-publish.yml). Zero long-lived NPM_TOKEN exists in repository or CI
+# secrets — do not reintroduce one.
+#
+# Package coverage: `porchlight` always publishes (binding-covered package of
+# record). The @porchlight/* scoped packages publish only when the registry
+# already has them — npm OIDC trusted publishing requires the package to
+# EXIST before its first OIDC publish plus a per-package trusted-publisher
+# binding on npmjs.com, so a never-published scope cannot be created by this
+# workflow; skipping is loud (::warning::) and the owner seeds those
+# packages out-of-band (same one-time human step as porchlight's own
+# registration, PORCH-062 trail).
 #
 # Triggers:
 #   - push of a `v*` tag → full deploy (publish).
 #   - workflow_dispatch with mode=dry-run → the identical flow minus the
 #     npm publish (pack, Sigstore keyless signing, prerelease, cross-platform
 #     tarball install, self-verification). Used to exercise the release path
-#     before real npm credentials (NPM_TOKEN) are configured.
+#     without touching the registry.
 #
 # The version step sets every workspace (and the root) to the released
 # version in the deploy working tree only; manifests on main are not
@@ -40,10 +56,10 @@ on:
 
 permissions:
   contents: write   # create the GitHub release
-  id-token: write   # npm provenance + Sigstore keyless signing (OIDC)
+  id-token: write   # npm OIDC trusted publishing + Sigstore keyless signing
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: npm-publish-${{ github.ref }}
   cancel-in-progress: false
 
 defaults:
@@ -59,10 +75,17 @@ jobs:
       tag: ${{ steps.env.outputs.tag }}
       version: ${{ steps.env.outputs.version }}
     env:
-      # Published packages, in dependency-tolerant order. @porchlight/server is
-      # published since PORCH-003 (the global porchlight CLI carries the hub
-      # runtime in its install closure). @porchlight/web remains private.
-      PUBLISHED: "@porchlight/shared @porchlight/identity @porchlight/social @porchlight/server porchlight"
+      # porchlight is the binding-covered package of record (trusted-publisher
+      # binding: package porchlight → repo bjoshuanoah/porchlight → workflow
+      # npm-publish.yml) and always publishes — its tarball is self-contained
+      # (bundled runtime closure; see bundle-cli.mjs), so it publishes from
+      # the release asset.
+      #
+      # @porchlight/* scoped package set: each publishes only if the registry
+      # already has the package (npm OIDC trusted publishing cannot create a
+      # first publish; the owner seeds it out-of-band per the PORCH-062
+      # trail). @porchlight/web remains private.
+      SCOPED: "@porchlight/shared @porchlight/identity @porchlight/social @porchlight/server"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,6 +96,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
       - uses: sigstore/cosign-installer@v3
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: |
+          npm install -g npm@^11.5.1
+          echo "npm $(npm --version) on node $(node --version)"
       - name: Resolve mode, version, tag
         id: env
         run: |
@@ -107,7 +134,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          for ws in $PUBLISHED; do
+          for ws in $SCOPED; do
             npm pack -w "$ws" --pack-destination release-assets
           done
           # The porchlight tarball must be self-contained (bundleDependencies +
@@ -121,25 +148,26 @@ jobs:
           set -euo pipefail
           cd release-assets
           cosign sign-blob --yes --output-file /dev/null --bundle SHA256SUMS.bundle SHA256SUMS
-      - name: Publish to npm (provenance) — publish mode only
+      - name: Publish to npm (OIDC trusted publishing) — publish mode only
         if: env.MODE == 'publish'
         run: |
           set -euo pipefail
-          if [ -z "${NPM_TOKEN:-}" ]; then
-            echo "::error::NPM_TOKEN (repository actions secret) is not configured — refusing to publish. Add an npm automation/granular token as the NPM_TOKEN secret, then re-run this release."
-            exit 1
-          fi
-          for ws in $PUBLISHED; do
-            if [ "$ws" = "porchlight" ]; then
-              # porchlight publishes from the release asset: the tarball is
-              # self-contained (bundled runtime closure; see bundle-cli.mjs)
-              npm publish release-assets/porchlight-"$VERSION".tgz --provenance --access public
-            else
+          # porchlight first, always: the binding covers this package and its
+          # tarball is self-contained (registry needs nothing else for the
+          # install path). Published version must equal the tag.
+          npm publish release-assets/porchlight-"$VERSION".tgz --provenance --access public
+          # Scoped packages only when the registry already has them — npm
+          # requires a package to exist (plus its per-package trusted
+          # publisher) before it can publish via OIDC, so a never-published
+          # scope cannot be created here. Skipping is a loud warning, not a
+          # silent pass.
+          for ws in $SCOPED; do
+            if npm view "$ws" version >/dev/null 2>&1; then
               npm publish --provenance --access public -w "$ws"
+            else
+              echo "::warning::$ws is not on registry.npmjs.org — npm OIDC trusted publishing requires the package to exist first (owner seeds it out-of-band, PORCH-062 trail) plus its trusted-publisher binding; $ws@$VERSION not published this cut."
             fi
           done
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Release notes
         run: |
           set -euo pipefail
@@ -151,6 +179,15 @@ jobs:
             fi
             echo ""
             echo "npm is the deploy and install surface: \`npm install -g porchlight\`."
+            echo ""
+            echo "## Changelog"
+            echo ""
+            CHANGELOG_SECTION=$(awk -v tag="$TAG" '$0 ~ ("^## " tag "( |$)") {flag=1; next} flag && /^## / {flag=0} flag {print}' CHANGELOG.md)
+            if [ -z "$CHANGELOG_SECTION" ]; then
+              echo "::error::CHANGELOG.md carries no entry under a '## $TAG' heading — every cut's changelog line rides its release notes (PORCH-062 ac-4)."
+              exit 1
+            fi
+            echo "$CHANGELOG_SECTION"
             echo ""
             echo "## License"
             echo ""
@@ -169,7 +206,7 @@ jobs:
             echo ""
             for f in release-assets/*.tgz; do echo "- $(basename "$f") — MIT, mirrors the npm-published tarball"; done
             echo "- SHA256SUMS — sha256 of every tarball"
-            echo "- SHA256SUMS.bundle — Sigstore keyless signature of SHA256SUMS (identity pinned to this deploy workflow)"
+            echo "- SHA256SUMS.bundle — Sigstore keyless signature of SHA256SUMS (identity pinned to npm-publish.yml)"
           } > release-notes.md
       - name: Create GitHub release
         run: |
@@ -228,7 +265,18 @@ jobs:
             gh release download "$TAG" --pattern "porchlight-*.tgz" --dir "$RUNNER_TEMP/install" --repo "$GITHUB_REPOSITORY"
             npm install -g "$RUNNER_TEMP"/install/porchlight-*.tgz
           else
-            npm install -g porchlight
+            # Registry propagation can lag the publish by a moment on a
+            # fresh version — retry a couple of times before failing.
+            installed=""
+            for attempt in 1 2 3 4 5; do
+              if npm install -g porchlight; then installed="1"; break; fi
+              echo "attempt $attempt failed — waiting 30s for registry propagation"
+              sleep 30
+            done
+            if [ -z "$installed" ]; then
+              echo "::error::npm install -g porchlight never succeeded from the registry"
+              exit 1
+            fi
           fi
           porchlight --version
           porchlight

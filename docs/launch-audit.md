@@ -96,7 +96,7 @@ launch; the copy audit remains CI-pinned (`apps/web/scripts/audit.mjs`).
 | Hub daemons bind local-only; remote reach only via the tunnel (`state.mjs`, `start.mjs`) | `--bind_ip 127.0.0.1`, `cloudflared --no-autoupdate` only tunnel process | backed |
 | Zero external telemetry (internal doc comment + `docs/release-verification.md`) | absence verified both statically and by runtime capture (section 1); health probes ping local daemons only (`health.service.ts`) | backed |
 | Vote privacy: votes private, never rendered; no counts cross the wire (routes.js/comments + PRD contract) | per-member vote rows consumed only by the formula module; post views omit vote data (`feed.service.js:75-83`); export omits votes (`export.service.js:24-26`); pinned by `feed.service.test.js:256-278` | backed — note: currently enforced in code but not claimed to members in UI copy |
-| Signed releases (docs/release-verification.md) | cosign keyless bundle + SHA256SUMS + npm provenance (`deploy.yml`, `verify-release.mjs`, negative fixtures) | backed |
+| Signed releases (docs/release-verification.md) | cosign keyless bundle + SHA256SUMS + npm provenance (`npm-publish.yml`, `verify-release.mjs`, negative fixtures) | backed |
 | Key custody: "private key material is never accepted" (API copy) | `assertPublicJwk` rejects `"d"` at every entry (`device.service.js`, `account.service.js:48-51`); browser keys non-extractable (`device.js`) | backed |
 | Source comment "who reacted never leaves this surface" (`main.jsx:185`) | **false**: per-member reaction rows do cross the wire (the client only renders emoji values) | **fixed**: comment rewritten to state the actual behavior |
 
