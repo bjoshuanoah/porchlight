@@ -152,7 +152,11 @@ jobs:
           done
           # The porchlight tarball must be self-contained (bundleDependencies +
           # npm workspaces pack bug): build + verify it explicitly (PORCH-003).
-          rm release-assets/porchlight-*.tgz
+          # Remove only the workspace-packed porchlight tarball by its exact
+          # name: a `porchlight-*` glob also eats the scoped packages' packed
+          # tarballs (porchlight-server-<v>.tgz … all start with "porchlight-")
+          # — the first v0.1.1 cut lost every scoped asset to that glob.
+          rm -f release-assets/porchlight-"$VERSION".tgz
           node scripts/release/bundle-cli.mjs "$VERSION" --out release-assets
           (cd release-assets && shasum -a 256 -- *.tgz > SHA256SUMS)
           echo "Packed:" && ls -la release-assets
