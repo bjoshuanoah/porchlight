@@ -278,7 +278,7 @@ function App() {
     const identityConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
     const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], ranked: [], failures: [] };
     applyFeeds(result, { notice: "Your family server is unreachable. Showing saved moments where available." });
-    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult, mediaRootResult] = await Promise.allSettled([
+    const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult, mediaRootResult, reauthResult] = await Promise.allSettled([
       // Member-plane groups (PORCH-030): the Groups page reads the group
       // containers the member's own token can read — creation is open to
       // every member, so an owner-gated console read would leave every
@@ -297,6 +297,10 @@ function App() {
       // non-owner's 403 degrades to the availability flag like every other
       // console read.
       request(liveActive, "social/console/media-root"),
+      // Address change (PORCH-066): the panel reads the same status surface
+      // the CLI's reauth command reads (serving origin, last re-point);
+      // owner-session guard server-side, availability flag on the client.
+      request(liveActive, "reauth/status"),
     ]);
     const value = (result, fallback) => result.status === "fulfilled" ? result.value : fallback;
     setGroups(value(groupResult, {}).groups || []);
@@ -308,6 +312,7 @@ function App() {
       deviceLinks: value(linksResult, {}).deviceLinks || null,
       update: value(updateResult, null)?.release || null,
       mediaRoot: value(mediaRootResult, null),
+      reauth: value(reauthResult, null),
       availability: {
         groups: groupResult.status === "fulfilled", members: memberResult.status === "fulfilled",
         invites: inviteResult.status === "fulfilled", settings: limitResult.status === "fulfilled",
@@ -315,6 +320,7 @@ function App() {
         devices: deviceResult.status === "fulfilled",
         allDevices: allDevicesResult.status === "fulfilled", deviceLinks: linksResult.status === "fulfilled",
         update: updateResult.status === "fulfilled", mediaRoot: mediaRootResult.status === "fulfilled",
+        reauth: reauthResult.status === "fulfilled",
       },
     });
     if (deviceResult.status === "fulfilled") observeDevices(deviceResult.value.registrations || [], liveActive);
@@ -664,6 +670,12 @@ function App() {
     // tab): a failing path is refused with the check's named reason and the
     // surface carries it verbatim; media never moves on its own.
     editMediaRoot: async (root) => { const result = await request(active, "social/console/media-root", { method: "PUT", body: JSON.stringify({ root }) }); await reload(); return result; },
+    // Register the new domain (PORCH-066): the address action rides the
+    // owner's live session (the same class as Send device link). The server
+    // verifies, re-points, and mints the self-grant; the caller follows the
+    // returned redirectUrl. No reload here: success leaves this origin, and
+    // every refusal leaves zero mutation.
+    changeAddress: (host) => request(active, "social/console/address", { method: "POST", body: JSON.stringify({ host }) }),
     revokeMember: async (member) => {
       const result = await request(active, "social/console/members/revoke", {
         method: "POST", body: JSON.stringify({ memberId: member._id || member.id }),
@@ -925,6 +937,7 @@ function App() {
     invites: owner.invites, audit: owner.audit, disk: owner.disk, availability: owner.availability,
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
     mediaRoot: owner.mediaRoot,
+    reauth: owner.reauth,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline, membershipEnded,
     // PORCH-060: the home-screen display-mode fact (capability-first
     // detection for the notification settings states; screen files never
