@@ -21,6 +21,7 @@ import {
   muteRows,
   normalizeSettings,
   notificationCapability,
+  notificationSection,
   reenableGuidance,
   receivesOwnerEvents,
   withEvent,
@@ -92,17 +93,21 @@ export function NotificationSettings({ data, actions }) {
 
   useEffect(() => {
     // The real permission is the source of truth (ac-3): with it ALREADY
-    // granted this silent re-registration never prompts and renews the
-    // open identity's subscription hub-side (PORCH-059 replace contract).
-    // A promptable (default) permission stays silent here: the browser
-    // prompt fires only from the explicit Enable tap below — never at
-    // page load and never on navigation.
+    // granted AND the open identity's persisted row enabled, this silent
+    // re-registration never prompts and renews the subscription hub-side
+    // (PORCH-059 replace contract) — the opt-in contract rides the
+    // persisted row (PORCH-063): the quiet re-subscribe runs ONLY for
+    // enabled identities, and an off-state identity holds no subscription.
+    // A promptable (default) permission or an off row stays silent here:
+    // the browser prompt fires only from the explicit off-to-on tap below
+    // — never at page load and never on navigation.
     if (!capability.canPush || typeof actions?.enableNotifications !== "function") {
       setDeviceOn(false);
       return undefined;
     }
     if (capability.permission === "denied") { setDenied(true); setDeviceOn(false); return undefined; }
     if (capability.permission !== "granted") { setDeviceOn(false); return undefined; }
+    if (settings?.enabled !== true) { setDeviceOn(false); return undefined; }
     let stale = false;
     void (async () => {
       try {
@@ -113,7 +118,7 @@ export function NotificationSettings({ data, actions }) {
       }
     })();
     return () => { stale = true; };
-  }, [capability.state, capability.permission]);
+  }, [capability.state, capability.permission, settings?.enabled]);
 
   /** Optimistic write with rollback (ac-2): the next settings object takes
    * the screen immediately, the hub-side write lands through the open
@@ -141,21 +146,54 @@ export function NotificationSettings({ data, actions }) {
 
   async function toggleMaster(checked) {
     setError("");
+    const previousSettings = settings ?? normalizeSettings(null);
+    if (!checked) {
+      // The off path is a plain settings write — no permission call ever
+      // runs on the way off: the hub expires this identity's stored
+      // subscriptions at the same write (an off-state identity holds no
+      // subscription anywhere), and the section collapses (ac-3).
+      setDeviceOn(false);
+      await saveOptimistic(withMaster(previousSettings, false));
+      return;
+    }
+    if (deviceOn) {
+      // Already live on this device: a plain settings write.
+      await saveOptimistic(withMaster(previousSettings, true));
+      return;
+    }
+    // The walked enable flow (ac-2): the off-to-on tap IS the only prompt
+    // path. The hub's registration gate accepts only enabled identities,
+    // so the off-to-on write persists enabled=true through the settings
+    // route FIRST, then this same tap runs the prompt — pushManager
+    // .subscribe fires from here and nowhere else, never at load and
+    // never on navigation.
     setBusy(true);
-    const previous = settings;
     try {
-      // The permission prompt fires exactly here — from this explicit tap
-      // (ac-3), never at page load and never on navigation.
-      if (checked && !deviceOn) {
-        await actions.enableNotifications();
-        setDeviceOn(true);
-      }
-      await saveOptimistic(withMaster(previous ?? normalizeSettings(null), checked));
+      const saved = await actions.saveNotificationSettings(withMaster(previousSettings, true));
+      const persisted = normalizeSettings(saved?.settings ?? null);
+      setSettings(persisted);
+      if (!persisted.enabled) throw new Error("The hub could not turn notifications on.");
+      await actions.enableNotifications();
+      setDeviceOn(true);
+      setDenied(false);
+      // The authoritative row is the hub's state after the walked flow.
+      const settled = await actions.loadNotificationSettings();
+      setSettings(normalizeSettings(settled?.settings ?? persisted));
     } catch (cause) {
-      const refused = cause && (cause.name === "NotAllowedError" || denied);
-      setSettings(previous ?? normalizeSettings(null));
+      // The walked flow never leaves an enabled row behind a failed
+      // prompt: the revert write restores enabled=false through the
+      // route — which also expires any subscription the enable attempt
+      // registered — and enabled stays false on denial.
+      setSettings(previousSettings);
+      setDeviceOn(false);
+      try {
+        await actions.saveNotificationSettings(withMaster(previousSettings, false));
+      } catch {
+        // The local rollback stands; the next authoritative load corrects.
+      }
+      const refused = cause && cause.name === "NotAllowedError";
+      if (refused) setDenied(true);
       setError(refused ? reenableGuidance(capability.webkit) : (cause?.message || "The hub could not complete this action."));
-      if (refused) { setDenied(true); setDeviceOn(false); }
     } finally {
       setBusy(false);
     }
@@ -182,12 +220,16 @@ export function NotificationSettings({ data, actions }) {
   // rendering a switch that pretends.
   const canEdit = capability.canPush && !denied;
   const disabled = !canEdit || busy;
+  // The section state machine (PORCH-063 ac-3): expanded only with the
+  // master switch on AND this device's permission granted; every other
+  // pairing collapses to the master row plus its one-line explainer —
+  // zero per-event toggles, zero mute rows.
+  const expanded = notificationSection({ enabled: Boolean(settings?.enabled), granted: deviceOn }) === "expanded";
   const switchValue = settings ? Boolean(settings.enabled) : false;
-  // The toggle mirrors the real permission (ac-3): while the browser's
-  // permission sits denied, nothing is being delivered, so the switch
-  // renders off (disabled, with the re-enable guidance) — never an
-  // active-looking switch pretending.
-  const masterShown = denied ? false : switchValue;
+  // The toggle mirrors the real permission (ac-3): the switch reads on
+  // only while this device's channel is live; denied or undetermined
+  // permission renders off — never a dead switch pretending.
+  const masterShown = !denied && deviceOn && switchValue;
   const stateLine = CAPABILITY_LINES[capability.state] || "";
   const statusLine = !capability.canPush
     ? stateLine
@@ -212,16 +254,16 @@ export function NotificationSettings({ data, actions }) {
         }>
           <ListItemText primary={rowLabel} primaryTypographyProps={{ fontWeight: 600 }} secondary={statusLine} />
         </ListItem>
-        {EVENT_ROWS.map(({ key, label }) => <ListItem key={key} divider secondaryAction={
+        {expanded && EVENT_ROWS.map(({ key, label }) => <ListItem key={key} divider secondaryAction={
           <Switch checked={Boolean(settings.events?.[key])} disabled={disabled} slotProps={{ input: { "aria-label": label } }}
             onChange={(event) => void toggleEvent(key, event.target.checked)} />
         }><ListItemText primary={label} secondary={key === "groupPost" ? "Posts in your groups also reach you as notifications." : null} /></ListItem>)}
-        {receivesOwnerEvents(role) && <ListItem divider secondaryAction={
+        {expanded && receivesOwnerEvents(role) && <ListItem divider secondaryAction={
           <Switch checked={OWNER_EVENT_KEYS.every((key) => Boolean(settings.events?.[key]))} disabled={disabled}
             slotProps={{ input: { "aria-label": OWNER_EVENT_LABEL } }}
             onChange={(event) => void toggleOwnerEvents(event.target.checked)} />
         }><ListItemText primary={OWNER_EVENT_LABEL} secondary="New members and new device connections for this network." /></ListItem>}
-        {mutes.map((row) => <ListItem key={row.networkId} divider secondaryAction={
+        {expanded && mutes.map((row) => <ListItem key={row.networkId} divider secondaryAction={
           <Switch checked={settings.mutes?.includes(row.networkId)} disabled={disabled}
             slotProps={{ input: { "aria-label": `Quiet ${row.name}` } }}
             onChange={(event) => void toggleMute(row.networkId, event.target.checked)} />

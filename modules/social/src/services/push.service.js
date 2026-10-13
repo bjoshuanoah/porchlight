@@ -12,11 +12,19 @@ import { typedError } from "./post.service.js";
  * ciphertext (the same honest-contact class as the provider-embed iframe).
  *
  * Send pipeline: an event trigger (origin network, event type, targets)
- * resolves through LIVE membership (never a stored permission — a member
+ * resolves through THE MASTER SWITCH FIRST (PORCH-063's opt-in default: a
+ * row that does not exist, a freshly created row, and any enabled=false
+ * row produce no send attempt and no Web Push composition — delivery is
+ * impossible for a member who never enabled through the explicit UI flow),
+ * then through LIVE membership (never a stored permission — a member
  * removed from a network is unreachable at the same write that revokes
- * them), through this member's settings (global switch, per-event toggles,
+ * them), through this member's remaining settings (per-event toggles,
  * per-network mutes — READ AT SEND TIME, never cached), down to their live
- * subscriptions. Endpoint 404/410 classes expire the stored subscription
+ * subscriptions. Registration gates on the same switch: an off-state
+ * identity holds no subscription anywhere for any reason — the walked
+ * enable flow is the only subscription-creating path, and flipping the
+ * switch off expires the identity's stored subscriptions at that write.
+ * Endpoint 404/410 classes expire the stored subscription
  * server-side (log-only); transient failures take one bounded retry then
  * drop. Delivery outcomes land only in the local structured log sink.
  *
@@ -171,9 +179,18 @@ export class PushService {
     this.models = socialModels;
   }
 
-  /** Shipped defaults: everything on except the member-controlled group toggle. */
+  /**
+   * Shipped defaults (PORCH-063, Brian Oct 13, 2026): device notifications
+   * are OPT-IN. A settings row that does not exist and a row freshly
+   * created both resolve enabled=false — the master switch is off by
+   * default, so delivery is impossible for any member who never enabled
+   * through the explicit UI flow. The per-event switches keep their
+   * shipped defaults, but they matter only once the member walks the
+   * explicit enable flow. This default governs creation and unset
+   * resolution only: no backfill ever flips an existing enabled row.
+   */
   static defaultSettings(identityId) {
-    return { _id: identityId, identityId, enabled: true, events: { ...DEFAULT_EVENT_SWITCHES }, mutes: [], updatedAt: null };
+    return { _id: identityId, identityId, enabled: false, events: { ...DEFAULT_EVENT_SWITCHES }, mutes: [], updatedAt: null };
   }
 
   /** GET /push/vapid — the subscription route serves the VAPID public key. */
@@ -194,6 +211,15 @@ export class PushService {
     const perimeter = await this.#perimeter(accessToken);
     const did = perimeter.session.did;
     const deviceId = perimeter.session.deviceId ?? null;
+    // Registration rides the explicit off-to-on flow (PORCH-063): an
+    // off-state identity — a row resolving enabled=false, including the
+    // no-row default — holds no push subscription anywhere for any reason,
+    // so registration is refused until the member walked the settings
+    // screen's enable flow and persisted enabled=true through the route.
+    const memberRow = await this.settings.findOne({ identityId: did });
+    if ((memberRow ?? PushService.defaultSettings(did)).enabled !== true) {
+      throw typedError("E_PUSH_NOT_ENABLED", "Turn on notifications first — the switch in your notification settings.");
+    }
     if (!endpoint || typeof endpoint !== "string") {
       throw typedError("E_PUSH_ENDPOINT_REQUIRED", "A push subscription needs its browser endpoint URL.");
     }
@@ -273,15 +299,26 @@ export class PushService {
     const existing = await this.settings.findOne({ identityId: did });
     const row = { _id: did, identityId: did, enabled, events: mergedEvents, mutes: muteList, updatedAt: now, createdAt: existing?.createdAt ?? now };
     await this.settings.updateOne({ identityId: did }, { $set: { ...row }, upsert: true });
+    // The opt-in contract's other half (PORCH-063): an off-state identity
+    // holds no subscription anywhere for any reason — flipping the switch
+    // off expires the open identity's stored subscriptions at the same
+    // write, so delivery is impossible while off (log-only cleanup).
+    if (enabled === false) {
+      const expired = await this.subscriptions.deleteMany({ identityId: did });
+      if (expired.deletedCount > 0) {
+        this.#log({ event: "push.subscriptions.cleared", identityId: did, count: expired.deletedCount });
+      }
+    }
     return { settings: { enabled: row.enabled, events: row.events, mutes: row.mutes } };
   }
 
   /**
    * THE SEND PIPELINE (ac-2, ac-3, ac-4). One entry point for every push
-   * trigger: target resolution runs live membership → settings (read at
-   * send time, never cached) → live subscriptions → Web Push send. Never
-   * throws: a push outcome is never allowed to break the domain write that
-   * fired it (log-only).
+   * trigger: target resolution runs the master switch (enforced first —
+   * PORCH-063's opt-in default) → live membership → settings' remaining
+   * gates (mutes, per-event toggles; read at send time, never cached) →
+   * live subscriptions → Web Push send. Never throws: a push outcome is
+   * never allowed to break the domain write that fired it (log-only).
    */
   async notify({ networkId, type, targetDids = [], postId = null, commentId = null, actorDid = null, excerpt = null } = {}) {
     try {
@@ -309,6 +346,17 @@ export class PushService {
       let sent = 0;
       let skipped = 0;
       for (const did of targets) {
+        // THE MASTER SWITCH ENFORCES FIRST (PORCH-063): an enabled=false
+        // row — no row (the default), a freshly created row, or a
+        // pre-existing off row — produces no send attempt and no Web Push
+        // composition for any event, regardless of per-event toggles,
+        // per-network mutes, or live subscriptions. Settings are read at
+        // send time (ac-2), never cached.
+        const settings = (await this.settings.findOne({ identityId: did })) ?? PushService.defaultSettings(did);
+        if (settings.enabled !== true) {
+          skipped += 1;
+          continue;
+        }
         // Live membership at send time — never a stored permission. A
         // member removed from the network resolves against nothing here:
         // deliverability died at the same write that revoked them (ac-4).
@@ -316,12 +364,6 @@ export class PushService {
         if (!live) {
           skipped += 1;
           this.#log({ event: "push.send.skipped", reason: "not_live_member", networkId, type, identityId: did });
-          continue;
-        }
-        // Settings at send time (ac-2): they are read here, on every send.
-        const settings = (await this.settings.findOne({ identityId: did })) ?? PushService.defaultSettings(did);
-        if (settings.enabled !== true) {
-          skipped += 1;
           continue;
         }
         if (settings.mutes?.includes(networkId)) {

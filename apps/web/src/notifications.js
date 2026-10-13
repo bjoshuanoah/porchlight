@@ -73,6 +73,7 @@ export function reenableGuidance(webkit) {
     : "Notifications are off in this browser's site settings. Open the site menu in the address bar (the lock or settings icon), choose Site settings, and allow notifications.";
 }
 
+
 /**
  * Settings mutation helpers (ac-1/ac-2): the screen edits a server-owned
  * settings object { enabled, events, mutes } optimistically and rolls the
@@ -110,6 +111,22 @@ export function muteRows(entries = []) {
     seen.set(networkId, { networkId, name: entry?.name || entry?.network?.name || "a network" });
   }
   return [...seen.values()];
+}
+
+/**
+ * The Notifications section state machine (PORCH-063 ac-3). Two states:
+ *   - "expanded"  the master switch is on AND this device's channel is
+ *                 live (the permission is granted): the per-event toggles
+ *                 and per-network mute rows render.
+ *   - "collapsed" every other pairing: the section collapses to the
+ *                 master switch plus a one-line explainer with zero
+ *                 per-event toggles and zero mute rows. A denied
+ *                 permission stays collapsed with re-enable guidance; the
+ *                 switch mirrors the real permission, never a dead switch
+ *                 pretending.
+ */
+export function notificationSection({ enabled = false, granted = false } = {}) {
+  return enabled === true && granted === true ? "expanded" : "collapsed";
 }
 
 /** Read the server's settings row back defensively: anything off the shape

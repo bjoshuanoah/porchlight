@@ -73,6 +73,7 @@ export class PushController {
       E_PUSH_ENDPOINT_REQUIRED: 400,
       E_PUSH_KEYS_REQUIRED: 400,
       E_PUSH_SETTINGS_INVALID: 400,
+      E_PUSH_NOT_ENABLED: 400,
       E_PUSH_MUTE_NOT_MEMBER: 403,
     };
     const status = statusByCode[error?.code] ?? 500;
