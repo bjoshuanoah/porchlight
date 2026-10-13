@@ -22,6 +22,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -114,7 +115,66 @@ if (bundledCount < 10) {
 }
 process.stdout.write(`bundled ${bundledCount} runtime packages\n`);
 
+// ---- link hygiene ----------------------------------------------------------
+// The npm registry rejects any tarball containing a symlink
+// (E415 "Symbolic link is not allowed" — hit by the first v0.1.1 run,
+// PORCH-062). The installed tree legitimately carries npm's .bin symlink
+// entries (incl. nested node_modules), and cpSync's dereference may leave
+// nested links standing. Resolve every remaining link in the stage to its
+// target content (drop links that dangle), then GATE: a link surviving in
+// the stage fails loudly instead of shipping a tarball the registry will
+// refuse.
+function flattenNestedLinks(dir) {
+  let flattened = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const linkTarget = resolve(dirname(path), readlinkSync(path));
+      rmSync(path, { force: true, recursive: true });
+      if (existsSync(linkTarget)) {
+        cpSync(linkTarget, path, { recursive: true, dereference: true, force: true });
+      }
+      flattened += 1;
+    } else if (entry.isDirectory()) {
+      flattened += flattenNestedLinks(path);
+    }
+  }
+  return flattened;
+}
+
+function findLinks(dir, links = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) links.push(path);
+    else if (entry.isDirectory()) findLinks(path, links);
+  }
+  return links;
+}
+
 // ---- pack ------------------------------------------------------------------
+// Flatten until stable: replacing one link's content can surface further
+// links in the copied target (cpSync dereference does not flatten nested
+// links reliably — verified on the .bin tree). Cap the passes defensively.
+let flattened = 0;
+for (let pass = 0; pass < 10; pass++) {
+  const linksThisPass = flattenNestedLinks(stageRoot);
+  if (linksThisPass === 0) break;
+  flattened += linksThisPass;
+}
+if (flattened > 0) process.stdout.write(`flattened ${flattened} nested symlink entr${flattened === 1 ? "y" : "ies"} in the stage\n`);
+const linksLeft = findLinks(stageRoot);
+if (linksLeft.length > 0) {
+  // The registry E415s any symlink in the tarball; a link surviving the
+  // flatten pass (e.g. a recursive/cyclic edge) must fail loudly here.
+  process.stderr.write(
+    `porchlight bundle: ${linksLeft.length} symlink(s) survived flattening — refusing to pack a tarball the npm registry will reject:\n` +
+      linksLeft.map((l) => `  ${l} -> ${readlinkSync(l)}`).join("\n") +
+      "\n",
+  );
+  rmSync(staging, { recursive: true, force: true });
+  process.exit(1);
+}
+
 const tarballName = `porchlight-${versionedManifest().version}.tgz`;
 const tarballPath = join(outDir, tarballName);
 mkdirSync(outDir, { recursive: true });
