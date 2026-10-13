@@ -46,3 +46,12 @@ test("PORCH-061 ac-1: recovery re-credentials past the freshness gate", async ()
   assert.match(custody, /runRenewal\(\{ did: connection\.identity\?\.id \|\| null, force: true \}\)/);
   assert.match(custody, /performRenew\(args\)/, "the app's renew receives the force flag");
 });
+
+test("PORCH-061 ac-1: a refused founder binding retries through a forced recovery renewal on landing", async () => {
+  const main = await src("src/main.jsx");
+  const startNetwork = main.slice(main.indexOf("startNetwork: async ({ name, ownerDid })"));
+  const retry = startNetwork.indexOf("custody.renew({ did: ownerDid, force: true })");
+  assert.ok(retry !== -1, "the refused binding retries immediately — no custody-gate wait");
+  const spaced = startNetwork.indexOf("setTimeout(resolve, 1500)");
+  assert.ok(spaced !== -1 && spaced < retry, "the retry is spaced past the contested founder write");
+});
