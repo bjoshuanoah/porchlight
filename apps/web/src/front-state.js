@@ -42,6 +42,17 @@ export function clearSignedOut(storage, origin) {
  * 4. A device that never signed out keeps the shared-device chooser rule
  *    (multiple registrations, or a pinned face) or the direct timeline.
  */
+/**
+ * The self-grant redirect's arrival marker (PORCH-066). The console path's
+ * redirect to the new origin carries `?reauth=1`: the authenticated console
+ * action already was the confirmation, so that arrival auto-consumes with
+ * no additional owner input. A device link arriving by any other channel
+ * never carries the marker and keeps the normal consume screen.
+ */
+export function selfGrantArrival(search) {
+  return new URLSearchParams(search ?? '').get('reauth') === '1';
+}
+
 export function bootRoute({ pathname, search, connections, signedOut = false, pinned = false }) {
   if (pathname && pathname !== "/") return pathname;
   if (!connections.length) return "/join";

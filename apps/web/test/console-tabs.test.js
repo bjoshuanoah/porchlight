@@ -23,6 +23,7 @@ test("ac-1: every console area is named by exactly one tab's section list", () =
 		"Space and limits",
 		"Updates",
 		"Your devices",
+		"Your hub's address",
 	]);
 });
 
@@ -43,8 +44,8 @@ test("ac-2: every shipped console capability maps to a rendered tab (or to the c
 test("ac-3: the tab bar renders scrollable with short labels that fit a 390px viewport", () => {
 	// The render consumes the model: scrollable variant tabs (touch-wipe, no
 	// horizontal PAGE scroll), every label ≥72px per MUI's scrolled tab
-	// minimum — so the shipped five must fit 390px without an overflow wipe.
-	assert.equal(consoleTabs.length, 5);
+	// minimum — so the shipped six must fit 390px without an overflow wipe.
+	assert.equal(consoleTabs.length, 6);
 	for (const { id, label } of consoleTabs) {
 		assert.ok(id.length > 0 && label.length > 0);
 		assert.ok(label.length <= 12, `label "${label}" stays single-line short`);

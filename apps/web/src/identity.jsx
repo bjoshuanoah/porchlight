@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert, Avatar, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
+  Alert, Avatar, Box, Button, Card, CardContent, CircularProgress, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, IconButton, List, ListItem, ListItemAvatar,
   ListItemText, Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
+import { selfGrantArrival } from './front-state.js';
+import { addressPanelModel, draftHost, addressConsequences, addressIntro, addressRerunNote, redirectTarget, arrivalBeatCopy } from './address-panel.js';
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { copyLink, directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, viewerRole, roleLabel } from './member-directory.js';
 import { updateCardModel } from './update.js';
@@ -534,16 +536,46 @@ export function DeviceLink({ data, actions, navigate }) {
   const [grant, setGrant] = useState(() => parseDeviceGrant(window.location.pathname));
   const operation = useOperation(actions);
   const network = networkName(data);
-  async function submit(event) {
+  // The self-grant redirect's arrival (PORCH-066): the console path lands
+  // here at the new origin carrying ?reauth=1 — the owner's authenticated
+  // console action already was the confirmation, so the consume runs with
+  // no additional owner input, under the brief arrival beat. A link arriving
+  // by any other channel keeps the normal consume screen.
+  const arrive = selfGrantArrival(window.location.search);
+  useEffect(() => {
+    if (!arrive || !grant) return undefined;
+    let stale = false;
+    void (async () => {
+      try {
+        await actions.linkDevice(grant.trim());
+      } catch (cause) {
+        // The refused arrival renders the server's plain language and the
+        // normal consume screen with the link prefilled — the owner can act.
+        if (!stale) operation.setError(cause?.body?.error || memberError(cause));
+      }
+    })();
+    return () => { stale = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const beat = arrive && Boolean(grant) && !operation.error;
+  const consume = async (event) => {
     event.preventDefault();
     // bindDevice owns the completion target (PORCH-055): the front state
     // gets the refreshed face on the chooser, an open turn lands back on
     // the timeline.
     await operation.run('linkDevice', [grant.trim()], 'This device is now yours.');
+  };
+  if (beat) {
+    return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
+      <Stack spacing={2} sx={{ alignItems: 'center', py: 8 }}>
+        <CircularProgress size={32} aria-label={arrivalBeatCopy} />
+        <Typography sx={{ mt: 2 }}>{arrivalBeatCopy}</Typography>
+      </Stack>
+    </Box>;
   }
   return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
     <Heading title="Welcome back" subtitle={`Welcome back. This link adds this device to your place in ${network}. Your moments, groups, and profile arrive untouched — nothing to bring over.`} />
-    <Paper sx={{ p: 3 }}><form onSubmit={submit}><Stack spacing={2}>
+    <Paper sx={{ p: 3 }}><form onSubmit={consume}><Stack spacing={2}>
       {grant && <Alert severity="info" icon={false}>Your family owner sent this link. It works once, for the person it was made for.</Alert>}
       <TextField label="Device link" value={grant} onChange={event => setGrant(event.target.value)} required autoComplete="off" fullWidth
         helperText="The long code inside the link your family owner sent." />
@@ -837,6 +869,8 @@ export function OwnerConsole({ data, actions, navigate }) {
   // the drafts (limits, media root) survive tab switches.
   const [tab, setTab] = useState('invitations');
   const [draftRoot, setDraftRoot] = useState(null);
+  const [hostDraft, setHostDraft] = useState('');
+  const [moving, setMoving] = useState(false);
   const members = available(data, 'members') ? data?.members || [] : null;
   const invites = available(data, 'invites') ? data?.invites || [] : null;
   const disk = available(data, 'disk') ? data?.disk : null;
@@ -897,6 +931,33 @@ export function OwnerConsole({ data, actions, navigate }) {
       operation.setNotice('Media root saved. Existing media never moved — move the archive and repoint, in that order.');
     } catch (cause) {
       operation.setError(cause?.body?.error || memberError(cause));
+    }
+  }
+  // Register the new domain (PORCH-066): one field, one submit. The server
+  // owns everything — pre-commit verification, the idempotent re-point, the
+  // self-grant mint, and the redirect the browser then follows. Any refusal
+  // is zero mutation, and its plain-language reason surfaces verbatim.
+  async function submitAddress(event) {
+    event.preventDefault();
+    const draft = draftHost(hostDraft);
+    if (draft.error) { operation.setError(draft.error); return; }
+    operation.setError('');
+    operation.setNotice('');
+    setMoving(true);
+    try {
+      const result = await actions.changeAddress(draft.host);
+      const target = redirectTarget(result);
+      if (!target) {
+        operation.setError('The hub accepted the change but never named the new address. Nothing left this screen — check the hub from its own machine.');
+        return;
+      }
+      window.location.assign(target);
+    } catch (cause) {
+      // The refusal names what failed, verbatim from the hub — never a
+      // generic stand-in, and zero mutation happened.
+      operation.setError(cause?.body?.error || memberError(cause));
+    } finally {
+      setMoving(false);
     }
   }
   return <Box sx={{ maxWidth: 950, mx: 'auto' }}>
@@ -1017,6 +1078,44 @@ export function OwnerConsole({ data, actions, navigate }) {
           </>;
         })()}
       {updateFeedback && <Alert severity={updateFeedback.severity} sx={{ mt: 2 }}>{updateFeedback.message}</Alert>}
+    </CardContent></Card>
+    </div>
+    <div role="tabpanel" id="owner-tabpanel-address" aria-labelledby="owner-tab-address" hidden={tab !== 'address'}>
+    {/* The register-the-new-domain panel (PORCH-066): the hub's address as
+        name + URL, one field, one submit; the refusal, re-run, and the
+        re-pointed state all render from the reauth status surface. */}
+    <Card sx={section}><CardContent><Typography variant="h6" gutterBottom>Your hub's address</Typography>
+      {(() => {
+        const panel = addressPanelModel({
+          reauth: available(data, 'reauth') ? data?.reauth : null,
+          server: data.server, networkName: networkName(data),
+        });
+        return <>
+          <Typography sx={{ wordBreak: 'break-all' }}>{panel.name} is reached at {panel.url || 'an address this hub has not named yet'}.</Typography>
+          {panel.lastRepoint && <Typography color="text.secondary" sx={{ mt: 1 }}>
+            The last address change was saved {displayDate(panel.lastRepoint.at)}; the hub now answers at {panel.lastRepoint.origin}.
+          </Typography>}
+          {panel.residue.length > 0 && <Typography color="text.secondary" sx={{ mt: 1 }}>
+            {panel.residue.length === 1 ? 'One hub record' : `${panel.residue.length} hub records`} still name{panel.residue.length === 1 ? 's' : ''} an older address ({panel.residue.map(row => row.kind).join(', ')}). Serving is unaffected — submitting the address again clears it.
+          </Typography>}
+        </>;
+      })()}
+      <Typography color="text.secondary" sx={{ mt: 2 }}>{addressIntro}</Typography>
+      <List dense sx={{ listStyleType: 'disc', pl: 3 }} disablePadding>
+        {addressConsequences.map((item) => <ListItem key={item.kind} disableGutters sx={{ display: 'list-item' }}>
+          <Typography variant="body2" color="text.secondary">{item.line}</Typography>
+        </ListItem>)}
+      </List>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{addressRerunNote}</Typography>
+      <Box component="form" onSubmit={submitAddress} sx={{ ...rows, mt: 2 }}>
+        <TextField size="small" label="New address" autoComplete="off" placeholder="like porch.love" sx={{ minWidth: 260 }} value={hostDraft} onChange={event => setHostDraft(event.target.value)} />
+        <Button type="submit" variant="contained" disabled={moving || operation.busy || typeof actions?.changeAddress !== 'function'}>Register this address</Button>
+      </Box>
+      {moving && <Box sx={{ ...rows, mt: 2 }}>
+        <CircularProgress size={20} />
+        <Typography color="text.secondary">Checking the new address, then redirecting your browser there…</Typography>
+      </Box>}
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>The hub checks the new address first. If it cannot be reached, or belongs to some other hub, nothing changes and the refusal says which.</Typography>
     </CardContent></Card>
     </div>
     <div role="tabpanel" id="owner-tabpanel-activity" aria-labelledby="owner-tab-activity" hidden={tab !== 'activity'}>

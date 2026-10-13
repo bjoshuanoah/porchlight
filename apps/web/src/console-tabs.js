@@ -10,6 +10,10 @@ export const consoleTabs = [
 	{ id: 'members', label: 'Members', sections: ['Members', 'Your devices', 'Member devices', 'Device links sent'] },
 	{ id: 'storage', label: 'Storage', sections: ['Space and limits', 'Media storage'] },
 	{ id: 'updates', label: 'Updates', sections: ['Updates'] },
+	// PORCH-066: the register-the-new-domain panel (Address change, owner
+	// re-auth at the new URL) rides its own tab, gated to the live owner
+	// session the whole console already carries.
+	{ id: 'address', label: 'Address', sections: ["Your hub's address"] },
 	{ id: 'activity', label: 'Activity', sections: ['Recent activity'] },
 ];
 
@@ -43,6 +47,10 @@ export const consoleCapabilities = {
 	// Updates tab
 	readReleaseStatus: 'updates',
 	applyUpdate: 'updates',
+	// Address tab (PORCH-066)
+	readHubAddress: 'address',
+	readReauthStatus: 'address',
+	changeHubAddress: 'address',
 	// Activity tab
 	readAuditLog: 'activity',
 	// Console chrome, outside the tabs
