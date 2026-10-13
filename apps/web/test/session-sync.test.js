@@ -196,3 +196,20 @@ test("non-401 failures never consult custody", async () => {
   const replacement = await custody.recover({ connection: connectionWith("t", "u"), error: { status: 403 } });
   assert.equal(replacement, null);
 });
+
+test("PORCH-061: recovery re-credentials past the freshness gate — a 401 whose token still matches storage is at-rest evidence adoption cannot resolve", async () => {
+  const shared = fakeStorage();
+  const custody = createCustody({ storage: shared, origin: HUB, publishWaitMs: 20 });
+  // Nothing published: the stored tokens are what the failed request
+  // presented. The app's renew consults the freshness gate; recovery must
+  // ask it to force through instead of waiting out the window.
+  saveConnections(shared, HUB, [connectionWith("membership-1", "identity-1")]);
+  const renewCalls = [];
+  custody.setRenew(async (args) => {
+    renewCalls.push(args);
+    return false;
+  });
+  const replacement = await custody.recover({ connection: connectionWith("membership-1", "identity-1"), error: { status: 401 } });
+  assert.equal(replacement, null);
+  assert.deepEqual(renewCalls, [{ did, force: true }]);
+});

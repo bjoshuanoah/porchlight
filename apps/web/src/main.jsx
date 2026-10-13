@@ -15,7 +15,7 @@ import { fullName } from "./setup-state.js";
 import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
-import { reCredentialPlanes } from "./session-credentials.js";
+import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials.js";
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
 import { resolveStoredNames } from "./name-heal.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview } from "./member-actions.js";
@@ -128,7 +128,7 @@ function App() {
   const renewRef = useRef(null);
   const signedOut = useRef(false);
   useEffect(() => {
-    custody.setRenew(({ did }) => renewRef.current?.({ did }));
+    custody.setRenew((args) => renewRef.current?.(args));
     // Recovered tokens must land in React state immediately: the next 15s
     // poll presents the published token instead of 401ing into recovery
     // again (the wake-after-throttle case with no storage event received).
@@ -198,14 +198,20 @@ function App() {
   // Silent renewal (PORCH-028): reads live storage, never a stale state
   // snapshot, and serializes through the per-origin renewal slot inside
   // custody.renew so two tabs can never race supersessions past each other.
-  const renew = useCallback(async ({ did = null } = {}) => {
+  const renew = useCallback(async ({ did = null, force = false } = {}) => {
     const live = readConnections(stored, origin);
     const target = live.find((item) => item.identity?.id === (did || identity?.id));
     if (!target?.deviceId || !target.identity?.id) return false;
     // Cross-tab freshness gate: another tab's renewal younger than half the
     // gate window keeps every presented token inside the 10-minute TTL, so
     // skip the supersession and let that tab's publication ride adoption.
-    if (Date.now() - (target.renewedAt || 0) < renewFreshMs) return false;
+    // The gate guards only the tab-initiated renewal's TTL speculation
+    // (interval, visibility wake). Recovery carries at-rest 401 evidence the
+    // speculation cannot hold: its adopt pass already found no sibling
+    // publication, so a presented-and-rejected stored token re-credentials
+    // immediately — waiting out the gate was PORCH-061's dead social plane
+    // (a superseded identity token unrecoverable for six minutes).
+    if (!force && Date.now() - (target.renewedAt || 0) < renewFreshMs) return false;
     const next = { ...target };
     // PORCH-050: refresh first, restore on failure — a dead membership
     // credential re-credentials with the freshly minted identity token
@@ -753,16 +759,48 @@ function App() {
         try {
           const registration = { did: ownerDid, deviceId: ownerConnection.deviceId };
           const session = await openDeviceSession(hub, registration, request);
-          const restored = await request(hub, "social/session/restore", {
-            method: "POST", body: JSON.stringify({ identityAccessToken: session.accessToken, deviceId: registration.deviceId }),
-          });
-          const first = restored?.sessions?.[0];
-          if (first) {
-            const revised = connections.map((item) => item === ownerConnection
-              ? { ...item, identityToken: session.accessToken, identityRefreshToken: session.refreshToken, token: first.accessToken, refreshToken: first.refreshToken, networkId: first.networkId, name: result.network?.name || item.name }
-              : item);
-            saveConnections(stored, origin, revised);
-            setConnections(revised);
+          // PORCH-061: every mint supersedes the stored identity token by
+          // design (PORCH-028). Persist the fresh identity session BEFORE the
+          // restore attempt: a refused restore (the founder row not yet
+          // visible, E_NOT_A_MEMBER) must never leave the landed connection
+          // presenting the token this re-credential just superseded.
+          const withIdentity = mergeSessionAdoptions(connections, [{
+            id: ownerDid,
+            identityToken: session.accessToken,
+            identityRefreshToken: session.refreshToken,
+          }]);
+          saveConnections(stored, origin, withIdentity);
+          setConnections(withIdentity);
+          let landed = withIdentity;
+          try {
+            const restored = await request(hub, "social/session/restore", {
+              method: "POST", body: JSON.stringify({ identityAccessToken: session.accessToken, deviceId: registration.deviceId }),
+            });
+            const first = restored?.sessions?.[0];
+            if (first) {
+              landed = mergeSessionAdoptions(landed, [{
+                id: ownerDid,
+                token: first.accessToken, refreshToken: first.refreshToken, networkId: first.networkId,
+              }]).map((item) => item.identity?.id === ownerDid
+                ? { ...item, name: result.network?.name || item.name }
+                : item);
+              saveConnections(stored, origin, landed);
+              setConnections(landed);
+            }
+          } catch { /* PORCH-061: the identity plane stays live; binding stays server-side and the next silent re-credential binds */ }
+          // PORCH-061: a refused (or memberless) restore right after the
+          // founder write was the dead landing itself — the freshly minted
+          // identity session persisted above, but every member surface rode
+          // a connection with token:null until the custody interval happened
+          // to re-credential. One spaced forced re-credential retries the
+          // binding through the shared renewal slot — gate bypassed (a
+          // connection without a membership token has nothing for the gate
+          // to protect), no sign-out cycle, no custody-window wait.
+          if (!landed.find((item) => item.identity?.id === ownerDid)?.token) {
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 1500));
+              await custody.renew({ did: ownerDid, force: true });
+            } catch { /* the surfaces name the refused binding */ }
           }
         } catch { /* binding stays server-side; the next silent re-credential binds */ }
       }
@@ -933,11 +971,11 @@ function App() {
       const live = readConnections(stored, origin);
       const updates = await resolveStoredNames(live, { openDeviceSession, request });
       if (stale || !updates.length) return;
-      const byId = new Map(updates.map((item) => [item.id, item.name]));
+      // PORCH-061: the sweep adopts what it mints — the healed name AND the
+      // freshly minted identity session (plus the restored membership tokens
+      // when the hub answered), merged through the shared adoption merge.
       const current = readConnections(stored, origin);
-      const revised = current.map((item) => byId.has(item.identity?.id)
-        ? { ...item, identity: { ...item.identity, name: byId.get(item.identity.id) } }
-        : item);
+      const revised = mergeSessionAdoptions(current, updates);
       saveConnections(stored, origin, revised);
       setConnections(revised);
     })();
