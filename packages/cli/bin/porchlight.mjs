@@ -25,6 +25,7 @@ Commands:
   bootstrap    drive the remaining bootstrap steps over the hub URL (resumable)
   service      install/uninstall the launchd-class supervisor service (auto-restart on boot/crash)
   tunnel       tunnel identity: status (default) | mint [--hostname <host>] | reset
+  reauth       address change: link (mint the owner's re-auth grant) | status
 
 Options:
   --version, -v  print the version and exit 0
@@ -78,6 +79,7 @@ const commands = {
   bootstrap: async () => (await import("../src/bootstrap.mjs")).run(flags(args.slice(1))),
   service: async () => (await import("../src/service.mjs")).run(flags(args.slice(1))),
   tunnel: async () => (await import("../src/tunnel.mjs")).run(flags(args.slice(1))),
+  reauth: async () => (await import("../src/reauth.mjs")).run(flags(args.slice(1))),
 };
 
 const handler = commands[command];

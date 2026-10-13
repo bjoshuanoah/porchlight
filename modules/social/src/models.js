@@ -213,6 +213,11 @@ export const socialModels = {
       _id: { type: "string" },
       name: { type: "string" },
       ownerAccountId: { type: "string" },
+      /** The hub's own URL as the network recorded it (porchlight-018
+       *  founder binding; the address re-point writes this, PORCH-065).
+       *  Link minting prefers this copy, so the re-point keeps it fresh. */
+      hubUrl: { type: ["string", "null"] },
+      ownerDid: { type: ["string", "null"] },
       createdAt: { type: "string" },
       quota: {
         type: "object",

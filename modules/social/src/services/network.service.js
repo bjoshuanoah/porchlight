@@ -47,6 +47,24 @@ export class NetworkService {
     await this.networks.insertOne(network);
     return { created: true, network };
   }
+
+  /**
+   * PORCH-065: the address re-point's network half — record the hub's
+   * serving origin on the network row (`hubUrl`, a self-reference state
+   * field of record; link minting prefers it). Idempotent: re-writing the
+   * same URL is a harmless no-op.
+   */
+  async recordHubUrl(url) {
+    const network = await this.networks.findOne({});
+    if (!network) {
+      const error = new Error("no network exists on this hub yet");
+      error.code = "E_NETWORK_NOT_FOUND";
+      throw error;
+    }
+    if (network.hubUrl === url) return network;
+    await this.networks.updateOne({ _id: network._id }, { $set: { hubUrl: url } });
+    return this.networks.findOne({ _id: network._id });
+  }
 }
 
 export default NetworkService;

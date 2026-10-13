@@ -28,6 +28,16 @@ const INVITE_STATUS: Record<string, number> = {
   E_INVITE_EXHAUSTED: 410,
 };
 
+/** PORCH-065: the address-action refusals — plain language rides the message. */
+const REAUTH_STATUS: Record<string, number> = {
+  E_ORIGIN_UNREACHABLE: 400,
+  E_ORIGIN_FOREIGN: 409,
+  E_ORIGIN_MALFORMED: 400,
+  E_OWNER_DID_MISSING: 409,
+  E_NETWORK_NOT_FOUND: 409,
+  E_CONFIG_UNREADABLE: 500,
+};
+
 const IDENTITY_STATUS: Record<string, number> = {
   E_FIRST_NAME_REQUIRED: 400,
   E_LAST_NAME_REQUIRED: 400,
@@ -78,6 +88,34 @@ interface FrontDoorDeps {
   /** Identity account + device services (identity birth, continuity). */
   accountService: FrontDoorAccountService;
   deviceService: FrontDoorDeviceService;
+  /** PORCH-065: the re-auth orchestration behind the address surfaces. */
+  reauth: {
+    consoleAddressAction(input: { hostname: string | null; actorDid: string | null; actorDeviceId?: string | null }): Promise<{
+      origin: string;
+      redirectUrl: string;
+      grantId: string;
+      expiresAt: string;
+      repoint: {
+        from: string | null;
+        to: string;
+        at: string;
+        surface: string;
+        configRepointed: boolean;
+        networkRecorded: boolean;
+        didDocumentsRepointed: number;
+      };
+    }>;
+    mintCliGrant(): Promise<{ linkUrl: string; grantId: string; token: string; expiresAt: string; base: string }>;
+    status(): Promise<{
+      servingOrigin: string | null;
+      networkHubUrl: string | null;
+      lastRepoint: { origin: string; at: string; surface: string } | null;
+      residue: Array<{ kind: string; ref: string; endpoint: string | null }>;
+      instanceId: string | null;
+    }>;
+  };
+  /** PORCH-065: the shared machine-local ops-token check (update surface's token). */
+  verifyOpsToken: (token: string | null) => boolean;
   hubUrl: () => string | null;
   /** PORCH-019: auth-failure capture sink; defaults to console.log. */
   log?: ((line: string) => void) | null;
@@ -86,7 +124,7 @@ interface FrontDoorDeps {
 /** Owner console's current-network row shape (network service view). */
 type NetworkRow = { _id: string; name?: string | null; hubUrl?: string | null } | null;
 
-export function createFrontDoorRouter({ invites, networks, membership, audit, accountService, deviceService, hubUrl, log }: FrontDoorDeps): Router {
+export function createFrontDoorRouter({ invites, networks, membership, audit, accountService, deviceService, reauth, verifyOpsToken, hubUrl, log }: FrontDoorDeps): Router {
   const router = Router();
 
   const networkOf = async (): Promise<NetworkRow> =>
@@ -317,6 +355,94 @@ export function createFrontDoorRouter({ invites, networks, membership, audit, ac
         const typed = error as { code?: string; message?: string };
         const status = IDENTITY_STATUS[typed.code ?? ""] ?? 500;
         return res.status(status).json({ error: typed.message, code: typed.code ?? "E_INTERNAL" });
+      }
+    })();
+  });
+
+  /**
+   * PORCH-065 (console path): POST /social/console/address {host} — the
+   * owner console's address panel action (Brian, Oct 13, 2026): one field,
+   * one submit. Owner session required (same class as Send device link).
+   * Before any mutation the hub verifies the new origin (reachable, serving
+   * THIS hub's instance identity); then the idempotent re-point, then the
+   * self-targeted grant mint, then the redirect to the new origin's
+   * grant-consume route carrying the code. Every refusal leaves zero
+   * mutation and names what failed in plain language.
+   */
+  router.post("/social/console/address", (req, res) => {
+    void (async () => {
+      const actor = await requireOwner(req, res);
+      if (!actor) return;
+      // The membership row's identifier fields for the audit line (a plain
+      // record from the perimeter verify — named view, one narrow shape).
+      const membership = actor.membership as { did?: string | null; deviceId?: string | null };
+      try {
+        const result = await reauth.consoleAddressAction({
+          hostname: (req.body?.host ?? null) as string | null,
+          actorDid: membership.did ?? null,
+          actorDeviceId: membership.deviceId ?? null,
+        });
+        return res.status(200).json({
+          origin: result.origin,
+          redirectUrl: result.redirectUrl,
+          grantId: result.grantId,
+          expiresAt: result.expiresAt,
+          repoint: result.repoint,
+        });
+      } catch (error) {
+        const typed = error as { code?: string; message?: string };
+        return res.status(REAUTH_STATUS[typed.code ?? ""] ?? 500).json({ error: typed.message, code: typed.code ?? "E_INTERNAL" });
+      }
+    })();
+  });
+
+  /** The machine-local ops-token header shared with `porchlight update`. */
+  const opsTokenHeader = (req: { headers: Record<string, string | string[] | undefined> }): string | null => {
+    const raw = req.headers["x-porchlight-ops-token"];
+    return typeof raw === "string" ? raw : Array.isArray(raw) ? (raw[0] ?? null) : null;
+  };
+
+  /**
+   * PORCH-065 (CLI path): POST /reauth/link — the zero-session escape hatch.
+   * The machine-local ops token is the authentication (the CLI on the hub's
+   * own machine; the token never leaves it); no browser session involved.
+   * Mints the owner-targeted self-reauth grant and prints the consume URL.
+   */
+  router.post("/reauth/link", (req, res) => {
+    void (async () => {
+      if (!verifyOpsToken(opsTokenHeader(req))) {
+        return res.status(401).json({
+          error: "the reauth command speaks to the hub on its own machine (the machine's ops token); run it there, or use the owner console at the hub's address.",
+          code: "E_OPS_TOKEN_REQUIRED",
+        });
+      }
+      try {
+        return res.status(201).json(await reauth.mintCliGrant());
+      } catch (error) {
+        const typed = error as { code?: string; message?: string };
+        return res.status(REAUTH_STATUS[typed.code ?? ""] ?? 500).json({ error: typed.message, code: typed.code ?? "E_INTERNAL" });
+      }
+    })();
+  });
+
+  /**
+   * PORCH-065: GET /reauth/status — the serving origin, the last re-point
+   * record, and residue diagnostics. Machine-local ops token OR the owner's
+   * session (the console's address panel reads the same surface).
+   */
+  router.get("/reauth/status", (req, res) => {
+    void (async () => {
+      // Machine-local ops token OR the owner's session — the console's
+      // address panel reads this same surface. One guard at a time, so an
+      // unauthenticated caller gets exactly one error response.
+      if (!verifyOpsToken(opsTokenHeader(req))) {
+        if (!(await requireOwner(req, res))) return;
+      }
+      try {
+        return res.json(await reauth.status());
+      } catch (error) {
+        const typed = error as { code?: string; message?: string };
+        return res.status(REAUTH_STATUS[typed.code ?? ""] ?? 500).json({ error: typed.message, code: typed.code ?? "E_INTERNAL" });
       }
     })();
   });

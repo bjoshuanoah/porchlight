@@ -4,7 +4,12 @@ declare module "@porchlight/identity" {
     wellKnown: import("express").Router;
     controllers: unknown;
     signing: unknown;
-    didService: unknown;
+    didService: {
+      /** PORCH-065: the DID half of the self-reference re-point. */
+      repointAllDocuments(options: { hubUrl: string }): Promise<{ repointed: number; hubUrl: string }>;
+      /** PORCH-065: the status surface's residue scan. */
+      staleServiceEntries(options: { hubUrl: string }): Promise<Array<{ kind: string; ref: string; endpoint: string | null }>>;
+    };
     accountService: {
       /** Member identity birth at the front door (PORCH-010): DID + device binding. Required names (PORCH-024). */
       createMemberAccount(options: { firstName?: string; lastName?: string; device: { deviceId: string; label?: string | null; publicKeyJwk: Record<string, unknown> } | null }): Promise<{
@@ -28,7 +33,7 @@ declare module "@porchlight/identity" {
   }
   export function assembleIdentityModule(
     store: { collection(name: string): unknown },
-    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null; /** PORCH-059: the device-notifications observer (social push wiring). */ onDeviceLinkMinted?: (event: { did: string; grantId: string }) => unknown },
+    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null; /** PORCH-059: the device-notifications observer (social push wiring). */ onDeviceLinkMinted?: (event: { did: string; grantId: string }) => unknown; /** PORCH-065: the consumed-grant observer (address re-point trigger; awaits the returned promise). */ onDeviceLinkConsumed?: (event: { grantId: string; did: string; purpose: string | null; serveOrigin: string | null }) => unknown },
   ): IdentityModule;
   export function createWellKnownRouter(wellKnownController: unknown): import("express").Router;
   export class TrustService {
@@ -187,6 +192,8 @@ declare module "@porchlight/social" {
     constructor(networks: unknown);
     get(): Promise<unknown>;
     createNetwork(options?: { name?: string; ownerAccountId?: string | null }): Promise<{ created: boolean; network: { _id: string; name: string; [key: string]: unknown } }>;
+    /** PORCH-065: the network half of the self-reference re-point. */
+    recordHubUrl(url: string): Promise<Record<string, unknown> | null>;
   }
   export class InviteService {
     constructor(invites: unknown);
