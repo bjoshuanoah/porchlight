@@ -85,7 +85,7 @@ This check runs in CI on every push and pull request (`.github/workflows/ci.yml`
 
 ## License surface
 
-MIT is the license of record. `LICENSE` sits at the repo root; every published package declares `"license": "MIT"` and `"publishConfig": { "access": "public" }`. Node engine floor is `>= 24` across the monorepo. Every `npm publish` runs with provenance (`.npmrc` `publish-provenance=true`, attested by the deploy workflow's GitHub Actions OIDC token).
+MIT is the license of record. `LICENSE` sits at the repo root; every published package declares `"license": "MIT"` and `"publishConfig": { "access": "public" }`. Node engine floor is `>= 24` across the monorepo. Every `npm publish` runs with provenance (npm OIDC trusted publishing: the npm-publish workflow's `id-token: write` + the npmjs.com trusted-publisher binding; attested by the workflow's GitHub Actions OIDC token).
 
 ## Non-binding note
 
