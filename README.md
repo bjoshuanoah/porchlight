@@ -55,7 +55,7 @@ curl -LO https://github.com/bjoshuanoah/porchlight/releases/download/v$PORCHLIGH
 shasum -a 256 -c SHA256SUMS porchlight-$PORCHLIGHT_VERSION.tgz
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.bundle \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/bjoshuanoah/porchlight/\.github/workflows/deploy\.yml@'
+  --certificate-identity-regexp '^https://github\.com/bjoshuanoah/porchlight/\.github/workflows/npm-publish\.yml@'
 
 # 3. install from the verified file — the tarball carries its whole runtime closure,
 #    so this works fully offline of the npm registry, from a local file

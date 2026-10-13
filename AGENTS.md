@@ -29,7 +29,7 @@ porchlight/
 │   ├── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)
 │   └── cli/        # porchlight CLI — global bin, the npm install surface (`npm install -g porchlight`) (public)
 ├── docs/           # Release verification instructions (signed supply-chain anchor)
-├── .github/workflows/  # CI (lint/typecheck/build/test on Node 24) and Deploy (npm publish with provenance + signed GitHub Releases)
+├── .github/workflows/  # CI (lint/typecheck/build/test on Node 24) and npm-publish (npm publish with provenance via OIDC trusted publishing + signed GitHub Releases)
 └── scripts/        # Build/lint/boundary-check/release tooling (not a published package)
 ```
 

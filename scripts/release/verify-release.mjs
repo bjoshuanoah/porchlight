@@ -5,10 +5,10 @@
 //   *.tgz            — the npm-published tarballs (all MIT)
 //   SHA256SUMS       — sha256 of every tarball
 //   SHA256SUMS.bundle— Sigstore keyless signature of SHA256SUMS, created by the
-//                      deploy workflow; the trust anchor is the Sigstore
+//                      npm-publish workflow; the trust anchor is the Sigstore
 //                      keyless identity pinned to bjoshuanoah/porchlight's
-//                      .github/workflows/deploy.yml + the Rekor transparency
-//                      log. No key lives in this repo; see
+//                      .github/workflows/npm-publish.yml + the Rekor
+//                      transparency log. No key lives in this repo; see
 //                      docs/release-verification.md for instructions.
 //
 // Usage:
@@ -28,7 +28,7 @@ import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
-const IDENTITY_REGEXP = "^https://github\\.com/bjoshuanoah/porchlight/\\.github/workflows/deploy\\.yml@";
+const IDENTITY_REGEXP = "^https://github\\.com/bjoshuanoah/porchlight/\\.github/workflows/npm-publish\\.yml@";
 const DEFAULT_REPO = "bjoshuanoah/porchlight";
 
 const args = process.argv.slice(2);
