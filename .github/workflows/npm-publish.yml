@@ -12,7 +12,12 @@ name: npm-publish
 # short-lived publish credential via the trusted-publisher binding on
 # npmjs.com (github.com/bjoshuanoah/porchlight + workflow filename
 # npm-publish.yml). Zero long-lived NPM_TOKEN exists in repository or CI
-# secrets — do not reintroduce one.
+# secrets — do not reintroduce one. Provenance attestation is generated
+# automatically under trusted publishing (no --provenance flag rides the
+# publish: the flag belongs to the token-auth flow). setup-node runs @v6
+# and the generated .npmrc's token placeholders are stripped: a dummy
+# NODE_AUTH_TOKEN / authToken entry would make npm skip the OIDC exchange
+# and fail with ENEEDAUTH (setup-node #1551, npm documentation #1960).
 #
 # Package coverage: `porchlight` always publishes (binding-covered package of
 # record). The @porchlight/* scoped packages publish only when the registry
@@ -90,11 +95,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
           cache: npm
+      - name: Clear token-auth placeholders (OIDC trusted publishing must not see a token)
+        run: |
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ] && grep -q "_authToken" "$npmrc"; then
+            sed -i.bak '/_authToken/d' "$npmrc"
+            rm -f "$npmrc.bak"
+            echo "removed _authToken placeholder(s) from $npmrc"
+          fi
       - uses: sigstore/cosign-installer@v3
       - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
         run: |
@@ -154,8 +167,11 @@ jobs:
           set -euo pipefail
           # porchlight first, always: the binding covers this package and its
           # tarball is self-contained (registry needs nothing else for the
-          # install path). Published version must equal the tag.
-          npm publish release-assets/porchlight-"$VERSION".tgz --provenance --access public
+          # install path). Published version must equal the tag. The ./ spec
+          # prefix is load-bearing: a bare relative path parses as a git
+          # URL to npm, not a file. Provenance is automatic under trusted
+          # publishing — no flag, and .npmrc must carry no authToken.
+          npm publish "./release-assets/porchlight-$VERSION.tgz" --access public
           # Scoped packages only when the registry already has them — npm
           # requires a package to exist (plus its per-package trusted
           # publisher) before it can publish via OIDC, so a never-published
@@ -163,7 +179,7 @@ jobs:
           # silent pass.
           for ws in $SCOPED; do
             if npm view "$ws" version >/dev/null 2>&1; then
-              npm publish --provenance --access public -w "$ws"
+              npm publish --access public -w "$ws"
             else
               echo "::warning::$ws is not on registry.npmjs.org — npm OIDC trusted publishing requires the package to exist first (owner seeds it out-of-band, PORCH-062 trail) plus its trusted-publisher binding; $ws@$VERSION not published this cut."
             fi
