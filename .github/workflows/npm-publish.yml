@@ -203,11 +203,15 @@ jobs:
             echo "## Changelog"
             echo ""
             CHANGELOG_SECTION=$(awk -v tag="$TAG" '$0 ~ ("^## " tag "( |$)") {flag=1; next} flag && /^## / {flag=0} flag {print}' CHANGELOG.md)
-            if [ -z "$CHANGELOG_SECTION" ]; then
+            if [ -z "$CHANGELOG_SECTION" ] && [ "$MODE" = "publish" ]; then
               echo "::error::CHANGELOG.md carries no entry under a '## $TAG' heading — every cut's changelog line rides its release notes (PORCH-062 ac-4)."
               exit 1
             fi
-            echo "$CHANGELOG_SECTION"
+            if [ -z "$CHANGELOG_SECTION" ]; then
+              echo "> dry-run: CHANGELOG.md has no '## $TAG' section — a publish cut fails without one."
+            else
+              echo "$CHANGELOG_SECTION"
+            fi
             echo ""
             echo "## License"
             echo ""
