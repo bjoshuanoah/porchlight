@@ -141,6 +141,38 @@ export class DidService {
     return document;
   }
 
+  /**
+   * PORCH-065: re-point every stored DID document's service entries to
+   * `hubUrl` in one pass — the address move's DID half. The DID and
+   * verificationMethod entries stay structurally untouched (repointDocument's
+   * contract applies per row). Home-scale pass over did_documents.
+   */
+  async repointAllDocuments({ hubUrl }) {
+    const rows = await this.didDocuments.find({});
+    for (const row of rows) {
+      await this.repointDocument(row.did, { hubUrlFn: () => hubUrl });
+    }
+    return { repointed: rows.length, hubUrl };
+  }
+
+  /**
+   * PORCH-065: every homed DID document whose PorchlightHome service entry
+   * does not match `hubUrl` (or carries no endpoint) — the status surface's
+   * residue diagnostic for the DID half of the self-reference scope.
+   */
+  async staleServiceEntries({ hubUrl } = {}) {
+    const rows = await this.didDocuments.find({});
+    return rows
+      .filter((row) => {
+        const home = (row.document?.service ?? []).find((entry) => entry.id === `${row.did}#porchlight-home`);
+        return !home || home.serviceEndpoint !== (hubUrl ?? null);
+      })
+      .map((row) => ({ kind: "did_document", ref: row.did, endpoint: (() => {
+        const home = (row.document?.service ?? []).find((entry) => entry.id === `${row.did}#porchlight-home`);
+        return home?.serviceEndpoint ?? null;
+      })() }));
+  }
+
   /** Handle → identity row (presentation-plane resolution); null when unset/unknown. */
   async resolveHandle(handle) {
     if (!handle) return null;

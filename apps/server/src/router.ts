@@ -11,6 +11,7 @@ import { assembleSocialModule } from "@porchlight/social";
 import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
+import { ReauthService } from "./services/reauth.service.js";
 import { loadVapidKeys } from "./services/push-keys.js";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
 import type { BootstrapService, BootstrapStep } from "./services/bootstrap.service.js";
@@ -48,12 +49,15 @@ export interface ServerOptions {
   restart?: (() => void) | null;
   /** Built SPA directory; defaults to the files copied into the published server package. */
   webRoot?: string;
-  /**
-   * Auth-failure capture sink (PORCH-019), passed to the module assembles
-   * and the front door; defaults to console.log (the supervisor pipes the
-   * hub child's stdout into logs/hub.log).
+  /** PORCH-019: 401 capture sink; defaults to console.log (the supervisor
+   *  pipes the hub child's stdout into logs/hub.log).
    */
   log?: ((line: string) => void) | null;
+  /**
+   * PORCH-065: the pre-commit verification's cross-origin fetch seam for the
+   * console address action (stage-1 test hook). Defaults to globalThis.fetch.
+   */
+  verifyFetchImpl?: typeof fetch | null;
   /**
    * Real-time event plane (PORCH-047): the Redis-backed fan-out + replay
    * window adapter, created from deps.redis by the boot. Optional —
@@ -158,6 +162,10 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     activeDeviceRegistration: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown>; [key: string]: unknown } | null>;
   } | null = null;
   let socialModule: ReturnType<typeof assembleSocialModule> | null = null;
+  // PORCH-065: the re-auth orchestration (system vertical). Declared before
+  // the modules assemble so the identity consume-observer can late-bind to
+  // it — social assembles after identity, and the reauth service needs both.
+  let reauthService: ReauthService | null = null;
   if (options.store && options.config.mode.identityServingEnabled) {
     // The identity module assembles its own route → controller → service →
     // model path at its published entry; the server performs no domain logic.
@@ -177,6 +185,13 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       // device-link mint; the social push pipeline resolves downstream
       // (late-bound — social assembles after identity).
       onDeviceLinkMinted: (event) => socialModule?.pushService.notifyDeviceLink(event),
+      // PORCH-065: the self-reauth grant's consumption triggers the
+      // idempotent re-point, deriving the origin from the serving bind of
+      // the consume request (transport-side, never owner-typed input);
+      // ordinary device links flow unchanged. Late-bound — the reauth
+      // service needs both modules.
+      onDeviceLinkConsumed: (event: { did: string; purpose: string | null; serveOrigin?: string | null }) =>
+        reauthService?.handleSelfGrantConsumed({ did: event.did, purpose: event.purpose, serveOrigin: event.serveOrigin ?? null }) ?? null,
     });
     identityModule = identity;
     router.use("/identity", identity.api);
@@ -252,9 +267,36 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     hub.setMediaStatus(() => socialModule!.mediaVolume.status());
   }
   if (identityModule && socialModule) {
+    // PORCH-065: the owner re-auth orchestration — the system-vertical
+    // service behind both minting surfaces. The re-point writes the config
+    // halves directly (the config file is the single source of truth, the
+    // persistRoot pattern), composes the identity DID service and device
+    // grant mint, and the social network row + audit surface through the
+    // injected boundaries below; it owns no domain logic itself.
+    reauthService = new ReauthService({
+      configDir: options.bootstrap.configDir,
+      networks: {
+        get: () => socialModule!.networkService.get() as Promise<{ _id: string; ownerDid?: string | null; hubUrl?: string | null } | null>,
+        recordHubUrl: (url: string) => socialModule!.networkService.recordHubUrl(url),
+      },
+      deviceService: identityModule.deviceService,
+      didService: identityModule.didService,
+      audit: (record) => socialModule!.auditService.record(record as never),
+      hubUrl,
+      // PORCH-065: the instance identity rides the health doc — the instance
+      // provider wired here (late: the service exists only when both domains
+      // serve; the identity mint persists once into the runtime config).
+      // PORCH-019: 401 auth-failure capture.
+      log: options.log ?? null,
+      // PORCH-065: the pre-commit verification's cross-origin fetch seam.
+      fetchImpl: options.verifyFetchImpl ?? null,
+    });
+    hub.setInstanceProvider(() => reauthService?.instanceId() ?? null);
     // PORCH-010: the SPA front door spans both domains (member identity
     // birth + owner-routed device links); composition routes stay transport-
-    // level and mount only when both serving domains are enabled.
+    // level and mount only when both serving domains are enabled. The
+    // re-auth console surfaces ride the same front door (identity refuses
+    // cross-identity reads; the social perimeter authorizes the owner).
     frontDoor = createFrontDoorRouter({
       invites: socialModule.inviteService,
       networks: socialModule.networkService,
@@ -262,6 +304,11 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       audit: (record) => socialModule!.auditService.record(record as never),
       accountService: identityModule.accountService as FrontDoorAccountService,
       deviceService: identityModule.deviceService as FrontDoorDeviceService,
+      // PORCH-065: the re-auth orchestration + the machine-local ops-token
+      // check (the CLI escape hatch's authentication, shared with the
+      // update surface — one minted token, one compare).
+      reauth: reauthService,
+      verifyOpsToken: (token: string | null) => (token ? update.verifyToken(token) : false),
       hubUrl,
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,

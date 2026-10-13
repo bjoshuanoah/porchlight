@@ -12,6 +12,13 @@ export interface HealthDoc {
   mode: { deploymentMode: string; socialServingEnabled: boolean; identityServingEnabled: boolean };
   hubUrl: string | null;
   /**
+   * PORCH-065: the hub's instance identity (config.hub.instanceId, minted
+   * once at first run) — the marker the console address action's pre-commit
+   * verification consults cross-origin: reachable AND serving this hub.
+   * Null when the install predates the field or no config is readable.
+   */
+  instanceId: string | null;
+  /**
    * PORCH-054 (ac-1): the configured media root with its readiness state
    * (ready / volume not ready) — wired late, after the social module
    * assembles; null when no media pipeline is assembled.
@@ -37,6 +44,7 @@ export class HealthService {
   private readonly phase: { deploymentMode: string; socialServingEnabled: boolean; identityServingEnabled: boolean };
   private readonly hubUrl: () => string | null;
   private mediaStatus: (() => Promise<MediaReadiness>) | null = null;
+  private instanceProvider: (() => string | null) | null = null;
 
   constructor(
     probes: { mongo: Probe; redis: Probe },
@@ -57,6 +65,16 @@ export class HealthService {
     this.mediaStatus = provider;
   }
 
+  /**
+   * PORCH-065: the instance identity rides config state, so the provider is
+   * wired late (after assembly) — the health surface serves it at the
+   * well-known /api/health path the cross-origin pre-commit verification
+   * consults.
+   */
+  setInstanceProvider(provider: (() => string | null) | null) {
+    this.instanceProvider = provider;
+  }
+
   async getHealth(): Promise<HealthDoc> {
     const deps = { mongo: await this.probes.mongo(), redis: await this.probes.redis() };
     return {
@@ -69,6 +87,7 @@ export class HealthService {
         identityServingEnabled: this.phase.identityServingEnabled,
       },
       hubUrl: this.hubUrl(),
+      instanceId: this.instanceProvider ? this.instanceProvider() : null,
       media: this.mediaStatus ? await this.mediaStatus() : null,
     };
   }

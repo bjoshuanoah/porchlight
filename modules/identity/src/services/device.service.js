@@ -33,14 +33,23 @@ export class DeviceService {
    *   PORCH-059: device notifications — invoked when an owner-routed
    *   device link is minted so the origin networks' owners can be pushed.
    *   Fire-and-observe; mint behavior never depends on the hook.
+   * @param {(event: { grantId: string, did: string, purpose: string | null, serveOrigin: string | null }) => unknown | Promise<unknown>} [deps.onDeviceLinkConsumed]
+   *   PORCH-065: consumed-grant observer — invoked after a successful device
+   *   link consume with the grant row's purpose plus `serveOrigin` (the origin
+   *   the consume request arrived on, derived transport-side from the request's
+   *   bind — never owner-typed input). The hub runtime wires this to the
+   *   address re-point: a self-reauth grant's consumption on the owner's device
+   *   triggers the idempotent re-point. The same fire-and-observe class as the
+   *   mint hook; consume behavior never depends on it.
    */
-  constructor({ deviceRegistrations, pairingCodes, deviceLinks, sessions, hash, onDeviceLinkMinted }) {
+  constructor({ deviceRegistrations, pairingCodes, deviceLinks, sessions, hash, onDeviceLinkMinted, onDeviceLinkConsumed }) {
     this.deviceRegistrations = deviceRegistrations;
     this.pairingCodes = pairingCodes;
     this.deviceLinks = deviceLinks;
     this.sessions = sessions;
     this.hash = hash;
     this.onDeviceLinkMinted = onDeviceLinkMinted ?? null;
+    this.onDeviceLinkConsumed = onDeviceLinkConsumed ?? null;
   }
 
   /** Owner/member view: active AND revoked rows stay visible. */
@@ -127,8 +136,14 @@ export class DeviceService {
     });
   }
 
-  /** One-time 24-hour owner-routed device link. Stored hashed, returned plaintext once. */
-  async mintDeviceLink({ did, now = () => new Date() }) {
+  /**
+   * One-time 24-hour owner-routed device link. Stored hashed, returned
+   * plaintext once. `purpose` (PORCH-065) marks a self-reauth grant —
+   * address-change grant class: the server-side consume observer keys on it
+   * to trigger the idempotent re-point; ordinary owner-routed links carry
+   * null and flow unchanged.
+   */
+  async mintDeviceLink({ did, purpose = null, now = () => new Date() }) {
     const at = now();
     const token = randomBytes(32).toString("base64url");
     const row = {
@@ -138,6 +153,7 @@ export class DeviceService {
       expiresAt: isoPlus(at, DEVICE_LINK_TTL_SECONDS),
       consumed: false,
       revokedAt: null,
+      purpose: purpose ?? null,
       createdAt: at.toISOString(),
     };
     await this.deviceLinks.insertOne(row);
@@ -193,7 +209,7 @@ export class DeviceService {
    * UNCHANGED existing DID. Never mints a new identity — the did comes only
    * from the link row.
    */
-  async consumeDeviceLink({ token, deviceId, publicKeyJwk, label, now = () => new Date() }) {
+  async consumeDeviceLink({ token, deviceId, publicKeyJwk, label, serveOrigin = null, now = () => new Date() }) {
     const link = await this.consumeOneTimeRow({
       collection: this.deviceLinks,
       valueField: "token",
@@ -208,13 +224,26 @@ export class DeviceService {
     assertAcceptableKey(publicKeyJwk);
     await this.deviceLinks.updateOne({ _id: link._id }, { $set: { consumed: true } });
     await this.supersedeDeviceSlot({ did: link.did, deviceId });
-    return this.createRegistration({
+    const registration = await this.createRegistration({
       did: link.did,
       deviceId,
       publicKeyJwk,
       label: label ?? null,
       createdBy: "device-link",
     });
+    // PORCH-065: the consumed-grant observer sees the grant row (including
+    // its purpose). Same fire-and-observe class as the mint hook — the
+    // rebind above is complete either way.
+    try {
+      await this.onDeviceLinkConsumed?.({ grantId: link._id, did: link.did, purpose: link.purpose ?? null, serveOrigin: serveOrigin ?? null });
+    } catch {
+      // Never fail the consume over an observer.
+    }
+    // The response's registration copy ALSO carries the grant's purpose as
+    // a UI marker only (never stored on the registration) — a self-reauth
+    // grant auto-consumes on the address-change redirect; grants by any
+    // other channel present purpose null (normal screen).
+    return { ...registration, purpose: link.purpose ?? null };
   }
 
   /**

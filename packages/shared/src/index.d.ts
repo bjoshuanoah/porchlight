@@ -14,6 +14,18 @@ export interface PorchlightConfig {
     host: string;
     httpPort: number;
     tunnel: { enabled: boolean; url: string | null };
+    /**
+     * PORCH-065: the hub's instance identity — minted once at first run and
+     * persisted in the runtime config; the well-known instance marker serves
+     * it and the console address action's pre-commit verification compares it
+     * cross-origin before any re-point commits.
+     */
+    instanceId?: string | null;
+    /**
+     * PORCH-065: last self-reference re-point — {origin, at, surface}; null
+     * until the first address move. Read by `porchlight reauth status`.
+     */
+    lastRepoint?: { origin: string; at: string; surface: string } | null;
   };
   /** PORCH-026: second-hub identity adoption is flag-hidden (default off). */
   identity: {

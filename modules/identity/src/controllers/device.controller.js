@@ -96,8 +96,18 @@ export class DeviceController {
     const deviceError = this.devicePayloadError(device);
     if (!token || deviceError) return res.status(400).json({ error: deviceError ?? "token required", code: "E_FIELDS_REQUIRED" });
     try {
-      const registration = await this.deviceService.consumeDeviceLink({ token, ...devicePayload(device) });
-      res.status(201).json({ registration });
+      const registration = await this.deviceService.consumeDeviceLink({
+        token,
+        ...devicePayload(device),
+        // PORCH-065: the serving bind of THIS consume request — the origin the
+        // browser reached the hub on. The consume observer's re-point derives
+        // from it (never owner-typed input); null when unresolvable.
+        serveOrigin: this.serveOriginOf(req),
+      });
+      // PORCH-065: purpose rides only as a UI marker — a self-reauth grant
+      // (address-change redirect) auto-consumes; a grant by any other
+      // channel keeps the normal consume screen (purpose null).
+      res.status(201).json({ registration, grant: { purpose: registration?.purpose ?? null } });
     } catch (error) {
       const statusByCode = {
         E_DEVICE_LINK_UNKNOWN: 404,
@@ -131,6 +141,21 @@ export class DeviceController {
     if (!device?.deviceId || !device?.publicKeyJwk) return "device.deviceId and device.publicKeyJwk required";
     if (device.publicKeyJwk.d) return "private key material is never accepted (keys stay on the device)";
     return null;
+  }
+
+  /**
+   * PORCH-065: the origin this request's serving bind presented — the tunnel
+   * (or LAN/localhost) host the browser reached the hub on. Transport
+   * concern only: forwarded scheme with the Host header. Null when the bind
+   * is incomplete; the re-point observer treats null as "derive nothing".
+   */
+  serveOriginOf(req) {
+    const host = req?.headers?.host;
+    if (!host || typeof host !== "string") return null;
+    const forwarded = req.headers["x-forwarded-proto"];
+    const proto = (typeof forwarded === "string" ? forwarded.split(",")[0].trim() : null) || req.protocol || "http";
+    if (!/^https?$/.test(proto)) return null;
+    return `${proto}://${host}`;
   }
 
   registrationError(error, res, statusByCode) {

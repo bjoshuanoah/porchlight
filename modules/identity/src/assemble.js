@@ -43,6 +43,9 @@ export function assembleIdentityModule(store, options = {}) {
     sessions: collection("sessions"),
     hash: sha256,
     onDeviceLinkMinted: options.onDeviceLinkMinted ?? null,
+    // PORCH-065: the hub runtime wires the self-reauth consume → address
+    // re-point trigger here; absent (null) everywhere else.
+    onDeviceLinkConsumed: options.onDeviceLinkConsumed ?? null,
   });
   const authService = new AuthService({
     challenges: collection("challenges"),
