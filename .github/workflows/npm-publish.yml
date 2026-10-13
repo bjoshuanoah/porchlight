@@ -281,16 +281,21 @@ jobs:
             gh release download "$TAG" --pattern "porchlight-*.tgz" --dir "$RUNNER_TEMP/install" --repo "$GITHUB_REPOSITORY"
             npm install -g "$RUNNER_TEMP"/install/porchlight-*.tgz
           else
-            # Registry propagation can lag the publish by a moment on a
-            # fresh version — retry a couple of times before failing.
+            # Registry propagation can lag the publish by minutes on a fresh
+            # version (packager says "may take a few minutes"), and a mid-
+            # propagation doc can install a closure-less tarball that
+            # silently lacks the bin (run 38467646220: "added 1 package in
+            # 904ms" → `porchlight: command not found`). The attempt only
+            # counts when the BINARY ACTUALLY RUNS, not merely when install
+            # exits 0.
             installed=""
-            for attempt in 1 2 3 4 5; do
-              if npm install -g porchlight; then installed="1"; break; fi
-              echo "attempt $attempt failed — waiting 30s for registry propagation"
-              sleep 30
+            for attempt in 1 2 3 4 5 6; do
+              if npm install -g porchlight && porchlight --version; then installed="1"; break; fi
+              echo "attempt $attempt failed (install or binary run) — waiting 45s for registry propagation"
+              sleep 45
             done
             if [ -z "$installed" ]; then
-              echo "::error::npm install -g porchlight never succeeded from the registry"
+              echo "::error::npm install -g porchlight never produced a running porchlight binary from the registry"
               exit 1
             fi
           fi
