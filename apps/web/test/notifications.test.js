@@ -20,6 +20,7 @@ import {
   muteRows,
   normalizeSettings,
   notificationCapability,
+  notificationSection,
   postPath,
   reenableGuidance,
   receivesOwnerEvents,
@@ -73,6 +74,11 @@ test("PORCH-060 ac-1: the settings card renders the master switch, per-event tog
   assert.match(card, /data-testid="notification-settings"/);
   // Master switch row.
   assert.match(card, /"Device notifications"/);
+  // The per-event rows and mute rows render only in the expanded state
+  // (PORCH-063 ac-3: collapsed carries zero toggles and zero mute rows).
+  assert.match(card, /\{expanded && EVENT_ROWS\.map\(\(\{ key, label \}\)/);
+  assert.match(card, /\{expanded && receivesOwnerEvents\(role\)/);
+  assert.match(card, /\{expanded && mutes\.map\(\(row\)/);
   // Every per-event label renders as a toggle row (the labels ride the
   // module's EVENT_ROWS mapping; their literal wording is pinned above).
   assert.match(card, /EVENT_ROWS\.map\(\(\{ key, label \}\)/);
@@ -168,12 +174,20 @@ test("PORCH-060 ac-3: the browser permission prompt fires only from the explicit
   assert.doesNotMatch(install, /requestPermission/);
   const card = await src("src/notifications.jsx");
   // The master toggle is the only explicit-tap surface that runs the
-  // Enable flow before the settings write, and a promptable (default)
-  // permission stays silent at load — the quiet refresh runs only when
-  // the permission is already granted.
+  // walked flow, and a promptable (default) permission or an off row
+  // stays silent at load — the quiet refresh runs only when the
+  // permission is already granted AND the persisted row is enabled
+  // (PORCH-063).
   assert.match(card, /if \(capability\.permission !== "granted"\) \{ setDeviceOn\(false\); return undefined; \}/);
+  assert.match(card, /if \(settings\?\.enabled !== true\) \{ setDeviceOn\(false\); return undefined; \}/);
   assert.match(card, /toggleMaster/);
-  assert.match(card, /if \(checked && !deviceOn\) \{\s*\n\s*await actions\.enableNotifications\(\);/);
+  // The walked flow's order: the off-to-on settings write lands BEFORE
+  // the tap's subscribe runs, and a failed prompt reverts the route-
+  // persisted row to enabled=false (which also expires any subscription).
+  assert.match(card, /const saved = await actions\.saveNotificationSettings\(withMaster\(previousSettings, true\)\);/);
+  assert.match(card, /if \(!persisted\.enabled\) throw new Error\("The hub could not turn notifications on\."\);/);
+  assert.match(card, /await actions\.enableNotifications\(\);/);
+  assert.match(card, /await actions\.saveNotificationSettings\(withMaster\(previousSettings, false\)\);/);
 });
 
 test("PORCH-060 ac-3: denial mirrors the real permission and renders platform-appropriate re-enable guidance", async () => {
@@ -286,4 +300,42 @@ test("PORCH-060 ac-5: the shared-tablet edges — per-identity settings, per-ide
   assert.match(cardConnections, /loadNotificationSettings: \(\) => request\(active/);
   // "Who's using Porchlight?" governs who is speaking: no open identity, no settings.
   assert.match(card, /!identity\?\.id\) return undefined;/);
+});
+
+/* ---- PORCH-063: the opt-in default and the walked enable flow (Brian, Oct 13, 2026) ---- */
+
+test("PORCH-063 ac-3: the section state machine expands only on switch-on with permission granted", () => {
+  assert.equal(notificationSection({ enabled: false, granted: false }), "collapsed", "the off default collapses");
+  assert.equal(notificationSection({ enabled: false, granted: true }), "collapsed", "a granted permission with the switch off still collapses");
+  assert.equal(notificationSection({ enabled: true, granted: false }), "collapsed", "the switch on without a granted permission collapses");
+  assert.equal(notificationSection({ enabled: true, granted: true }), "expanded", "the on row with a granted permission expands");
+  assert.equal(notificationSection({}), "collapsed", "the unset default collapses");
+});
+
+test("PORCH-063 ac-3: collapsed renders the master switch plus one explainer — zero toggles, zero mute rows; expanded renders the rows", async () => {
+  const card = await src("src/notifications.jsx");
+  // The expanded decision rides the pure state machine with the switch
+  // value and this device's liveness (permission-granted channel).
+  assert.match(card, /notificationSection\(\{ enabled: Boolean\(settings\?\.enabled\), granted: deviceOn \}\)/);
+  // The master row renders in BOTH states (with its one-line explainer);
+  // only the rows below it gate on the state.
+  assert.match(card, /data-testid="notification-settings"/);
+});
+
+test("PORCH-063 ac-2: the switch mirrors the real permission — on only with the device's channel live", async () => {
+  const card = await src("src/notifications.jsx");
+  assert.match(card, /const masterShown = !denied && deviceOn && switchValue;/);
+  // Denied keeps the collapsed state with the platform's re-enable guidance.
+  assert.match(card, /denied\s+\? reenableGuidance\(capability\.webkit\)/);
+});
+
+test("PORCH-063 ac-1: the off default collapses and never prompts at load — the quiet re-subscribe reads the persisted row first", async () => {
+  const card = await src("src/notifications.jsx");
+  // Effect deps: the liveness decision re-evaluates when the persisted
+  // row loads (enabled flips the gate), not just capability facts.
+  assert.match(card, /\}, \[capability\.state, capability\.permission, settings\?\.enabled\]\);/);
+  // The off path runs no permission call and no subscribe: a plain
+  // settings write, then the collapse.
+  assert.match(card, /if \(!checked\) \{/);
+  assert.doesNotMatch(card, /Notification\.requestPermission/);
 });

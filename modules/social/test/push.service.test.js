@@ -79,7 +79,16 @@ async function mkPost(mod, token, memberDevice, payload) {
   return (await mod.postService.create({ accessToken: token, payload, signature: memberDevice.signPayload(payload) })).post;
 }
 
+/**
+ * The walked enable flow (PORCH-063 ac-2): the settings write persists
+ * enabled=true FIRST (the hub registers only enabled identities — an
+ * off-state identity, including the fresh default, holds no subscription),
+ * then the subscription registers. Tests that need a live subscription
+ * without caring about the flow use this; tests pinning the gate call the
+ * two steps explicitly.
+ */
 async function subscribe(mod, token, endpoint, devLabel) {
+  await mod.pushService.updateSettings({ accessToken: token, enabled: true });
   return mod.pushService.registerSubscription({ accessToken: token, endpoint, keys: { p256dh: `B_${devLabel}`, auth: `A_${devLabel}` } });
 }
 
@@ -97,6 +106,7 @@ async function serve(mod) {
 
 test("ac-1: registration persists an identity-scoped, per-device subscription record", async () => {
   const { mod, tokens, subs } = await pushFixture();
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: true });
   const result = await mod.pushService.registerSubscription({
     accessToken: tokens.bob,
     endpoint: "https://push.example.com/endpoint-1",
@@ -120,6 +130,7 @@ test("ac-1: registration persists an identity-scoped, per-device subscription re
 
 test("ac-1: re-registration replaces, never duplicates (same device, new endpoint)", async () => {
   const { mod, tokens, subs } = await pushFixture();
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: true });
   await mod.pushService.registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/old", keys: { p256dh: "B_k", auth: "B_a" } });
   const second = await mod.pushService.registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/new", keys: { p256dh: "B_k2", auth: "B_a2" } });
   const stored = await subs.find({});
@@ -131,6 +142,7 @@ test("ac-1: re-registration replaces, never duplicates (same device, new endpoin
 
 test("ac-1: re-registering the SAME endpoint on one identity stays one row with identity preserved", async () => {
   const { mod, tokens, subs } = await pushFixture();
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: true });
   const first = await mod.pushService.registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/e", keys: { p256dh: "B_k", auth: "B_a" } });
   await mod.pushService.registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/e", keys: { p256dh: "B_k2", auth: "B_a2" } });
   const stored = await subs.find({});
@@ -141,6 +153,8 @@ test("ac-1: re-registering the SAME endpoint on one identity stays one row with 
 
 test("ac-1: a shared tablet endpoint re-bound to another member replaces the binding", async () => {
   const { mod, tokens, subs } = await pushFixture();
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true });
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: true });
   await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/tablet", keys: { p256dh: "B_k", auth: "B_a" } });
   await mod.pushService.registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/tablet", keys: { p256dh: "B_k2", auth: "B_a2" } });
   const stored = await subs.find({});
@@ -152,6 +166,14 @@ test("ac-1: the subscription routes register through the real express vertical",
   const { mod, tokens, subs } = await pushFixture();
   const { base, close } = await serve(mod);
   try {
+    // The walked enable flow over the routes (PORCH-063): enabled=true
+    // persists first, then the subscription registers.
+    const enabled = await fetch(`${base}/push/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${tokens.bob}` },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(enabled.status, 200);
     const registered = await fetch(`${base}/push/subscriptions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${tokens.bob}` },
@@ -274,6 +296,9 @@ test("ac-2: the global switch and per-event toggles gate at send time — never 
   await react("❤️");
   assert.equal(sender.sends.length, 0, "the hub-enforced switch stops the send");
   await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true }); // decision re-read now
+  // The off write expired the subscription (an off-state identity holds
+  // none — PORCH-063); the walked re-enable re-subscribes this device.
+  await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/alice", keys: { p256dh: "B_alice", auth: "A_alice" } });
   await react("🎉");
   assert.equal(sender.sends.length, 1, "the pipeline reads settings at send time, never caches");
   await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { reaction: false } });
@@ -318,7 +343,16 @@ test("ac-2: the gating matrix is enforced over ROUTE-persisted settings — ever
   try {
     // Registration, authorship, settings writes, and every trigger below
     // ride the routes on the real express vertical — nothing about this
-    // matrix is service-injected.
+    // matrix is service-injected. The walked enable flow (PORCH-063)
+    // persists enabled=true BEFORE the subscription registers.
+    await putSettings({ enabled: true });
+    // Bob's own walk lands his row before his registration registers.
+    const bobEnabled = await fetch(`${base}/push/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${tokens.bob}` },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.ok([200, 201].includes(bobEnabled.status), "bob's walked enable persists");
     await route("/push/subscriptions", tokens.alice, { endpoint: "https://push.example.com/routes", keys: { p256dh: "B_routes", auth: "A_routes" } });
     await route("/push/subscriptions", tokens.bob, { endpoint: "https://push.example.com/revoked", keys: { p256dh: "B_revoked", auth: "A_revoked" } });
     const { post: sunday } = await route("/posts", tokens.alice, {
@@ -331,13 +365,16 @@ test("ac-2: the gating matrix is enforced over ROUTE-persisted settings — ever
         signature: devs.bob.signPayload({ postId: sunday._id, emoji }),
       });
 
-    // The global switch gates at send time — the PUT route persisted it.
+    // The global switch gates at send time — the PUT route persisted it —
+    // and a switch-off write also clears alice's stored subscription (an
+    // off-state identity holds none), so later gates re-register. The
+    // fresh default had already refused any registration before the walk.
     await putSettings({ enabled: false });
     await react("❤️");
     assert.equal(sender.sends.length, 0, "the route-persisted switch stops the send");
-
-    // Per-event toggles gate at send time, on the same persisted row.
+    assert.equal((await subs.find({ identityId: ALICE })).length, 0, "the switch-off write expired the off-state identity's subscriptions");
     await putSettings({ enabled: true, events: { reaction: false } });
+    await route("/push/subscriptions", tokens.alice, { endpoint: "https://push.example.com/routes", keys: { p256dh: "B_routes", auth: "A_routes" } });
     await react("🎉");
     assert.equal(sender.sends.length, 0, "the toggled-off event type produces no send attempt");
     await putSettings({ enabled: true, events: { reaction: true } });
@@ -708,7 +745,13 @@ test("ac-5: the subscription route serves the VAPID public key; registration nee
 
     // No workaround, no capability sniffing: any browser that completes the
     // subscription handshake registers with endpoint + keys only (the
-    // iOS 16.4+ gate is the browser's own; the server never fakes one past it).
+    // iOS 16.4+ gate is the browser's own; the server never fakes one past
+    // it) — after the walked enable flow (PORCH-063) persisted enabled=true.
+    await fetch(`${base}/push/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${tokens.bob}` },
+      body: JSON.stringify({ enabled: true }),
+    });
     const registered = await fetch(`${base}/push/subscriptions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${tokens.bob}` },
@@ -726,8 +769,10 @@ test("ac-5: the settings routes read and update the hub-enforced member controls
   try {
     const fresh = await fetch(`${base}/push/settings`, { headers: { authorization: `Bearer ${tokens.alice}` } });
     const freshBody = await fresh.json();
+    // PORCH-063 ac-1: the fresh identity's unset row resolves the opt-in
+    // default — enabled=false, never the pre-PORCH-063 born-on default.
     assert.deepEqual(freshBody.settings, {
-      enabled: true,
+      enabled: false,
       events: { reply: true, reaction: true, mention: true, groupPost: false, joined: true, deviceLink: true },
       mutes: [],
     });
@@ -755,7 +800,6 @@ test("ac-5: the settings routes read and update the hub-enforced member controls
 test("ac-2: settings written through the PUT route gate real trigger writes — the matrix against persisted route state", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
-  await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/routed", keys: { p256dh: "B_r", auth: "A_r" } });
   const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
   const react = (emoji) =>
     mod.interactionService.react({
@@ -778,11 +822,18 @@ test("ac-2: settings written through the PUT route gate real trigger writes — 
     // full-row replace (absent event keys reset to defaults), so each
     // gate's PUT carries the toggles it intends: the previous gate's
     // state is turned back on so exactly one gate is operative per step.
+    // The walked enable flow (PORCH-063) leads: enabled=true persists
+    // before the subscription registers, and a later off PUT clears it —
+    // so each gate that turns the master switch back on re-registers.
+    await put({ enabled: true });
+    await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/routed", keys: { p256dh: "B_r", auth: "A_r" } });
+
     await put({ enabled: false });
     await react("1️⃣");
     assert.equal(sender.sends.length, 0, "the route-written global switch stops the send");
 
     await put({ enabled: true, events: { reaction: false } });
+    await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/routed", keys: { p256dh: "B_r", auth: "A_r" } });
     await react("2️⃣");
     assert.equal(sender.sends.length, 0, "the route-written toggled-off event type produces no send attempt");
 
@@ -815,8 +866,8 @@ test("ac-2: settings written through the PUT route gate real trigger writes — 
 test("ac-4: a member removed mid-life resolves against nothing on every later trigger", async () => {
   const sender = senderOf(201);
   const { mod, membership, subs, tokens } = await pushFixture({ sender });
-  await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/alice", keys: { p256dh: "B_l", auth: "A_l" } });
   await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true });
+  await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/alice", keys: { p256dh: "B_l", auth: "A_l" } });
   const result = await mod.pushService.notify({
     networkId: FAMILY,
     type: "reply",
@@ -841,4 +892,118 @@ test("ac-4: a member removed mid-life resolves against nothing on every later tr
   const stored = await subs.find({});
   assert.equal(stored.length, 1, "the identity's subscription is NOT deleted: other networks' reach persists");
   assert.equal(sender.sends.length, 1);
+});
+/* ---- PORCH-063: the opt-in default (Brian, Oct 13, 2026) ------------------ */
+
+test("PORCH-063 ac-1: a fresh identity and a freshly created row both resolve enabled=false", async () => {
+  const { mod, tokens, settings } = await pushFixture();
+  // Unset: no row exists — the resolver falls to the off default, with no
+  // write and no throw.
+  assert.deepEqual((await settings.find({})), [], "a fresh identity carries no settings row");
+  const unset = await mod.pushService.memberSettings({ accessToken: tokens.alice });
+  assert.equal(unset.settings.enabled, false, "the unset identity resolves the opt-in default");
+  assert.deepEqual((await settings.find({})), [], "resolution never creates a row as a side effect");
+  // Freshly created: the member's first write resolves the row with
+  // enabled=false (a fresh default row is NOT the born-on default).
+  const created = await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: false });
+  assert.equal(created.settings.enabled, false);
+  const [row] = await settings.find({ identityId: BOB });
+  assert.equal(row.enabled, false, "the created row persists enabled=false");
+  // The per-event defaults survive the flip, but they never deliver while
+  // the master switch is off.
+  assert.deepEqual(row.events, { reply: true, reaction: true, mention: true, groupPost: false, joined: true, deviceLink: true });
+});
+
+test("PORCH-063 ac-1: an off-state member (default or pre-set) produces no send attempt for any event — no composition, no Web Push", async () => {
+  const sender = senderOf(201);
+  const { mod, devs, tokens } = await pushFixture({ sender });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Quiet by default" });
+  const react = (emoji) =>
+    mod.interactionService.react({
+      accessToken: tokens.bob,
+      payload: { postId: post._id, emoji },
+      signature: devs.bob.signPayload({ postId: post._id, emoji }),
+    });
+  const reply = () =>
+    mod.interactionService.comment({
+      accessToken: tokens.bob,
+      payload: { postId: post._id, parentId: null, body: "Hello Alice", mentions: [ALICE] },
+      signature: devs.bob.signPayload({ postId: post._id, parentId: null, body: "Hello Alice", mentions: [ALICE] }),
+    });
+  // The unset-default path (no row): no send for any covered event.
+  await react("❤️");
+  await reply();
+  assert.equal(sender.sends.length, 0, "the unset default produces no send attempt");
+  assert.equal(sender.sends.some((s) => s.plaintext), false, "no plaintext was ever composed for an off-state member");
+  // The pre-existing off row with explicit toggles/mutes on the covered
+  // class: the master switch still stops everything (the gating matrix
+  // extends to the default row).
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: false, events: { reaction: true }, mutes: [] });
+  await react("🎉");
+  assert.equal(sender.sends.length, 0, "an off row with on toggles still produces no send attempt");
+});
+
+test("PORCH-063 ac-2: registration gates on the switch — an off-state identity holds no subscription anywhere", async () => {
+  const { mod, tokens, subs } = await pushFixture();
+  // The fresh default (no row): registration is refused.
+  const fresh = await mod.pushService
+    .registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/never-enabled", keys: { p256dh: "B_o", auth: "A_o" } })
+    .catch((error) => error);
+  assert.equal(fresh.code, "E_PUSH_NOT_ENABLED", "an off-state identity's registration is refused at the walk");
+  assert.ok(/Turn on notifications/.test(fresh.message));
+  assert.deepEqual(await subs.find({}), [], "the off-state identity holds no subscription");
+  // An explicit off row: the same refusal.
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: false });
+  const off = await mod.pushService
+    .registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/off", keys: { p256dh: "B_f", auth: "A_f" } })
+    .catch((error) => error);
+  assert.equal(off.code, "E_PUSH_NOT_ENABLED");
+  assert.deepEqual(await subs.find({}), []);
+
+  // The walked flow: enabled=true persists first, THEN registration lands.
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: true });
+  await mod.pushService.registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/walked", keys: { p256dh: "B_w", auth: "A_w" } });
+  assert.equal((await subs.find({})).length, 1, "the enabled identity's registration lands");
+
+  // Flipping off expires the stored subscription at the same write.
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: false });
+  assert.deepEqual(await subs.find({}), [], "the off-state identity holds no subscription after the flip");
+});
+
+test("PORCH-063 ac-4: the master switch enforces first and no backfill flips an enabled row", async () => {
+  const sender = senderOf(201);
+  const { mod, devs, tokens, settings, subs } = await pushFixture({ sender });
+  // A member who enabled EARLIER (before this default lands): their row
+  // exists with enabled=true and per-event state of their own (their own
+  // walked PUT carried it; a full-row replace re-asserts the toggles).
+  await subscribe(mod, tokens.alice, "https://push.example.com/kept", "kept");
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { groupPost: true } });
+  const [kept] = await settings.find({ identityId: ALICE });
+  assert.equal(kept.enabled, true, "the enabling member's row is not backfilled to the new default");
+  assert.equal(kept.events.groupPost, true);
+
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Kept setting" });
+  await mod.interactionService.react({
+    accessToken: tokens.bob,
+    payload: { postId: post._id, emoji: "🎊" },
+    signature: devs.bob.signPayload({ postId: post._id, emoji: "🎊" }),
+  });
+  assert.equal(sender.sends.length, 1, "the enabled member still delivers over the same gating");
+
+  // Master-switch-first on the live pipeline: flip the row off (the same
+  // write expires the subscription) and a co-resident row cannot rescue
+  // delivery — toggles on, mutes empty, and the old subscription expired.
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: false, events: { reaction: true } });
+  assert.deepEqual(await subs.find({}), [], "no subscriptions survive the off write");
+  // Even a manually kept subscription (a stale pre-existing row) is dead
+  // while the master switch is off: the pipeline enforces it first.
+  await subs.insertOne({ _id: "psb_stale", identityId: ALICE, endpoint: "https://push.example.com/stale", keys: { p256dh: "B_s", auth: "A_s" }, deviceId: "dev_alice", createdAt: new Date().toISOString(), lastSeen: new Date().toISOString() });
+  await mod.interactionService.react({
+    accessToken: tokens.bob,
+    payload: { postId: post._id, emoji: "🥇" },
+    signature: devs.bob.signPayload({ postId: post._id, emoji: "🥇" }),
+  });
+  assert.equal(sender.sends.length, 1, "the master switch stops the stale subscription's send attempt even with everything else open");
+  assert.equal((await subs.find({})).length, 1, "the stale subscription is untouched — the switch alone gates");
+  assert.equal((await settings.find({ identityId: ALICE }))[0].enabled, false);
 });
