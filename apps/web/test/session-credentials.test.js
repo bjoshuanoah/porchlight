@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reCredentialPlanes } from "../src/session-credentials.js";
+import { reCredentialPlanes, mergeSessionAdoptions } from "../src/session-credentials.js";
 
 const HUB = "https://hub.example";
 const DID = "did:porchlight:brian";
@@ -158,4 +158,45 @@ test("PORCH-050: the identity record is copied, never mutated in place", async (
   const connection = connectionWith();
   await reCredentialPlanes(connection, request, { openDeviceSession });
   assert.equal(connection.identity.name, "Brian", "the caller's stored row is untouched by the pass");
+});
+
+test("PORCH-061: mergeSessionAdoptions adopts the minted identity session and any restored membership planes", async () => {
+  const rows = [connectionWith()];
+  const merged = mergeSessionAdoptions(rows, [{
+    id: DID, name: "Brian Noah",
+    identityToken: "identity-2", identityRefreshToken: "identity-refresh-2",
+    token: "membership-2", refreshToken: "membership-refresh-2", networkId: "net_1",
+  }]);
+  assert.deepEqual(merged[0], {
+    ...rows[0],
+    identity: { id: DID, name: "Brian Noah" },
+    identityToken: "identity-2", identityRefreshToken: "identity-refresh-2",
+    token: "membership-2", refreshToken: "membership-refresh-2", networkId: "net_1",
+  });
+  // The caller's stored rows are copied, never mutated.
+  assert.equal(rows[0].identityToken, "identity-1");
+});
+
+test("PORCH-061: an identity-plane-only adoption never wipes a live membership token with nothing", async () => {
+  const rows = [connectionWith()];
+  const merged = mergeSessionAdoptions(rows, [{
+    id: DID, identityToken: "identity-2", identityRefreshToken: "identity-refresh-2",
+  }]);
+  assert.equal(merged[0].token, "membership-1");
+  assert.equal(merged[0].refreshToken, "refresh-1");
+  assert.equal(merged[0].identityToken, "identity-2");
+  // A minted identity token with no refresh side must not clobber the
+  // existing identity refresh token either — a missing side stays untouched.
+  const stored = [connectionWith({ identityRefreshToken: "identity-refresh-1" })];
+  const bare = mergeSessionAdoptions(stored, [{ id: DID, identityToken: "identity-3" }]);
+  assert.equal(bare[0].identityToken, "identity-3");
+  assert.equal(bare[0].identityRefreshToken, "identity-refresh-1");
+});
+
+test("PORCH-061: the healed name applies only when it differs from the stored one", async () => {
+  const rows = [connectionWith()];
+  const same = mergeSessionAdoptions(rows, [{ id: DID, name: "Brian", identityToken: "identity-2" }]);
+  assert.equal(same[0].identity, rows[0].identity, "identical name keeps the identity record identical");
+  const healed = mergeSessionAdoptions(rows, [{ id: DID, name: "Brian Noah", identityToken: "identity-2" }]);
+  assert.equal(healed[0].identity.name, "Brian Noah");
 });

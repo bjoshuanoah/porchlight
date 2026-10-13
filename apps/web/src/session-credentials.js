@@ -53,3 +53,32 @@ export async function reCredentialPlanes(connection, request, { openDeviceSessio
   }
   return { connection: next, membershipFailed };
 }
+
+/**
+ * PORCH-061: merge re-credential adoptions into the stored connection rows.
+ * The identity plane is adopted whenever the update carries a mint (every
+ * opened device session supersedes the stored token by design, PORCH-028) —
+ * keeping the superseded token was what left bootstrap landing and the
+ * name-heal sweep with a live-looking connection whose identity plane was
+ * already dead. The membership planes ride only a answered restore, so a
+ * refused restore never wipes a live membership token with nothing. The
+ * healed name applies only when it differs from the stored one.
+ */
+export function mergeSessionAdoptions(rows, updates) {
+	const byId = new Map((updates ?? []).map((row) => [row.id, row]));
+	return (rows ?? []).map((item) => {
+		const update = byId.get(item.identity?.id);
+		if (!update) return item;
+		return {
+			...item,
+			identity: update.name && update.name !== item.identity?.name
+				? { ...item.identity, name: update.name }
+				: item.identity,
+			...(update.identityToken ? {
+				identityToken: update.identityToken,
+				...(update.identityRefreshToken ? { identityRefreshToken: update.identityRefreshToken } : {}),
+			} : {}),
+			...(update.token ? { token: update.token, refreshToken: update.refreshToken, networkId: update.networkId } : {}),
+		};
+	});
+}

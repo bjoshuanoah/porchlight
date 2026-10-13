@@ -136,7 +136,11 @@ export function createCustody({ storage, origin, publishWaitMs = PUBLISH_WAIT_MS
     if (canRenew && !busyElsewhere) {
       // Route through the shared renewal: a renewal already in flight in this
       // tab is awaited, never duplicated (a duplicate would supersede it).
-      const renewed = await runRenewal({ did: connection.identity?.id || null });
+      // The renewal rides force (PORCH-061): a 401 whose presented token
+      // still matches storage is at-rest evidence the freshness gate's
+      // speculation cannot hold — adopt already found no sibling publication
+      // — so this re-credential must not wait out a six-minute window.
+      const renewed = await runRenewal({ did: connection.identity?.id || null, force: true });
       if (renewed) {
         publishAdoption();
         const afterRenewal = adopt(connection);
