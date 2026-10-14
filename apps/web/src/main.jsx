@@ -52,6 +52,14 @@ setUnauthorizedHandler(({ connection, error }) => custody.recover({ connection, 
 // publication.
 const renewFreshMs = 6 * 60 * 1000;
 const initialConnections = readConnections(stored, origin);
+// PORCH-074: the installed-app fact the boot route reads. The display-mode
+// listener keeps the live state fresh for the install and notification
+// surfaces; the boot route only ever needs the launch-time fact, resolved
+// the same capability-first way (no user-agent sniffing).
+const standaloneBoot = isStandaloneLaunch({
+  navigatorStandalone: window.navigator.standalone,
+  standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
+});
 const localIdentities = [...new Set(initialConnections.map((item) => item.identity?.id).filter(Boolean))];
 const primary = ["/timeline", "/groups", "/compose", "/profile"];
 const labels = ["Timeline", "Groups", "Compose", "Profile"];
@@ -67,6 +75,7 @@ function routeOf() {
     connections: initialConnections,
     signedOut: readSignedOut(stored, origin),
     pinned: initialConnections.some(hasLocalPin),
+    standalone: standaloneBoot,
   });
 }
 function App() {
