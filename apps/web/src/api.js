@@ -59,21 +59,17 @@ export async function request(connection, path, init = {}) {
 
 export async function loadFeeds(connections) {
   const results = await Promise.allSettled(connections.map(async (connection) => {
-    const [timeline, ranked] = await Promise.all([
-      request(connection, "social/timeline"),
-      request(connection, "social/ranked"),
-    ]);
+    const timeline = await request(connection, "social/timeline");
     const origin = new URL(connection.url).origin;
     const label = connection.name || origin;
     const annotate = (post) => ({ ...post, origin, network: label });
-    return { origin, posts: timeline.posts.map(annotate), ranked: ranked.posts.map(annotate) };
+    return { origin, posts: timeline.posts.map(annotate) };
   }));
-  const posts = [], ranked = [], failures = [];
+  const posts = [], failures = [];
   for (let i = 0; i < results.length; i++) {
     const item = results[i];
     if (item.status === "fulfilled") {
       posts.push(...item.value.posts);
-      ranked.push(...item.value.ranked);
     } else failures.push({
       origin: connections[i].url,
       message: item.reason.message,
@@ -84,6 +80,5 @@ export async function loadFeeds(connections) {
     });
   }
   posts.sort((a, b) => new Date(b.lastActivityAt || b.createdAt) - new Date(a.lastActivityAt || a.createdAt));
-  // Preserve each origin's published rank order. No invented cross-origin scoring.
-  return { posts, ranked, failures };
+  return { posts, failures };
 }

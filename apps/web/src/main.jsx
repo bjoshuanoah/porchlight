@@ -6,7 +6,6 @@ import HomeOutlined from "@mui/icons-material/HomeOutlined";
 import GroupsOutlined from "@mui/icons-material/GroupsOutlined";
 import AddOutlined from "@mui/icons-material/AddOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutline";
-import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import { themeFor, tokenStyles, lightTokens, darkTokens } from "./theme.js";
 import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
 // PORCH-055: the signed-out marker and boot routing for the device front state.
@@ -96,7 +95,6 @@ function App() {
   }, [displayMode]);
   const [connections, setConnections] = useState(initialConnections);
   const [posts, setPosts] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? cachedTimeline(stored, `${origin}:${localIdentities[0]}`) : []);
-  const [ranked, setRanked] = useState([]);
   const [hidden, setHidden] = useState(() => localIdentities.length === 1 ? hiddenPosts(stored, `${origin}:${localIdentities[0]}`) : new Set());
   const [offline, setOffline] = useState(false);
   // PORCH-050 ac-4: a genuinely dead credential (401 after recovery tried) is
@@ -269,7 +267,6 @@ function App() {
       setPosts(result.posts);
       saveTimeline(stored, `${origin}:${identity?.id}`, result.posts);
     } else if (noticeText && unreachable) setNotice(noticeText);
-    setRanked(result.ranked);
     if (before) {
       requestAnimationFrame(() => {
         applyFeedCompensation(before, captureFeedAnchor());
@@ -282,7 +279,7 @@ function App() {
     const liveActive = live.find((item) => item.identity?.id === identity.id) || null;
     if (!liveActive) return;
     const identityConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
-    const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], ranked: [], failures: [] };
+    const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], failures: [] };
     applyFeeds(result, { notice: "Your family server is unreachable. Showing saved moments where available." });
     const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult, mediaRootResult, reauthResult] = await Promise.allSettled([
       // Member-plane groups (PORCH-030): the Groups page reads the group
@@ -1079,7 +1076,7 @@ function App() {
   }), [hidden, connections, active, identity, navigate, reload, posts, network, mediaTransport]);
 
   const data = {
-    posts, ranked, groups, albums: [], connections, network: { name: active?.name || network?.name || null, id: active?.networkId || network?._id },
+    posts, groups, albums: [], connections, network: { name: active?.name || network?.name || null, id: active?.networkId || network?._id },
     identity, members: owner.members, devices: owner.devices, settings: owner.settings,
     // PORCH-070: the open identity's own account read (avatar rungs + the
     // legacy profile photo) rides beside the other own-account fields.
@@ -1222,7 +1219,6 @@ function App() {
             ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", color: "var(--porch-amber-ink)", boxShadow: "var(--porch-shadow-compose)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
             : <Button key={path} onClick={() => navigate(path)} sx={{ color: route.startsWith(path) ? "primary.main" : "text.secondary" }}>{labels[index]}</Button>)}
         </Stack>
-        <IconButton aria-label="Search family moments" onClick={() => navigate("/search")}><SearchOutlined /></IconButton>
       </Toolbar>
     </AppBar>}
     <Container maxWidth={false} sx={{ maxWidth: 1180, px: { xs: 2, lg: 4 }, pt: 4, pb: frontDoor ? 4 : { xs: 13, lg: 6 } }}>
