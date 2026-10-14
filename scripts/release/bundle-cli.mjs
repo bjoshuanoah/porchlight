@@ -49,9 +49,17 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
-const outFlag = process.argv.indexOf("--out");
-const outDir = outFlag > -1 ? resolve(process.cwd(), process.argv[outFlag + 1]) : null;
-const positional = process.argv.slice(2).filter((a) => a !== "--out" && a !== outDir && !a.startsWith("-"));
+// Arg parsing is index-based: the workflow calls `--out release-assets`
+// (a RELATIVE path) and the value at outFlag + 1 must be excluded from the
+// positional scan by position, never compared against the absoluted outDir
+// (string-equality against the resolved path mistook a relative value for a
+// rogue positional and failed the CI route with the usage line first run,
+// run 38640503200 — absolute --out values only ever passed it locally).
+const argv = process.argv.slice(2);
+const outFlag = argv.indexOf("--out");
+const outDir =
+	outFlag > -1 && argv[outFlag + 1] !== undefined ? resolve(process.cwd(), argv[outFlag + 1]) : null;
+const positional = argv.filter((_, i) => i !== outFlag && i !== outFlag + 1);
 if (!outDir || positional.length > 0) {
   process.stderr.write("usage: node scripts/release/bundle-cli.mjs --out <release-assets-dir>\n");
   process.exit(1);
