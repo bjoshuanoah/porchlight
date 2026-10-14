@@ -19,9 +19,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Avatar } from "@mui/material";
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from "./media-blob.js";
 
-/** A metas view may arrive as the { kind: rung } map (stored reads) or a
- * rungs array (the pending response) — one lookup serves both shapes. */
-function rungOf(metas, kind) {
+/** A metas view may arrive as the { kind: rung } map (stored reads, the
+ * ingest/commit responses) or a rungs array — one lookup serves both shapes.
+ * Exported for the Profile panel's pending-preview read (PORCH-073): the
+ * panel must go through this lookup, never a bare array method on the map
+ * the hub ships. */
+export function rungOf(metas, kind) {
   if (Array.isArray(metas)) return metas.find((rung) => rung?.kind === kind) ?? null;
   if (metas && typeof metas === "object") return metas[kind] ?? null;
   return null;

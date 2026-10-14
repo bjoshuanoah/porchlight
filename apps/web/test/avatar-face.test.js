@@ -13,6 +13,7 @@ import {
   pendingAvatarUrl,
   ownFaceSources,
   loadAvatarFace,
+  rungOf,
 } from "../src/avatar-face.js";
 import {
   mediaBlobKey,
@@ -228,4 +229,46 @@ test("PORCH-070: the rendition worker needs no avatar change — no bare rung im
   assert.match(avatarFace, /\/api\/identity\/avatars/);
   // Loader + cache only via avatar-face.js — one code path for every face.
   assert.match(social, /AvatarFace/);
+});
+
+// PORCH-073: the Profile panel reads the hub's ingest response through the
+// one dual-shape lookup. The bare `.find` the panel once ran on the
+// avatarMetas map threw a TypeError on every successful ingest (HTTP 200) and
+// the panel rendered the false "family server could not be reached" copy on a
+// healthy network path — a client logic error dressed as unreachability.
+test("PORCH-073: the panel's rung lookup reads the hub's avatarMetas map and rung arrays without ever throwing", () => {
+  // The hub's ingest/commit shape: the { kind: rung } metas map avatarMetas
+  // builds (modules/identity/src/services/avatar.service.js).
+  const rung = rungOf({ header: { ...METAS.header }, chooser: { ...METAS.chooser } }, "chooser");
+  assert.deepEqual(rung, METAS.chooser);
+  assert.equal(rung.sha256, "b".repeat(64));
+  // Run-level stored shapes ride the same map; a rungs array keeps resolving.
+  const fromArray = rungOf([...Object.values(METAS)], "chooser");
+  assert.equal(fromArray.kind, "chooser");
+  // No metas, wrong-kind map, or non-object garbage: null, never a throw.
+  assert.equal(rungOf(null, "chooser"), null);
+  assert.equal(rungOf(undefined, "chooser"), null);
+  assert.equal(rungOf({}, "chooser"), null);
+  assert.equal(rungOf({ header: METAS.header }, "chooser"), null);
+  assert.equal(rungOf("bogus", "chooser"), null);
+  assert.equal(rungOf(42, "chooser"), null);
+});
+
+// PORCH-073: the false-connectivity copy is reserved for the fetch-rejection
+// class. The panel refuses on E_HUB_UNREACHABLE, and every avatar-flow
+// request (shared attempt() plus the panel's own raw fetches) marks genuine
+// fetch rejections with that code — a client logic error can no longer
+// present as the hub being unreachable.
+test("PORCH-073: unreachability copy rides the E_HUB_UNREACHABLE class only", async () => {
+  const identity = await src("src/identity.jsx");
+  assert.match(identity, /cause\?\.code === 'E_HUB_UNREACHABLE'/);
+  assert.doesNotMatch(identity, /cause instanceof TypeError\s*\?\s*'The family server/);
+  const api = await src("src/api.js");
+  assert.match(api, /export function markUnreachable/);
+  assert.match(api, /E_HUB_UNREACHABLE/);
+  assert.match(api, /throw markUnreachable\(cause\)/);
+  const main = await src("src/main.jsx");
+  // Both avatar-flow raw fetches mark the class: the ingest POST and the
+  // pending-preview GET (commit/clear ride attempt()).
+  assert.match(main, /throw markUnreachable\(cause\)/);
 });

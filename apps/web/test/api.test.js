@@ -36,7 +36,9 @@ test("one unreachable origin remains visible as a failure while healthy origin s
   };
   const result = await loadFeeds([{ url: "https://home.example", token: "home" }, { url: "https://unreachable.example", token: "away" }]);
   assert.equal(result.posts[0].origin, "https://home.example");
-  assert.deepEqual(result.failures, [{ origin: "https://unreachable.example", message: "Hub unreachable", status: null, code: null }]);
+  // PORCH-073: a fetch rejection is the reachability class, named — never an
+  // unnamed error the surface could dress as something else.
+  assert.deepEqual(result.failures, [{ origin: "https://unreachable.example", message: "Hub unreachable", status: null, code: "E_HUB_UNREACHABLE" }]);
 });
 
 test("a 401 that survives recovery is carried as a dead session, not a network failure (PORCH-050 ac-4)", async (t) => {

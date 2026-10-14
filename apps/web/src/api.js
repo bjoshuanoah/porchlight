@@ -8,17 +8,34 @@ export function setUnauthorizedHandler(handler) {
   unauthorizedHandler = handler;
 }
 
+/**
+ * The reachability class, named honestly (PORCH-073): fetch() rejects only
+ * with TypeError — that is the one failure class the unreachability copy may
+ * describe. A bare TypeError from page logic must never render as "the family
+ * server could not be reached"; callers refusing on this code render the hub's
+ * own refusal when the cause is anything else.
+ */
+export function markUnreachable(cause) {
+  if (cause instanceof TypeError) cause.code = "E_HUB_UNREACHABLE";
+  return cause;
+}
+
 async function attempt(connection, path, init = {}, recoverable) {
   const base = new URL(connection.url || window.location.origin);
   const target = new URL(`/api/${path.replace(/^\/+/, "")}`, base);
-  const response = await fetch(target, {
-    ...init,
-    headers: {
-      ...(init.body && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}),
-      ...(connection.token ? { authorization: `Bearer ${connection.token}` } : {}),
-      ...init.headers,
-    },
-  });
+  let response;
+  try {
+    response = await fetch(target, {
+      ...init,
+      headers: {
+        ...(init.body && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}),
+        ...(connection.token ? { authorization: `Bearer ${connection.token}` } : {}),
+        ...init.headers,
+      },
+    });
+  } catch (cause) {
+    throw markUnreachable(cause);
+  }
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(result.error || `The hub returned ${response.status}.`);
