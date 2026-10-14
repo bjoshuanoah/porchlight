@@ -39,6 +39,11 @@ export function directoryRows(members = [], identityDid = null) {
       status: member?.state === "active" ? "Active" : "Removed",
       joined: member?.admittedAt || null,
       isSelf: Boolean(identityDid) && member?.did === identityDid,
+      // PORCH-070: the row keeps the member's did (rendition URLs are
+      // keyed by it) and its avatar meta rung verbatim; a rung-less row
+      // renders the initials fallback exactly as before.
+      did: member?.did ?? null,
+      avatar: member?.avatar ?? null,
     }))
     .sort((a, b) => rankByRole(a, b) || timeOrId(a, b));
 }

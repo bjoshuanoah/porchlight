@@ -28,6 +28,23 @@ export class AccountController {
     return requireSessionOr401({ req, res, authService: this.authService, log: this.log });
   }
 
+  /**
+   * GET /accounts/me — the open member's own account read (PORCH-070):
+   * session-bound to the did; carries the avatar's per-rung stamps (the
+   * "avatar blob" the profile reads already ride) plus any legacy
+   * owner-setup data-URL face still stored on the profile.
+   */
+  me = async (req, res) => {
+    const session = await this.requireSession(req, res);
+    if (!session) return;
+    try {
+      res.json(await this.accountService.accountFor({ did: session.did }));
+    } catch (error) {
+      if (error.code === "E_IDENTITY_NOT_FOUND") return res.status(404).json({ error: error.message, code: error.code });
+      res.status(500).json({ error: error.message, code: error.code ?? "E_INTERNAL" });
+    }
+  };
+
   /** GET /account — bootstrap state for the first-account offer (adoption is flag-hidden, PORCH-026). */
   get = async (_req, res) => {
     const { account, adoptionAvailable } = await this.accountService.bootstrapOffer();

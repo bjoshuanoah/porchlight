@@ -28,18 +28,29 @@ export class MemberAdminService {
    * @param {import("./media.service.js").MediaService} deps.media
    *   the media store side of the purge (authored originals, their
    *   rendition ladder, ledger rows, open uploads).
-   * @param {(dids: string[]) => Promise<Array<{did: string, displayName: string | null}>>} [deps.memberNames]
+   * @param {((dids: string[]) => Promise<Array<{did: string, displayName: string | null}>>) | null} [deps.memberNames]
    *   identity-plane name resolver — the typed confirmation names the
-   *   member the way the family sees them. Null on assemblies that don't
-   *   wire it: the confirmation then takes the raw DID.
+   *   member the way the family sees them (rows now also carry the member's
+   *   avatar meta beside the name; this service reads only the name).
+   *   Null on assemblies that don't wire it: the confirmation then takes
+   *   the raw DID.
+   * @param {((did: string) => Promise<{ removed: number }>) | null} [deps.purgeAvatar]
+   *   PORCH-070 purge cascade: identity-plane retire of the member's avatar
+   *   rendition set, run once after the media store sweep — the set goes
+   *   with the account record, whole, replaced-and-retired never
+   *   accumulated. Optional: null on assemblies that don't wire it (no
+   *   avatar to retire); a wired hook's failure never aborts the purge —
+   *   the audit detail records `avatarRetired: false` and the deletion
+   *   proceeds.
    * @param {(action: string, payload?: object) => Promise<void>} deps.audit
    */
-  constructor({ memberships, membership, postsService, media, memberNames, audit }) {
+  constructor({ memberships, membership, postsService, media, memberNames, purgeAvatar, audit }) {
     this.memberships = memberships;
     this.membership = membership;
     this.postsService = postsService;
     this.media = media;
     this.memberNames = memberNames ?? null;
+    this.purgeAvatar = purgeAvatar ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
   }
@@ -65,7 +76,11 @@ export class MemberAdminService {
    * authored-content sweep at this origin (authored originals: posts and
    * comments; and every reaction, vote, notification, and derived-artifact
    * row keyed to them), and the media store purge (authored asset originals,
-   * their renditions, ledger rows, chunk bytes). The final-owner invariant
+   * their renditions, ledger rows, chunk bytes). PORCH-070: after the media
+   * sweep, the identity-plane avatar purge hook (when wired) retires the
+   * member's avatar rendition set — the face goes with the account record
+   * (best-effort; the audit detail's `avatarRetired` records whether the
+   * set actually retired). The final-owner invariant
    * rides revokeMember: the last owner is un-deletable.
    *
    * Retry-safe: a member already revoked (a purge that failed midway, or a
@@ -104,10 +119,25 @@ export class MemberAdminService {
       action: "member_purge",
     });
     const media = this.media ? await this.media.deleteMemberMedia({ networkId, did: membership.did }) : null;
+    // PORCH-070 cascade: the avatar rendition set retires with the account
+    // record, after the media store sweep. Best-effort BY DESIGN — the
+    // purge must not hang on the identity plane's retire step: a wired
+    // hook's failure records `avatarRetired: false` in the audit detail and
+    // the deletion proceeds (nothing propagates); an unwired hook records
+    // the same false by absence. Success records `avatarRetired: true`.
+    let avatarRetired = false;
+    if (this.purgeAvatar) {
+      try {
+        await this.purgeAvatar(membership.did);
+        avatarRetired = true;
+      } catch {
+        avatarRetired = false;
+      }
+    }
     await this.audit("member_purge", {
       networkId,
       did: actorMembership.did,
-      detail: { memberId: membership._id, targetDid: membership.did, postsSwept: swept.sweptPosts, mediaRemoved: media?.assetRowsRemoved ?? 0 },
+      detail: { memberId: membership._id, targetDid: membership.did, postsSwept: swept.sweptPosts, mediaRemoved: media?.assetRowsRemoved ?? 0, avatarRetired },
     });
     return { purged: true, memberId: membership._id, membership: this.membership.view({ ...membership, state: "revoked" }), sweptPosts: swept.sweptPosts };
   }

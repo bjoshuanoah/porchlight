@@ -190,7 +190,7 @@ export class NotificationService {
     const names = await this.membership.attributionNames({ networkId, dids: rows.map((row) => row.did) });
     const query = typeof q === "string" ? q.trim().toLowerCase() : "";
     const candidates = rows
-      .map((row) => ({ did: row.did, name: names.get(String(row.did)) ?? null, role: row.role, admittedAt: row.admittedAt }))
+      .map((row) => ({ did: row.did, name: names.get(String(row.did))?.name ?? null, role: row.role, admittedAt: row.admittedAt }))
       .filter((candidate) => query === "" || (candidate.name !== null && candidate.name.toLowerCase().includes(query)))
       .sort((a, b) => {
         const names = (a.name ?? "").localeCompare(b.name ?? "");

@@ -99,7 +99,7 @@ export class GroupService {
     }
     const resolved = await this.membership.attributionNames({ networkId: group.networkId, dids: group.members });
     const names = {};
-    for (const [did, value] of resolved) names[did] = value ?? null;
+    for (const [did, value] of resolved) names[did] = value?.name ?? null;
     return { ...group, names };
   }
 

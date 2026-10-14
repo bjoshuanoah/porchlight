@@ -17,6 +17,10 @@ import {
 } from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
+// PORCH-070: faces (post header, reply rows) ride the one avatar-face code
+// path — authorized rung fetch through the identity-keyed blob cache,
+// initials stay the metas-less fallback.
+import { AvatarFace } from './avatar-face.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from './reactions.js';
 import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
@@ -759,7 +763,12 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
         <Stack direction="row" spacing={1.5} alignItems="center">
           {/* Detail card treatment (PORCH-041 spec): 40px avatar header on the detail surface. */}
-          <Avatar sx={{ width: detail ? 40 : 36, height: detail ? 40 : 36, fontSize: detail ? 17 : 15 }}>{(post.author?.name ?? post.authorName ?? memberName(post.authorId, data)).trim().charAt(0).toUpperCase()}</Avatar>
+          {/* PORCH-070: the author's face rides the post's own origin —
+              header rung fetched through the avatar-face loader; initials
+              stay exactly where no rungs exist. */}
+          <AvatarFace origin={post?.origin ?? originOf(post)} did={post.authorId ?? post.authorDid ?? null} kind="header"
+            metas={post.authorAvatar ?? null} load={actions?.loadAvatarRendition}
+            sx={{ width: detail ? 40 : 36, height: detail ? 40 : 36, fontSize: detail ? 17 : 15 }}>{(post.author?.name ?? post.authorName ?? memberName(post.authorId, data)).trim().charAt(0).toUpperCase()}</AvatarFace>
           <Box>
             {/* Header (PORCH-043 chrome): author 15px/600; 24px outlined
                 network chip with thin border and 12px text; date muted; the
@@ -899,7 +908,11 @@ function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply,
     return <Box key={id} sx={{ ml: depth ? { xs: Math.min(depth, 2) * 2, lg: Math.min(depth, 3) * 3.5 } : 0,
       ...(depth ? { borderLeft: '1px solid', borderColor: 'divider', pl: 1 } : {}) }}>
       <Stack direction="row" spacing={1} alignItems="flex-start">
-        <Avatar sx={{ width: 30, height: 30, fontSize: 13 }}>{(reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)).trim().charAt(0).toUpperCase()}</Avatar>
+        {/* PORCH-070: reply rows carry their author's face (interaction-path
+            comment views) on the same loader; name-only rows keep initials. */}
+        <AvatarFace origin={origin} did={reply.authorDid ?? reply.authorId ?? null} kind="header"
+          metas={reply.authorAvatar ?? null} load={actions?.loadAvatarRendition}
+          sx={{ width: 30, height: 30, fontSize: 13 }}>{(reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)).trim().charAt(0).toUpperCase()}</AvatarFace>
         <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography variant="caption" color="porchlight.muted">
             {reply.authorName ?? memberName(reply.authorDid, data)} · {relativeTime(reply.createdAt)}

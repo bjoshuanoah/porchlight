@@ -16,7 +16,8 @@ import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } f
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
 import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials.js";
-import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage } from "./device.js";
+import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage, signDevicePayload } from "./device.js";
+import { sha256Hex } from "./device-crypto.js";
 import { resolveStoredNames } from "./name-heal.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview } from "./member-actions.js";
 import { firstUrlIn } from "./link-preview.js";
@@ -121,6 +122,11 @@ function App() {
   const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, update: null, mediaRoot: null, availability: {} });
   const [network, setNetwork] = useState(null);
   const [networkLoaded, setNetworkLoaded] = useState(false);
+  // PORCH-070: the open identity's own account read (avatar rungs, legacy
+  // profile photo). Held in React state so a commit or clear repaints the
+  // face everywhere without a re-login; surfaces read it beside the other
+  // own-account fields.
+  const [identityAccount, setIdentityAccount] = useState(null);
   const [newDevices, setNewDevices] = useState([]);
   const active = identity ? connections.find((item) => item.identity?.id === identity.id) : null;
   const activeIdentityId = active?.identity?.id ?? null;
@@ -436,6 +442,24 @@ function App() {
     const timer = setInterval(() => void check(), 15_000);
     return () => clearInterval(timer);
   }, [active, observeDevices]);
+  // PORCH-070: the open identity's own account read feeds the Profile photo
+  // block (hub rungs or the legacy profile photo). It rides the identity
+  // plane's own credential and keys on the active identity — renewals and
+  // switches re-read it; commits and clears repaint it directly above.
+  useEffect(() => {
+    if (!(active?.identityToken && active?.identity?.id)) { setIdentityAccount(null); return undefined; }
+    let alive = true;
+    void (async () => {
+      try {
+        const account = await actions.readAccount();
+        if (alive) setIdentityAccount(account ?? null);
+      } catch {
+        if (alive) setIdentityAccount(null);
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the read rides the active identity's credential, not the actions memo
+  }, [activeIdentityId, active?.identityToken]);
 
   const bindDevice = async (route, grant) => {
     const hub = { url: origin };
@@ -649,6 +673,95 @@ function App() {
       await request({ ...active, token: active.identityToken }, "identity/devices/revoke", { method: "POST", body: JSON.stringify({ registrationId }) });
       setOwner((current) => ({ ...current, devices: current.devices.filter((row) => (row._id || row.id) !== registrationId) }));
       await reload();
+    },
+    // PORCH-070 identity-plane avatar actions. All ride the open
+    // connection's identity token — session-bound to the opened identity,
+    // never the membership plane — and surface the hub's plain refusals
+    // verbatim. The ingest carries raw image bytes with the declaration in
+    // headers (device-signed); commit and clear are JSON device-signed
+    // writes on the same route.
+    readAccount: async (connection = active) => {
+      const conn = connection || active;
+      if (!conn?.identityToken) throw new Error("Open your connected identity on this device first.");
+      return request({ ...conn, token: conn.identityToken }, "identity/accounts/me");
+    },
+    loadAvatarRendition: async ({ did, kind, version = null, pendingToken = null, connection = null } = {}) => {
+      const conn = connection || active;
+      const token = conn?.identityToken;
+      if (!did || !kind || !token) throw new Error("Open your connected identity on this device first.");
+      const target = new URL(`/api/identity/avatars/${encodeURIComponent(did)}/renditions/${encodeURIComponent(kind)}`, conn.url);
+      target.searchParams.set("v", version ?? "");
+      if (pendingToken) target.searchParams.set("pending", pendingToken);
+      // Pending previews are fetched once, authorized and never cached —
+      // committed rungs ride the content address, so the browser's own
+      // cache answers repeats.
+      const response = await fetch(target, { headers: { authorization: `Bearer ${token}` }, cache: pendingToken ? "no-store" : "default" });
+      if (!response.ok) {
+        const refused = await response.json().catch(() => ({}));
+        const error = new Error(refused.error || `The family server returned ${response.status}.`);
+        error.code = refused.code;
+        error.status = response.status;
+        error.body = refused;
+        throw error;
+      }
+      return response.blob();
+    },
+    uploadAvatar: async (file) => {
+      if (!active?.identityToken || !active.identity?.id || !active.deviceId) throw new Error("Open your connected identity on this device first.");
+      if (!file) throw new Error("Choose a photo to set.");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!bytes.byteLength) {
+        const empty = new Error("That file is empty. Choose an image.");
+        empty.code = "E_AVATAR_UNDECODABLE";
+        throw empty;
+      }
+      const contentType = file.type || "application/octet-stream";
+      const payload = { scope: "identity-avatar", action: "ingest", size: bytes.byteLength, sha256: await sha256Hex(bytes), contentType };
+      const signature = await signDevicePayload(new URL(active.url).origin, active.identity.id, active.deviceId, payload);
+      const response = await fetch(new URL("/api/identity/accounts/me/avatar", active.url), {
+        method: "POST",
+        headers: {
+          "content-type": contentType,
+          authorization: `Bearer ${active.identityToken}`,
+          "x-porchlight-avatar-payload": JSON.stringify(payload),
+          "x-porchlight-signature": signature,
+        },
+        body: bytes,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(result.error || `The family server returned ${response.status}.`);
+        error.code = result.code;
+        error.status = response.status;
+        error.body = result;
+        throw error;
+      }
+      return result;
+    },
+    commitAvatar: async (token) => {
+      if (!active?.identityToken || !active.identity?.id || !active.deviceId) throw new Error("Open your connected identity on this device first.");
+      const payload = { scope: "identity-avatar", action: "commit", token };
+      const signature = await signDevicePayload(new URL(active.url).origin, active.identity.id, active.deviceId, payload);
+      const result = await request({ ...active, token: active.identityToken }, "identity/accounts/me/avatar", {
+        method: "POST", body: JSON.stringify({ payload, signature }),
+      });
+      // The face updates in state on the spot: the Profile shows the new
+      // photo without a re-login and every surface renders it on the next
+      // feed read.
+      if (result) setIdentityAccount((current) => ({ ...(current ?? {}), ...result }));
+      return result;
+    },
+    clearAvatar: async () => {
+      if (!active?.identityToken || !active.identity?.id || !active.deviceId) throw new Error("Open your connected identity on this device first.");
+      const payload = { scope: "identity-avatar", action: "clear" };
+      const signature = await signDevicePayload(new URL(active.url).origin, active.identity.id, active.deviceId, payload);
+      const result = await request({ ...active, token: active.identityToken }, "identity/accounts/me/avatar", {
+        method: "POST", body: JSON.stringify({ payload, signature }),
+      });
+      // The cleared face disappears from state immediately; the legacy
+      // profile photo (if the hub kept serving it) takes over again.
+      if (result) setIdentityAccount((current) => ({ ...(current ?? {}), ...(result ?? {}) }));
+      return result ?? { avatar: null };
     },
     issueInvite: async () => { const result = await request(active, "social/console/invites", { method: "POST", body: JSON.stringify({ role: "member", maxUses: 1 }) }); await reload(); return result; },
     // Paginated activity read (PORCH-058 ac-3): a newer/older page turn
@@ -968,6 +1081,9 @@ function App() {
   const data = {
     posts, ranked, groups, albums: [], connections, network: { name: active?.name || network?.name || null, id: active?.networkId || network?._id },
     identity, members: owner.members, devices: owner.devices, settings: owner.settings,
+    // PORCH-070: the open identity's own account read (avatar rungs + the
+    // legacy profile photo) rides beside the other own-account fields.
+    identityAccount,
     invites: owner.invites, audit: owner.audit, disk: owner.disk, availability: owner.availability,
     allDevices: owner.allDevices, deviceLinks: owner.deviceLinks, update: owner.update,
     mediaRoot: owner.mediaRoot,

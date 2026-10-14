@@ -1,4 +1,5 @@
 import { verifyDeviceSignatureRaw, opaqueToken, sha256 } from "../util/crypto.js";
+import { canonicalJson } from "@porchlight/shared";
 import { socialModels } from "../models.js";
 
 export const ACCESS_TTL_SECONDS = 600;
@@ -81,7 +82,22 @@ function typedError(code, message, extra = {}) {
  * that token, it only proves the DID behind the device that is presenting the
  * invite. A second injected callback (`memberNames`, PORCH-029) resolves
  * member DIDs to family-facing display names for the owner's member
- * directory — display fields only, still no identity source.
+ * directory — display fields only, still no identity source. Each resolved
+ * row also carries the member's avatar meta (PORCH-070), passed through
+ * verbatim and dropped only where content-only payloads are the law.
+ */
+
+/**
+ * Avatar rendition metas (PORCH-070), produced by the identity media
+ * pipeline and transported VERBATIM through every social read surface.
+ * Social never mutates this object: the client derives its own rendition
+ * URL from did + kind + sha256.
+ *
+ * @typedef {object} AvatarMetaShape
+ * @property {{ kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: string }} header
+ *   Timeline/reply header face.
+ * @property {{ kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: string }} chooser
+ *   Device chooser (WhoIsHere) face.
  */
 export class MembershipService {
   /**
@@ -103,11 +119,12 @@ export class MembershipService {
    *   PORCH-019 auth-failure capture: invoked when a member surface's
    *   membership token fails verification (failing step + session/device/
    *   membership identity state; never token material).
-   * @param {((dids: string[]) => Promise<Array<{did: string, displayName: string | null}>>) | null} [deps.memberNames]
+   * @param {((dids: string[]) => Promise<Array<{did: string, displayName: string | null, avatar: AvatarMetaShape | null}>>) | null} [deps.memberNames]
    *   Server-wired identity-plane name resolver for the owner's member
-   *   directory (PORCH-029): DIDs in, family-facing display fields out.
+   *   directory (PORCH-029): DIDs in, family-facing display fields out,
+   *   with the member's avatar metas beside the name (PORCH-070).
    *   Null on assemblies that don't wire it — the directory renders without
-   *   names rather than failing.
+   *   names or faces rather than failing.
    * @param {(event: { membershipId: string, networkId: string, did: string, sessionIds: string[] }) => void} [deps.onRevoked]
    *   PORCH-047: invoked the moment a member's sessions die at revocation —
    *   the real-time surface closes the member's live subscriptions in the
@@ -507,14 +524,21 @@ export class MembershipService {
    * boundary callback. Members the hub has no identity row for render
    * without a name (plain fallback at the client); the join state (role,
    * active/revoked, dates) comes straight from the membership row.
+   *
+   * PORCH-070: each row also carries the member's avatar meta beside the
+   * name — the identity-plane object passed through verbatim, never
+   * mutated; the client derives its rendition URL from did + kind + sha256.
    */
   async listMemberViews({ networkId } = {}) {
     const rows = await this.listMembers({ networkId });
     const names = this.memberNames
       ? await this.memberNames([...new Set(rows.map((row) => row.did).filter(Boolean))])
       : [];
-    const byDid = new Map((names ?? []).map((row) => [row.did, row.displayName]));
-    return rows.map((row) => ({ ...this.view(row), name: byDid.get(row.did) ?? null }));
+    const byDid = new Map((names ?? []).map((row) => [row.did, row]));
+    return rows.map((row) => {
+      const resolved = byDid.get(row.did) ?? null;
+      return { ...this.view(row), name: resolved?.displayName ?? null, avatar: resolved?.avatar ?? null };
+    });
   }
 
   /**
@@ -526,10 +550,16 @@ export class MembershipService {
    * injected identity boundary callback as the owner directory; null on
    * assemblies that don't wire it, rendering the plain nameless fallback.
    *
+   * PORCH-070: each entry pairs the name with the member's avatar meta
+   * (AvatarMetaShape) — the face travels beside the name, and consumers
+   * drop both wherever the surface is name-only. The avatar object itself
+   * passes through verbatim, never mutated; the client derives its own
+   * rendition URL from did + kind + sha256.
+   *
    * @param {object} deps
    * @param {string} deps.networkId
    * @param {string[]} [deps.dids]
-   * @returns {Promise<Map<string, string | null>>} attribution per requested DID (members only)
+   * @returns {Promise<Map<string, { name: string | null, avatar: AvatarMetaShape | null }>>} attribution per requested DID (members only)
    */
   async attributionNames({ networkId, dids = [] } = {}) {
     const wanted = [...new Set((dids ?? []).filter(Boolean).map(String))];
@@ -539,7 +569,7 @@ export class MembershipService {
     const members = wanted.filter((did) => roster.has(did));
     if (!members.length) return new Map();
     const resolved = this.memberNames ? await this.memberNames(members) : [];
-    const byDid = new Map((resolved ?? []).map((row) => [row.did, row.displayName]));
+    const byDid = new Map((resolved ?? []).map((row) => [row.did, { name: row.displayName ?? null, avatar: row.avatar ?? null }]));
     return new Map(members.map((did) => [did, byDid.get(did) ?? null]));
   }
 
@@ -726,20 +756,9 @@ function assertPublicDeviceKey(publicKeyJwk) {
   }
 }
 
-export function canonicalJson(value) {
-  return JSON.stringify(sortKeys(value));
-}
-
-function sortKeys(value) {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map((key) => [key, sortKeys(value[key])]),
-    );
-  }
-  return value;
-}
+// canonicalJson now exports from @porchlight/shared (the one wire law for
+// device-signed payloads); re-exported here for the composition this module
+// already carries (export.service, tests).
+export { canonicalJson };
 
 export default MembershipService;

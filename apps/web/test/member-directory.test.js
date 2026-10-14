@@ -21,7 +21,9 @@ test("the directory rows carry name, role, and join status, owner first", () => 
 
 test("an identity row the hub cannot name renders the plain fallback, never a raw code", () => {
   const rows = directoryRows([{ _id: "mem_9", did: "did:porch:x", role: "member", state: "active" }]);
-  assert.deepEqual(rows, [{ id: "mem_9", name: "Member", role: "Member", status: "Active", joined: null, isSelf: false }]);
+  // PORCH-070: the row also carries the member's did and their avatar rung
+  // (null here — the directory face falls back to initials).
+  assert.deepEqual(rows, [{ id: "mem_9", name: "Member", role: "Member", status: "Active", joined: null, isSelf: false, did: "did:porch:x", avatar: null }]);
   assert.deepEqual(directoryRows([], "did:porch:owner"), []);
   assert.equal(directoryRows(null).length, 0);
 });

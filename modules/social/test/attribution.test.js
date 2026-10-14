@@ -25,7 +25,25 @@ const names = {
   [SUSAN]: "Susan Hale",
   [JUNE]: "June River",
 };
-const nameResolver = async (dids) => dids.map((did) => ({ did, displayName: names[did] ?? null }));
+
+/**
+ * PORCH-070: the identity plane's avatar metas (square header/chooser
+ * renditions, sha256-addressed) ride the memberNames rows verbatim —
+ * social passes them through untouched; the client derives its rendition
+ * URL from did + kind + sha256.
+ */
+const avatarMetas = {
+  [SUSAN]: {
+    header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "s".repeat(64) },
+    chooser: { kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: "S".repeat(64) },
+  },
+  [JUNE]: {
+    header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "j".repeat(64) },
+    chooser: { kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: "J".repeat(64) },
+  },
+};
+const nameResolver = async (dids) =>
+  dids.map((did) => ({ did, displayName: names[did] ?? null, avatar: avatarMetas[did] ?? null }));
 
 async function attributedFixture() {
   const fx = fixture({ memberNames: nameResolver });
@@ -140,10 +158,10 @@ test("ac-4: names resolve against the origin network's membership only", async (
     dids: [SUSAN, JUNE, STRANGER],
   });
   // JUNE holds no FAMILY membership: no name crosses the origin boundary.
-  assert.deepEqual(roster, new Map([[SUSAN, "Susan Hale"]]));
+  assert.deepEqual(roster, new Map([[SUSAN, { name: "Susan Hale", avatar: avatarMetas[SUSAN] }]]));
 
   const otherRoster = await fx.membership.attributionNames({ networkId: OTHER, dids: [JUNE] });
-  assert.deepEqual(otherRoster, new Map([[JUNE, "June River"]]));
+  assert.deepEqual(otherRoster, new Map([[JUNE, { name: "June River", avatar: avatarMetas[JUNE] }]]));
 });
 
 test("ac-4: revoked membership loses attribution; reactions and votes render exactly as before", async () => {
@@ -223,4 +241,97 @@ test("an assembly without the identity name resolver still serves views with nam
   const post = await mkPost(fx, token, dev, { type: "text", body: "unnamed hub" });
   const row = (await feed.timeline({ accessToken: token })).posts.find((item) => item._id === post._id);
   assert.equal(row.authorName, null);
+  // The nameless fallback holds on every fed plane: no name, no face.
+  assert.equal(row.authorAvatar, null);
+  const detail = (await fx.posts.get({ accessToken: token, postId: post._id })).post;
+  assert.equal(detail.authorName, null);
+  assert.equal(detail.authorAvatar, null);
+});
+
+/* ---- PORCH-070: the face rides beside the name --------------------------- */
+
+test("PORCH-070: post views and comment/reply views carry the author's avatar beside the name", async () => {
+  const fx = await attributedFixture();
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "faces beside names" });
+
+  const detail = (await fx.posts.get({ accessToken: fx.susanToken, postId: post._id })).post;
+  assert.equal(detail.authorName, "June River");
+  assert.deepEqual(detail.authorAvatar, avatarMetas[JUNE]);
+
+  const listed = (await fx.posts.list({ accessToken: fx.susanToken })).posts;
+  assert.deepEqual(listed.find((row) => row._id === post._id).authorAvatar, avatarMetas[JUNE]);
+
+  // The MAIN FEED carries the face too: timeline, group timelines, ranked,
+  // and search all ride the feed service's one attribution copy; a fed post
+  // view ships both avatar rungs with the name.
+  const feed = feedOver(fx);
+  const timeline = (await feed.timeline({ accessToken: fx.susanToken })).posts;
+  const fedRow = timeline.find((row) => row._id === post._id);
+  assert.equal(fedRow.authorName, "June River");
+  assert.deepEqual(fedRow.authorAvatar, avatarMetas[JUNE]);
+
+  const ranked = (await feed.ranked({ accessToken: fx.susanToken })).posts;
+  assert.deepEqual(ranked.find((row) => row._id === post._id).authorAvatar, avatarMetas[JUNE]);
+
+  const commentPayload = { postId: post._id, body: "we see faces too" };
+  const comment = (await fx.interactions.comment({
+    accessToken: fx.susanToken,
+    payload: commentPayload,
+    signature: fx.susanDev.signPayload(commentPayload),
+  })).comment;
+  assert.equal(comment.authorName, "Susan Hale");
+  assert.deepEqual(comment.authorAvatar, avatarMetas[SUSAN]);
+
+  // The thread read carries the same face — reply views included.
+  const thread = (await fx.interactions.commentThread({ accessToken: fx.juneToken, postId: post._id })).comments;
+  assert.deepEqual(thread.find((row2) => row2._id === comment._id).authorAvatar, avatarMetas[SUSAN]);
+});
+
+test("PORCH-070: name-only surfaces stay name-only — feed reply previews, albums, and mention candidates", async () => {
+  const fx = await attributedFixture();
+  const feed = feedOver(fx);
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "lake day", caption: "the lake" });
+  const commentPayload = { postId: post._id, body: "we'll bring the drinks" };
+  await fx.interactions.comment({
+    accessToken: fx.susanToken,
+    payload: commentPayload,
+    signature: fx.susanDev.signPayload(commentPayload),
+  });
+
+  // The feed's in-timeline reply slice previews stay name-only.
+  const timeline = (await feed.timeline({ accessToken: fx.juneToken })).posts;
+  const preview = timeline.find((row) => row._id === post._id).replySlice[0];
+  assert.equal(preview.authorName, "Susan Hale");
+  assert.equal("authorAvatar" in preview, false);
+
+  // Album item views: the post's name plane, never the face.
+  const mod = assembleSocialModule(fx.store, {
+    verifyMemberIdToken: (token) => (token ? { did: token } : null),
+    memberNames: nameResolver,
+    media: { diskProbe: async () => ({ totalBytes: 1_000_000, freeBytes: 900_000 }) },
+  });
+  const albumPayload = { kind: "album.add", networkId: FAMILY, postId: post._id, album: "Lake" };
+  await mod.albumService.addItem({ accessToken: fx.susanToken, name: "Lake", postId: post._id, signature: fx.susanDev.signPayload(albumPayload) });
+  const album = (await mod.albumService.get({ accessToken: fx.susanToken, name: "Lake" })).posts;
+  const albumRow = album.find((row) => row._id === post._id);
+  assert.equal(albumRow.authorName, "June River");
+  assert.equal("authorAvatar" in albumRow, false);
+
+  // Mention candidates (autocomplete): content-free name rows, no faces —
+  // and the token's own DID is never a candidate for itself.
+  const candidates = (await fx.notifications.mentionCandidates({ accessToken: fx.susanToken })).candidates;
+  const juneCandidate = candidates.find((row) => row.did === JUNE);
+  assert.equal(juneCandidate.name, "June River");
+  assert.deepEqual(Object.keys(juneCandidate).sort(), ["admittedAt", "did", "name", "role"]);
+  assert.equal(candidates.some((row) => row.did === SUSAN), false);
+});
+
+test("PORCH-070: the directory rows carry the avatar beside the name", async () => {
+  const fx = fixture({ memberNames: nameResolver });
+  const susanDev = device("dev_s");
+  await fx.admit({ networkId: FAMILY, did: SUSAN, device: susanDev });
+  const rows = await fx.membership.listMemberViews({ networkId: FAMILY });
+  const row = rows.find((member) => member.did === SUSAN);
+  assert.equal(row.name, "Susan Hale");
+  assert.deepEqual(row.avatar, avatarMetas[SUSAN]);
 });

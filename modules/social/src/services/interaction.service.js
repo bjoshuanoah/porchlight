@@ -316,7 +316,10 @@ export class InteractionService {
    * family-facing name, resolved at READ time against the origin's active
    * membership — never a frozen copy on the comment document. A DID that
    * holds no active membership at the origin renders the plain nameless
-   * fallback (names render for network members only).
+   * fallback (names render for network members only). PORCH-070:
+   * `authorAvatar` rides beside the name on comment and reply views — the
+   * identity-plane avatar meta passed through verbatim, never mutated here;
+   * mention names stay name-only.
    */
   async #withAttribution(views, networkId) {
     const names = await this.membership.attributionNames({
@@ -325,12 +328,13 @@ export class InteractionService {
     });
     return views.map((view) => ({
       ...view,
-      authorName: names.get(String(view.authorDid)) ?? null,
+      authorName: names.get(String(view.authorDid))?.name ?? null,
+      authorAvatar: names.get(String(view.authorDid))?.avatar ?? null,
       // Mention names (PORCH-037): every comment view resolves each
       // mentioned member's family-facing name at READ time against the
       // origin's active membership. Clients render @Name — a mention that
       // no longer resolves (left member) renders the plain body text.
-      mentionNames: (view.mentions ?? []).map((mentionedDid) => names.get(String(mentionedDid)) ?? null),
+      mentionNames: (view.mentions ?? []).map((mentionedDid) => names.get(String(mentionedDid))?.name ?? null),
     }));
   }
 

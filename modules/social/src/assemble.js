@@ -52,9 +52,18 @@ import { createSocialRouter } from "./routes.js";
  *   },
  *   verifyMemberIdToken?: (idToken: string | null) => Promise<{ did: string } | null>,
  *   registeredDeviceKey?: (did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null>,
- *   memberNames?: (dids: string[]) => Promise<Array<{ did: string, displayName: string | null }>>,
+ *   memberNames?: (dids: string[]) => Promise<Array<{ did: string, displayName: string | null, avatar: { header: object, chooser: object } | null }>>,
  *     Identity-plane name resolver for the owner's member directory
- *     (PORCH-029) — wired by apps/server from the identity account rows.
+ *     (PORCH-029) — wired by apps/server from the identity account rows;
+ *     each row carries the member's avatar metas beside the name
+ *     (PORCH-070), passed through to social read surfaces verbatim.
+ *   purgeAvatar?: (did: string) => Promise<{ removed: number }>,
+ *     Identity-plane avatar retire for the member purge cascade (PORCH-070)
+ *     — wired by apps/server from the identity account service. Social calls
+ *     it once per member purge, after the media store sweep; a failure
+ *     never aborts the purge and is recorded in the audit detail
+ *     (`avatarRetired: false`). Optional: absent when identity serving is
+ *     off or the deployment carries no avatar plane.
  *   mintOwnerDeviceLink?: (did: string) => Promise<{ grantId: string, token: string, expiresAt: string }>,
  *     Identity-plane device-link mint for the owner-bind handoff (PORCH-031) —
  *     wired by apps/server from the identity device service; social imports no
@@ -341,6 +350,9 @@ export function assembleSocialModule(store, options = {}) {
     postsService: postService,
     media: mediaService,
     memberNames: options.memberNames ?? null,
+    // PORCH-070 purge cascade: the identity-plane avatar rendition retire,
+    // wired from the account service by apps/server.
+    purgeAvatar: options.purgeAvatar ?? null,
     audit,
   });
 
@@ -390,6 +402,9 @@ export function assembleSocialModule(store, options = {}) {
     feedService,
     mediaService,
     mediaVolume: volumeService,
+    // PORCH-070: the pipeline's blob store, late-bound by the hub router to
+    // the identity avatar plane — avatar bytes share the media root.
+    blobs,
     linkPreviewService,
     exportService,
     albumService,

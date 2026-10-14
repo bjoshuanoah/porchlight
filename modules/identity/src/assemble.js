@@ -3,11 +3,13 @@ import { DeviceService } from "./services/device.service.js";
 import { DidService } from "./services/did.service.js";
 import { WebfingerService } from "./services/webfinger.service.js";
 import { AccountService } from "./services/account.service.js";
+import { AvatarService } from "./services/avatar.service.js";
 import { TrustService } from "./services/trust.service.js";
 import { MigrationService } from "./services/migration.service.js";
 import { HubSigningService, sha256 } from "./services/signing.service.js";
 import { AuthController } from "./controllers/auth.controller.js";
 import { AccountController } from "./controllers/account.controller.js";
+import { AvatarController } from "./controllers/avatar.controller.js";
 import { DeviceController } from "./controllers/device.controller.js";
 import { DidController } from "./controllers/did.controller.js";
 import { OidcController } from "./controllers/oidc.controller.js";
@@ -60,6 +62,19 @@ export function assembleIdentityModule(store, options = {}) {
     deviceRegistrations: collection("device_registrations"),
     adoptionEnabled: options.adoptionEnabled === true,
   });
+  // PORCH-070: the member avatar plane — the byte store is wired by the hub
+  // runtime to the media pipeline's content-addressed store (same root,
+  // shared re-point); absent, every surface refuses plainly and nothing is
+  // stored. SERVING accepts any member token of this hub through the wired
+  // verifier (identity sessions always; social membership tokens late-bound
+  // by the hub router, since social assembles after identity).
+  const avatarOptions = options.avatar ?? {};
+  const avatarService = new AvatarService({
+    identities: collection("identities"),
+    authService,
+    blobs: avatarOptions.blobs ?? null,
+    verifyMemberToken: avatarOptions.verifyMemberToken ?? null,
+  });
   const trustService = new TrustService({
     authCodes: collection("auth_codes"),
     sessions: collection("sessions"),
@@ -78,6 +93,7 @@ export function assembleIdentityModule(store, options = {}) {
   const controllers = {
     auth: new AuthController(authService, didService, options.log ?? null),
     account: new AccountController(accountService, authService, ledger, options.log ?? null),
+    avatar: new AvatarController(accountService, avatarService, options.log ?? null),
     device: new DeviceController(deviceService, authService, options.log ?? null),
     did: new DidController(didService),
     oidc: new OidcController(trustService, authService, options.log ?? null),
@@ -89,6 +105,7 @@ export function assembleIdentityModule(store, options = {}) {
     signing,
     didService,
     accountService,
+    avatarService,
     authService,
     deviceService,
     webfingerService,

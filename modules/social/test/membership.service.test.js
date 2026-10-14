@@ -501,6 +501,12 @@ test("verify carries the join link the invite names (PORCH-023 ac-2)", async () 
 
 /* ---- member directory (PORCH-029) ---------------------------------------- */
 
+/** PORCH-070: an identity-plane avatar meta — square header/chooser rungs verbatim. */
+const memberAvatarMeta = {
+  header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "d".repeat(64) },
+  chooser: { kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: "e".repeat(64) },
+};
+
 test("ac-1: the directory joins membership rows with identity display names", async () => {
   const db = createMemoryStore();
   db.collection("memberships").insertOne({ _id: "mem_o", networkId: "net_1", did: "did:porch:owner", role: "owner", state: "active", admittedAt: "2026-10-09T10:00:00.000Z", revokedAt: null });
@@ -518,8 +524,8 @@ test("ac-1: the directory joins membership rows with identity display names", as
     memberNames: async (dids) => {
       asked.push(...dids);
       return [
-        { did: "did:porch:owner", displayName: "Brian Noah" },
-        { did: "did:porch:june", displayName: "June Noah" },
+        { did: "did:porch:owner", displayName: "Brian Noah", avatar: memberAvatarMeta },
+        { did: "did:porch:june", displayName: "June Noah", avatar: null },
       ];
     },
   });
@@ -527,8 +533,13 @@ test("ac-1: the directory joins membership rows with identity display names", as
   const byDid = new Map(views.map((row) => [row.did, row]));
   assert.equal(byDid.get("did:porch:owner").name, "Brian Noah");
   assert.equal(byDid.get("did:porch:june").name, "June Noah");
+  // PORCH-070: the face rides the directory row verbatim beside the name —
+  // and stays null wherever the identity plane carries no avatar.
+  assert.deepEqual(byDid.get("did:porch:owner").avatar, memberAvatarMeta);
+  assert.equal(byDid.get("did:porch:june").avatar, null);
   // A membership whose identity row disappeared renders without a name.
   assert.equal(byDid.get("did:porch:gone").name, null);
+  assert.equal(byDid.get("did:porch:gone").avatar, null);
   // Join state stays the membership row's own: role + active/revoked + dates.
   assert.equal(byDid.get("did:porch:owner").role, "owner");
   assert.equal(byDid.get("did:porch:june").state, "active");
@@ -542,12 +553,37 @@ test("ac-1: the directory joins membership rows with identity display names", as
   assert.ok(!("deviceId" in byDid.get("did:porch:june")));
 });
 
+test("ac-1: the attribution map pairs each member's name with its face (PORCH-070)", async () => {
+  const db = createMemoryStore();
+  db.collection("memberships").insertOne({ _id: "mem_o", networkId: "net_1", did: "did:porch:owner", role: "owner", state: "active", admittedAt: "2026-10-09T10:00:00.000Z", revokedAt: null });
+  db.collection("memberships").insertOne({ _id: "mem_m", networkId: "net_1", did: "did:porch:june", role: "member", state: "active", admittedAt: "2026-10-09T11:00:00.000Z", revokedAt: null });
+  const membership = new MembershipService({
+    memberships: db.collection("memberships"),
+    membershipSessions: db.collection("membership_sessions"),
+    deviceKeys: db.collection("device_keys"),
+    invites: new InviteService(db.collection("invites")),
+    verifyMemberIdToken: async () => null,
+    networks: db.collection("networks"),
+    audit: async () => {},
+    memberNames: async (dids) => dids.map((did) => ({ did, displayName: did === "did:porch:june" ? "June Noah" : null, avatar: did === "did:porch:june" ? memberAvatarMeta : null })),
+  });
+  // JUNE holds no membership here: the entry never rides the map.
+  const roster = await membership.attributionNames({ networkId: "net_1", dids: ["did:porch:owner", "did:porch:june", "did:porch:stranger"] });
+  assert.deepEqual(roster, new Map([
+    ["did:porch:owner", { name: null, avatar: null }],
+    ["did:porch:june", { name: "June Noah", avatar: memberAvatarMeta }],
+  ]));
+  // The meta object passes through verbatim — never mutated on the way.
+  assert.equal(roster.get("did:porch:june").avatar, memberAvatarMeta);
+});
+
 test("ac-1: an assembly without the name resolver keeps the directory working", async () => {
   const { membership } = fixture();
   await membership.memberships.insertOne({ _id: "mem_1", networkId: "net_1", did: "did:porch:owner", role: "owner", state: "active", admittedAt: "2026-10-09T10:00:00.000Z", revokedAt: null });
   const views = await membership.listMemberViews({ networkId: "net_1" });
   assert.equal(views.length, 1);
   assert.equal(views[0].name, null);
+  assert.equal(views[0].avatar, null);
   assert.equal(views[0].role, "owner");
   assert.equal(views[0].state, "active");
 });

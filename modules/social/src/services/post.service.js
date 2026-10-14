@@ -458,11 +458,16 @@ export class PostService {
    * family-facing name, resolved at READ time against the origin's active
    * membership — never a frozen copy on the post document. A DID that holds
    * no active membership at the origin renders the plain nameless fallback
-   * (names render for network members only).
+   * (names render for network members only). PORCH-070: `authorAvatar`
+   * rides beside the name — the identity-plane avatar meta passed through
+   * verbatim, never mutated here.
    */
   async #withAttribution(views, networkId) {
     const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorId) });
-    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId)) ?? null }));
+    return views.map((view) => {
+      const resolved = names.get(String(view.authorId)) ?? null;
+      return { ...view, authorName: resolved?.name ?? null, authorAvatar: resolved?.avatar ?? null };
+    });
   }
 
   #requireSession(accessToken) {

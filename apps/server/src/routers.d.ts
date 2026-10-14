@@ -17,8 +17,21 @@ declare module "@porchlight/identity" {
         didDocument: unknown;
         registration: Record<string, unknown>;
       }>;
-      /** Member display names by DID for the owner's member directory (PORCH-029). */
-      namesFor(dids: string[]): Promise<Array<{ did: string; displayName: string | null }>>;
+      /** Member display names by DID for the owner's member directory (PORCH-029); rows carry the avatar stamps (PORCH-070). */
+      namesFor(dids: string[]): Promise<Array<{ did: string; displayName: string | null; avatar: Record<string, unknown> | null }>>;
+    };
+    /** PORCH-070: the member avatar plane (service + its routes' controller). */
+    avatarService: {
+      /** Ingest/upload: treat hub-side and hold the per-identity pending set. */
+      ingest(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+      /** Commit a pending set as the current avatar; prior set retires. */
+      commit(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+      /** Clear to the no-avatar state. */
+      clear(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+      /** Serve one rung (member-token gated; pending previews owner-only). */
+      serveRung(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+      /** The member-purge cascade hook. */
+      retireFor(did: string): Promise<{ removed: number }>;
     };
     authService: {
       /** Opaque-token session verification (identity plane, DID resolution). */
@@ -33,7 +46,7 @@ declare module "@porchlight/identity" {
   }
   export function assembleIdentityModule(
     store: { collection(name: string): unknown },
-    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null; /** PORCH-059: the device-notifications observer (social push wiring). */ onDeviceLinkMinted?: (event: { did: string; grantId: string }) => unknown; /** PORCH-065: the consumed-grant observer (address re-point trigger; awaits the returned promise). */ onDeviceLinkConsumed?: (event: { grantId: string; did: string; purpose: string | null; serveOrigin: string | null }) => unknown },
+    options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null; /** PORCH-059: the device-notifications observer (social push wiring). */ onDeviceLinkMinted?: (event: { did: string; grantId: string }) => unknown; /** PORCH-065: the consumed-grant observer (address re-point trigger; awaits the returned promise). */ onDeviceLinkConsumed?: (event: { grantId: string; did: string; purpose: string | null; serveOrigin: string | null }) => unknown; /** PORCH-070: the member avatar plane (byte store + serving verifier; null blobs refuses plainly). */ avatar?: { blobs: { put: (key: string, bytes: Buffer) => Promise<unknown>; get: (key: string) => Promise<Buffer | null>; has: (key: string) => Promise<boolean>; delete: (key: string) => Promise<boolean> } | null; verifyMemberToken?: (token: string | null) => Promise<{ did: string } | null> } },
   ): IdentityModule;
   export function createWellKnownRouter(wellKnownController: unknown): import("express").Router;
   export class TrustService {
@@ -59,6 +72,13 @@ declare module "@porchlight/social" {
     notificationService: NotificationService;
     /** PORCH-054: the media pipeline service (ingest/serving/disk guard). */
     mediaService: unknown;
+    /** PORCH-054: the pipeline's content-addressed blob store (media root; re-pointable). Identity's avatar plane late-binds to it (PORCH-070). */
+    blobs: {
+      put: (key: string, bytes: Buffer) => Promise<string>;
+      get: (key: string) => Promise<Buffer | null>;
+      has: (key: string) => Promise<boolean>;
+      delete: (key: string) => Promise<boolean>;
+    };
     /** PORCH-054: the media root's readiness state machine (status/changeRoot). */
     mediaVolume: {
       status: () => Promise<{
@@ -104,6 +124,8 @@ declare module "@porchlight/social" {
       memberNames?: (dids: string[]) => Promise<Array<{ did: string; displayName: string | null }>>;
       /** PORCH-031: identity-plane device-link mint for the owner-bind handoff. */
       mintOwnerDeviceLink?: (did: string) => Promise<{ grantId: string; token: string; expiresAt: string }>;
+      /** PORCH-070: the member-purge cascade step — identity-side avatar retirement (late-bind). */
+      purgeAvatar?: (did: string) => Promise<{ removed: number }>;
       /** PORCH-019: auth-failure capture sink. */
       log?: ((line: string) => void) | null;
       media?: {
