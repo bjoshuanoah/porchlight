@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, CircularProgress, Collapse, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, IconButton, List, ListItem, ListItemAvatar,
-  ListItemText, Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
+  DialogContent, DialogTitle, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemIcon,
+  ListItemText, Menu, MenuItem, Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
+import CheckOutlined from '@mui/icons-material/CheckOutlined';
+import LogoutOutlined from '@mui/icons-material/LogoutOutlined';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
 import { selfGrantArrival } from './front-state.js';
 import { addressPanelModel, draftHost, addressConsequences, addressIntro, addressRerunNote, redirectTarget, arrivalBeatCopy } from './address-panel.js';
@@ -763,7 +765,10 @@ function initialOf(name) {
   return String(name ?? '').trim().charAt(0).toUpperCase() || '·';
 }
 
-export function Profile({ data, actions, navigate, mode }) {
+/** The member's Settings surface (PORCH-076: the Profile destination renders
+ * as Settings now; the label and route sweep lives on this task). Identity,
+ * account, devices, pairing, hidden items, notifications, appearance. */
+export function Settings({ data, actions, navigate, mode }) {
   const operation = useOperation(actions);
   const [pairing, setPairing] = useState(null);
   const [pairOpen, setPairOpen] = useState(false);
@@ -813,7 +818,7 @@ export function Profile({ data, actions, navigate, mode }) {
     } catch { operation.setError('This browser could not remove the local PIN.'); }
   }
   return <Box sx={{ maxWidth: 800, mx: 'auto' }}>
-    <Heading title="Profile" subtitle={`Your place on ${networkName(data)} and the devices you use.`} />
+    <Heading title="Settings" subtitle={`Your place on ${networkName(data)} and the devices you use.`} />
     <Card sx={section}><CardContent><Typography variant="h5">{named(identity)}</Typography>
       <Typography color="text.secondary">{data?.server?.url || networkName(data)}</Typography>
       {/* PORCH-070: the photo block rides the identity card — add, change,
@@ -821,7 +826,7 @@ export function Profile({ data, actions, navigate, mode }) {
           own plain copy verbatim. */}
       <AvatarPanel account={data?.identityAccount ?? null} actions={actions} name={named(identity)}
         origin={(() => { try { return new URL(data?.server?.url || window.location.origin).origin; } catch { return null; } })()} />
-      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => (typeof actions?.signOut === 'function' ? actions.signOut() : navigate?.('/who-is-here'))}>Switch person</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{isOwner && <Button onClick={() => navigate?.('/members')}>Members</Button>}{isOwner && <Button onClick={() => navigate?.('/owner')}>Owner console</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
+      <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{isOwner && <Button onClick={() => navigate?.('/members')}>Members</Button>}{isOwner && <Button onClick={() => navigate?.('/owner')}>Owner console</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signing out ends this device's open turn. The device stays connected: the next open shows the family greeting — Who's using Porchlight? — and one tap reopens your place.</Typography>
       <Collapse in={membershipOpen}><Divider sx={{ my: 2 }} /><Typography variant="h6">Your memberships</Typography>
         {memberships.length ? <List dense>{memberships.map((entry, index) => <ListItem key={idOf(entry) || index}><ListItemText primary={named(entry)} secondary={entry.role || entry.server} /></ListItem>)}</List> : <Typography color="text.secondary">No additional memberships are available here.</Typography>}
@@ -892,7 +897,6 @@ export function Profile({ data, actions, navigate, mode }) {
 export function WhoIsHere({ data, actions, navigate }) {
   const faces = (data?.connections || []).filter(connection => connection?.identity?.id && connection.deviceId);
   const [pinFor, setPinFor] = useState(null);
-  const [pin, setPin] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const operation = useOperation(actions);
   // PORCH-070: each face's own rungs are read with that connection's OWN
@@ -914,23 +918,10 @@ export function WhoIsHere({ data, actions, navigate }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the chooser reads its faces once per device registration
   }, [faceSignature]);
   const chosen = faces.find(item => item.identity.id === pinFor);
-  const hasPin = Boolean(chosen && storedPin(chosen));
   async function openFace(face) {
-    if (storedPin(face)) { setPinFor(face.identity.id); setPin(''); operation.setError(''); return; }
+    if (storedPin(face)) { setPinFor(face.identity.id); return; }
     const result = await operation.run('switchIdentity', [face.identity.id]);
     if (result) navigate?.('/timeline');
-  }
-  async function submitPin(event) {
-    event.preventDefault();
-    const record = storedPin(chosen);
-    if (!record || !Array.isArray(record.salt) || !record.digest) { operation.setError('The local PIN is not available for this identity.'); return; }
-    try {
-      if (await pinDigest(pin, record.salt) !== record.digest) {
-        setPin(''); operation.setError('That PIN does not match. Try again, or ask the member to change it from their Profile.'); return;
-      }
-      const result = await operation.run('switchIdentity', [chosen.identity.id]);
-      if (result) { setPinFor(null); setPin(''); }
-    } catch { operation.setError('This browser cannot check the local PIN right now.'); }
   }
   return <Box sx={{ maxWidth: 560, mx: 'auto', textAlign: 'center', pt: { xs: 2, sm: 6 } }}>
     <Box component="header" sx={{ mb: 4 }}>
@@ -954,9 +945,9 @@ export function WhoIsHere({ data, actions, navigate }) {
         <Paper elevation={0} sx={{ ...frontPanel, flex: { sm: 5 } }} component="section">
           <Stack spacing={1.5}>
             <Typography variant="h6" component="h2">Coming here from another device or browser?</Typography>
-            <Typography>Get your pairing code from the profile section, and enter it here.</Typography>
+            <Typography>Get your pairing code from the settings section, and enter it here.</Typography>
             <Typography variant="body2" color="text.secondary">
-              On the device where you are already connected: open Profile, tap “Make pairing code”, and enter that code below.
+              On the device where you are already connected: open Settings, tap “Make pairing code”, and enter that code below.
             </Typography>
             <Box component="section" sx={{ pt: 1 }}>
               <PairingCodeEntry data={data} actions={actions} navigate={navigate} autoFocus showLinkFallback={false} />
@@ -995,13 +986,8 @@ export function WhoIsHere({ data, actions, navigate }) {
       })}
     </Stack>}
     <Feedback operation={operation} />
-    {chosen && <Paper sx={{ p: 3, mt: 2, textAlign: 'left' }}>
-      <Typography variant="h6" gutterBottom>{named(chosen.identity)}</Typography>
-      {hasPin && <form onSubmit={submitPin}><Stack spacing={2}>
-        <PinField label="Local PIN" value={pin} onChange={setPin} />
-        <Button variant="contained" type="submit" disabled={operation.busy}>Continue as {named(chosen.identity)}</Button>
-      </Stack></form>}
-    </Paper>}
+    <IdentityPinEntry face={chosen} actions={actions} sx={{ mt: 2 }}
+      onOpened={() => { setPinFor(null); navigate?.('/timeline'); }} />
     {/* The Add someone sheet serves the chosen-state chooser; the
         zero-registration lead already shows both doors inline (PORCH-074). */}
     {faces.length > 0 && <Button variant="outlined" onClick={() => setAddOpen(true)} sx={{ mt: 5 }}>Add someone</Button>}
@@ -1013,6 +999,170 @@ export function WhoIsHere({ data, actions, navigate }) {
       </Stack></DialogContent>
     </Dialog>
   </Box>;
+}
+
+/**
+ * IdentityPinEntry (PORCH-076): the optional per-identity PIN gate before an
+ * identity opens. The tapped face carries a local PIN (client-only, per
+ * identity, per device) when set — the digest check runs here and the open
+ * itself rides the existing switch flow (switchIdentity), never a second
+ * code path. Rendered by the WhoIsHere chooser and the header user
+ * switcher; household wording only. The PIN never leaves this browser and
+ * never substitutes for hub access.
+ */
+export function IdentityPinEntry({ face, actions, onOpened, sx = {} }) {
+  const operation = useOperation(actions);
+  const [pin, setPin] = useState('');
+  const record = storedPin(face);
+  async function submit(event) {
+    event.preventDefault();
+    if (!record || !Array.isArray(record.salt) || !record.digest) { operation.setError('The local PIN is not available for this identity.'); return; }
+    try {
+      if (await pinDigest(pin, record.salt) !== record.digest) {
+        setPin(''); operation.setError('That PIN does not match. Try again, or ask the member to change it from their settings.'); return;
+      }
+      const result = await operation.run('switchIdentity', [face.identity.id]);
+      if (result) onOpened?.(face);
+    } catch { operation.setError('This browser cannot check the local PIN right now.'); }
+  }
+  if (!face || !record) return null;
+  return <Paper sx={{ p: 3, textAlign: 'left', ...sx }}>
+    <Typography variant="h6" gutterBottom>{named(face.identity)}</Typography>
+    <form onSubmit={submit}><Stack spacing={2}>
+      <PinField label="Local PIN" value={pin} onChange={setPin} />
+      <Button variant="contained" type="submit" disabled={operation.busy}>Continue as {named(face.identity)}</Button>
+    </Stack></form>
+    <Feedback operation={operation} />
+  </Paper>;
+}
+
+/**
+ * Header user switcher (PORCH-076, Brian Oct 14): the trigger shows the open
+ * identity's avatar at the shell header's top right — desktop right edge of
+ * the 64px top nav, mobile right of the 56px header — and the menu carries
+ * exactly the identities registered on this device (avatar + name; the open
+ * one marked and non-interactive) plus one action, Sign out.
+ *
+ * Tapping another face runs the existing shared-device law — the
+ * PORCH-075-verified switch sequence through actions.switchIdentity, with
+ * the optional per-identity PIN gated by IdentityPinEntry — and never
+ * leaves the first identity's session visible or reusable (one open session
+ * at a time, per the switch law of record). Sign out is the existing
+ * sign-out contract (session clear only, the device stays registered, the
+ * next open lands the WhoIsHere front state). Single-identity devices still
+ * render the switcher (one face + Sign out). It never renders without an
+ * opened identity: the shell mounts this control only behind a session, so
+ * the zero-open-session front state and the full-screen WhoIsHere chooser
+ * carry no switcher anywhere. Family vocabulary only — the banned-vocabulary
+ * copy audit applies to this file as the standing gate.
+ */
+export function UserSwitcher({ data, actions, navigate }) {
+  // No open identity, no switcher: the sole guard the front-state surfaces
+  // rely on (the shell additionally never mounts while a front state shows).
+  if (!data?.identity?.id) return null;
+  const faces = (data?.connections || []).filter(connection => connection?.identity?.id && connection.deviceId);
+  const openId = data.identity.id;
+  const anchor = useRef(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pinFor, setPinFor] = useState(null);
+  const operation = useOperation(actions);
+  // The trigger rides the open identity's own face — the same one read the
+  // shell already holds (data.identityAccount); a face it could not return
+  // keeps the initials fallback.
+  const triggerFace = ownFaceSources(data?.identityAccount ?? null);
+  // Menu faces are read lazily, when the menu first opens, each with that
+  // connection's OWN identity token (the WhoIsHere privacy law): the header
+  // never rides the open session for someone else's photo on every page
+  // load. A face the read could not return keeps the initials fallback.
+  const faceSignature = faces.map((item) => `${item.url}:${item.identity.id}`).join('|');
+  const [faceFaces, setFaceFaces] = useState({});
+  useEffect(() => {
+    if (!menuOpen || typeof actions?.readAccount !== 'function') return undefined;
+    let stale = false;
+    faces.forEach((face) => {
+      void actions.readAccount(face).then((account) => {
+        if (stale || !account) return;
+        setFaceFaces((current) => ({ ...current, [face.identity.id]: ownFaceSources(account) }));
+      }).catch(() => { /* initials fallback for this face */ });
+    });
+    return () => { stale = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the menu reads its faces once per open and device registration set
+  }, [menuOpen, faceSignature]);
+  const chosen = faces.find(item => item.identity.id === pinFor);
+  async function openFace(face) {
+    setPinFor(null);
+    operation.setError('');
+    // The optional per-identity PIN gates the open (IdentityPinEntry); the
+    // switch itself is the existing shared-device law, unchanged.
+    if (storedPin(face)) { setPinFor(face.identity.id); return; }
+    const result = await operation.run('switchIdentity', [face.identity.id]);
+    // Success closes the menu. A failure keeps it open with the plain error
+    // row: the member sees what happened instead of a menu that vanished.
+    if (result) setMenuOpen(false);
+  }
+  function signOut() {
+    setMenuOpen(false);
+    if (typeof actions?.signOut === 'function') actions.signOut();
+    else navigate?.('/who-is-here'); // same contract, same destination
+  }
+  return <>
+    <IconButton ref={anchor} onClick={() => setMenuOpen(true)} aria-label="Who is here"
+      aria-haspopup="menu" aria-expanded={menuOpen}
+      sx={{ width: 44, height: 44, p: 0 }}>
+      <AvatarFace
+        origin={(() => { try { return new URL(data?.server?.url || window.location.origin).origin; } catch { return null; } })()}
+        did={triggerFace?.did ?? openId}
+        metas={triggerFace?.metas ?? null}
+        kind="chooser"
+        load={(args) => actions.loadAvatarRendition({ ...args })}
+        src={triggerFace?.legacy ?? null}
+        // The 36px trigger class (shell contract) inside the 44px touch target.
+        sx={{ width: 36, height: 36, fontSize: 15 }}>
+        {named(data.identity).trim().charAt(0) || '·'}
+      </AvatarFace>
+    </IconButton>
+    <Menu anchorEl={anchor.current} open={menuOpen} onClose={() => setMenuOpen(false)}
+      anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      MenuListProps={{ 'aria-label': 'People on this device' }}>
+      {faces.map((face) => {
+        const isOpen = face.identity.id === openId;
+        const source = faceFaces[face.identity.id] ?? null;
+        return <MenuItem key={`${face.url}:${face.identity.id}:${face.deviceId}`}
+          disabled={isOpen || operation.busy} aria-current={isOpen ? 'true' : undefined}
+          onClick={() => void openFace(face)} sx={{ py: 1 }}>
+          <ListItemIcon sx={{ minWidth: 48 }}>
+            <AvatarFace
+              origin={(() => { try { return new URL(face.url).origin; } catch { return null; } })()}
+              did={source?.did ?? face.identity.id}
+              metas={source?.metas ?? null}
+              kind="chooser"
+              load={(args) => actions.loadAvatarRendition({ ...args, connection: face })}
+              src={source?.legacy ?? null}
+              sx={{ width: 32, height: 32, fontSize: 14 }}>
+              {named(face.identity).trim().charAt(0) || '·'}
+            </AvatarFace>
+          </ListItemIcon>
+          <ListItemText primary={named(face.identity)} secondary={isOpen ? 'You are here' : undefined} />
+          {isOpen && <CheckOutlined fontSize="small" aria-hidden="true" />}
+        </MenuItem>;
+      })}
+      {operation.error && <MenuItem disabled aria-live="polite">
+        <Typography variant="body2" color="error">{operation.error}</Typography>
+      </MenuItem>}
+      <Divider />
+      <MenuItem onClick={signOut} aria-label="Sign out">
+        <ListItemIcon><LogoutOutlined fontSize="small" /></ListItemIcon>
+        <ListItemText primary="Sign out" />
+      </MenuItem>
+    </Menu>
+    {/* The PIN gate prompts over the menu before the pinned identity opens. */}
+    <Dialog open={Boolean(chosen)} onClose={() => setPinFor(null)} fullWidth maxWidth="xs">
+      <DialogContent>
+        <IdentityPinEntry face={chosen} actions={actions} sx={{ mt: 0 }}
+          onOpened={() => { setPinFor(null); setMenuOpen(false); }} />
+      </DialogContent>
+    </Dialog>
+  </>;
 }
 
 function invitationUrl(invite, data) {
@@ -1182,7 +1332,7 @@ export function OwnerConsole({ data, actions, navigate }) {
     <Heading title="Owner console" subtitle={`Invitations, members, and trust status for ${networkName(data)}.`} />
     <Feedback operation={operation} />
     <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-      <Button onClick={() => navigate?.('/profile')}>Back to profile</Button>
+      <Button onClick={() => navigate?.('/settings')}>Back to settings</Button>
     </Box>
     {/* PORCH-057: the one stacked scroll became distinct tabs. Scrollable
         variant keeps the bar usable on narrow mobile web (the bar scrolls,
@@ -1394,8 +1544,9 @@ export function OwnerConsole({ data, actions, navigate }) {
 }
 
 // PORCH-029: the member directory and invite management, a first-class
-// surface inside the network — reachable from Profile (the bottom-tab /
-// top-nav destination), so the owner never needs a console URL. The
+// surface inside the network — reachable from Settings (the bottom-tab /
+// top-nav destination; renamed from Profile per PORCH-076), so the owner
+// never needs a console URL. The
 // directory renders every current member with name, role, and join status;
 // invite issuance rides the join-link lifecycle the console already owns
 // (unused / used / revoked, single use, instant revocation).
@@ -1470,6 +1621,6 @@ export function Members({ data, actions, navigate }) {
         {!issued && <Button variant="contained" disabled={operation.busy} onClick={makeJoinLink}>Make the link</Button>}
       </DialogActions>
     </Dialog>
-    <Box sx={{ mt: 3 }}><Button onClick={() => navigate?.('/profile')}>Back to profile</Button></Box>
+    <Box sx={{ mt: 3 }}><Button onClick={() => navigate?.('/settings')}>Back to settings</Button></Box>
   </Box>;
 }

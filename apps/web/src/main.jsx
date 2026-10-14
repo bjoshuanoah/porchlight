@@ -25,7 +25,7 @@ import { arrivalPollMs } from "./live.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
-import { Join, Profile, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
+import { Join, Settings, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, UserSwitcher, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
 // PORCH-051: the Add to Home Screen machinery — the decision logic module
 // and its two surfaces (the Android custom CTA, the iOS guided card).
@@ -61,15 +61,12 @@ const standaloneBoot = isStandaloneLaunch({
   standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
 });
 const localIdentities = [...new Set(initialConnections.map((item) => item.identity?.id).filter(Boolean))];
-const primary = ["/timeline", "/groups", "/compose", "/profile"];
-const labels = ["Timeline", "Groups", "Compose", "Profile"];
+const primary = ["/timeline", "/groups", "/compose", "/settings"];
+const labels = ["Timeline", "Groups", "Compose", "Settings"];
 const icons = [<HomeOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />];
 
 function routeOf() {
-  // PORCH-055: the zero-open-sessions front state rides the client-local
-  // signed-out marker; grant consumption (a join link on the chooser)
-  // wins over the front state and routes into its flow immediately.
-  return bootRoute({
+  const next = bootRoute({
     pathname: window.location.pathname,
     search: window.location.search,
     connections: initialConnections,
@@ -77,6 +74,9 @@ function routeOf() {
     pinned: initialConnections.some(hasLocalPin),
     standalone: standaloneBoot,
   });
+  // PORCH-076: the Settings rename sweep — a /profile deep link lands on the
+  // renamed destination; the label and route of record is Settings.
+  return next === "/profile" ? "/settings" : next;
 }
 function App() {
   const [route, setRoute] = useState(routeOf);
@@ -1188,7 +1188,7 @@ function App() {
   else if (route === "/pair") page = <Pair {...props} />;
   else if (deviceLinkRoute) page = <DeviceLink {...props} />;
   else if (route === "/who-is-here") page = <WhoIsHere {...props} />;
-  else if (route === "/profile") page = <Profile {...props} />;
+  else if (route === "/settings") page = <Settings {...props} />;
   else if (route === "/groups" || route.startsWith("/groups/")) page = <Groups {...props} id={route.split("/")[2]} />;
   else if (route.startsWith("/posts/")) page = <PostDetail {...props} id={route.split("/")[2]} />;
   else if (route === "/albums" || route.startsWith("/albums/")) page = <Albums {...props} id={route.split("/")[2]} />;
@@ -1234,15 +1234,19 @@ function App() {
             ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", color: "var(--porch-amber-ink)", boxShadow: "var(--porch-shadow-compose)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
             : <Button key={path} onClick={() => navigate(path)} sx={{ color: route.startsWith(path) ? "primary.main" : "text.secondary" }}>{labels[index]}</Button>)}
         </Stack>
+        {/* PORCH-076: the header user switcher rides the shell header's top
+            right on every breakpoint — the one page control added to the
+            trimmed headers. The component renders nothing without an opened
+            identity, so the front states carry no switcher anywhere. */}
+        <UserSwitcher {...props} />
       </Toolbar>
     </AppBar>}
     <Container maxWidth={false} sx={{ maxWidth: 1180, px: { xs: 2, lg: 4 }, pt: 4, pb: frontDoor ? 4 : { xs: 13, lg: 6 } }}>
       {offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Saved moments may be out of date.</Alert>}
-      {!offline && membershipEnded && <Alert severity="warning" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/profile")}>Open Profile</Button>}>
+      {!offline && membershipEnded && <Alert severity="warning" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/settings")}>Open Settings</Button>}>
         This device's connection ended. Saved moments remain on this device. Ask your family's owner for a device link — opening it here reconnects this device.
       </Alert>}
       {!frontDoor && networkLoaded && !network && identity && <Alert severity="info" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/setup")}>Continue</Button>}>Porch setup is not finished on this hub yet.</Alert>}
-      {sharedDevice && !frontDoor && <Button size="small" onClick={() => actions.signOut()}>Switch person</Button>}
       {page}
     </Container>
     {!frontDoor && <Paper elevation={0} sx={{ display: { xs: "block", lg: "none" }, position: "fixed", left: 0, bottom: 0, right: 0, zIndex: 10, borderTop: "1px solid", borderColor: "divider", pb: "env(safe-area-inset-bottom)" }}>
@@ -1263,7 +1267,7 @@ function App() {
           try {
             await actions.removeDevice(newDevices[0]._id);
             setNewDevices((pending) => pending.slice(1));
-          } catch { setNotice("The hub could not remove this device. Try again from Profile."); }
+          } catch { setNotice("The hub could not remove this device. Try again from Settings."); }
         }}>No, remove it</Button>
       </DialogActions>
     </Dialog>
