@@ -140,3 +140,22 @@ test("ac-2: mention autocomplete lists same-origin members by name, never other 
     (error) => error.code === "E_NOT_PERMITTED",
   );
 });
+
+test("PORCH-068: private-group triggers never compose a notification for a non-member", async () => {
+  const fx = await notificationFixture();
+  const { interactions, collections, dev, familyToken, post } = fx;
+
+  // A private group holding SUSAN but not JUNE; the private-group post is
+  // the fixture's plain post re-targeted at the group.
+  await fx.groups.create({ networkId: FAMILY, name: "Picnic", members: [SUSAN], createdBy: SUSAN });
+  await collections.posts.updateOne({ _id: post._id }, { $set: { groupId: (await collections.groups.find({ networkId: FAMILY, name: "Picnic" }))[0]._id } });
+
+  // SUSAN (a member) mentions JUNE (a network member, not a group member)
+  // inside the private-group post.
+  const mentionPayload = { postId: post._id, body: "you are all invited", mentions: [JUNE] };
+  await interactions.comment({ accessToken: familyToken, payload: mentionPayload, signature: dev.signPayload(mentionPayload) });
+
+  // JUNE receives nothing — no inbox row pointing at the private post.
+  const rows = await collections.notifications.find({ networkId: FAMILY });
+  assert.deepEqual(rows.filter((row) => row.memberId === JUNE), []);
+});

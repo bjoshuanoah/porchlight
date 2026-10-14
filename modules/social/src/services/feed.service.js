@@ -1,5 +1,6 @@
 import { typedError, postView, newestFirstByActivity } from "./post.service.js";
 import { InteractionService } from "./interaction.service.js";
+import { postVisibleToViewer, canSeeGroup } from "./group.service.js";
 import { socialModels } from "../models.js";
 
 export const FEED_MESSAGES = {
@@ -71,22 +72,25 @@ export class FeedService {
     this.models = socialModels;
   }
 
-  /** Base timeline read (ac-1): origin posts, newest first by latest activity. */
+  /** Base timeline read (ac-1): origin posts, newest first by latest activity,
+   *  private-group posts of groups the viewer does not hold removed (PORCH-068 ac-2). */
   async timeline({ accessToken } = {}) {
-    const networkId = await this.#originOf(accessToken);
-    const rows = await this.posts.find({ originNetworkId: networkId });
-    return { posts: await this.#ordered(rows, networkId) };
+    const { networkId, did } = await this.#perimeterOf(accessToken);
+    return { posts: await this.#ordered(await this.#visibleRows(networkId, did), networkId) };
   }
 
   /**
    * Group timeline read (ac-1): origin-filtered query on post.groupId. The
    * group must exist inside the token's origin network; the ranked path and
-   * ordering are identical to the base timeline (no group rank weight).
+   * ordering are identical to the base timeline (no group rank weight). A
+   * private group's timeline renders only for its members (PORCH-068 ac-2):
+   * a non-member is refused exactly as for a group that does not exist in
+   * this network.
    */
   async groupTimeline({ accessToken, groupId } = {}) {
-    const networkId = await this.#originOf(accessToken);
+    const { networkId, did } = await this.#perimeterOf(accessToken);
     const group = await this.groups.findOne({ _id: groupId });
-    if (!group || group.networkId !== networkId) {
+    if (!group || group.networkId !== networkId || !canSeeGroup(group, did)) {
       throw typedError("E_GROUP_UNKNOWN", FEED_MESSAGES.E_GROUP_UNKNOWN);
     }
     const rows = await this.posts.find({ originNetworkId: networkId, groupId });
@@ -97,10 +101,13 @@ export class FeedService {
    * Ranked section read (ac-2): prominence order from the ranking module,
    * recomputed over the capped window. The result is ordered posts only —
    * no scores, no counters, no vote arithmetic ever reaches the client.
+   * Private-group posts of groups the viewer does not hold never become
+   * candidates (PORCH-068 ac-2): the ranked path is fed the same visible
+   * set the base timeline feeds.
    */
   async ranked({ accessToken } = {}) {
-    const networkId = await this.#originOf(accessToken);
-    const candidates = await this.posts.find({ originNetworkId: networkId });
+    const { networkId, did } = await this.#perimeterOf(accessToken);
+    const candidates = await this.#visibleRows(networkId, did);
     const ranked = this.ranking.rank(candidates);
     const views = ranked.map(({ post }) => postView(post));
     return { posts: await this.#decorate(views, networkId) };
@@ -116,13 +123,13 @@ export class FeedService {
    * by latest activity).
    */
   async search({ accessToken, query } = {}) {
-    const networkId = await this.#originOf(accessToken);
+    const { networkId, did } = await this.#perimeterOf(accessToken);
     const q = typeof query === "string" ? query.trim() : "";
     if (q.length === 0) {
       throw typedError("E_SEARCH_QUERY_REQUIRED", FEED_MESSAGES.E_SEARCH_QUERY_REQUIRED);
     }
     const needle = q.toLowerCase();
-    const rows = await this.posts.find({ originNetworkId: networkId });
+    const rows = await this.#visibleRows(networkId, did);
     const byId = new Map(rows.map((post) => [post._id, post]));
     const matches = new Set();
     // Captions are a manual-organization search surface (ac-5).
@@ -271,7 +278,19 @@ export class FeedService {
     });
   }
 
-  async #originOf(accessToken) {
+  /**
+   * The origin's rows filtered down to what the viewer may be shown
+   * (PORCH-068 ac-2): a private-group post renders only for members of
+   * that group; posts outside every group pass unchanged (the standing
+   * base-feed rule), and a dangling groupId keeps rendering.
+   */
+  async #visibleRows(networkId, did) {
+    const rows = await this.posts.find({ originNetworkId: networkId });
+    const groupsById = new Map((await this.groups.find({ networkId: String(networkId) })).map((group) => [group._id, group]));
+    return rows.filter((post) => postVisibleToViewer(post, groupsById, did));
+  }
+
+  async #perimeterOf(accessToken) {
     if (!accessToken) {
       throw typedError("E_MUST_SIGN_IN", FEED_MESSAGES.E_MUST_SIGN_IN);
     }
@@ -279,7 +298,7 @@ export class FeedService {
     if (!perimeter) {
       throw typedError("E_NOT_PERMITTED", FEED_MESSAGES.E_NOT_PERMITTED);
     }
-    return perimeter.membership.networkId;
+    return { networkId: perimeter.membership.networkId, did: perimeter.session.did };
   }
 }
 

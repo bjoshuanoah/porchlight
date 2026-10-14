@@ -1,4 +1,5 @@
 import { socialModels } from "../models.js";
+import { canSeeGroup } from "./group.service.js";
 import { typedError, computeCounters } from "./post.service.js";
 
 /**
@@ -41,8 +42,12 @@ export class InteractionService {
    *   the post's author through it (live membership + settings at send time).
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
    * @param {import("./link-preview.service.js").LinkPreviewService} [deps.previews]
+   * @param {import("@porchlight/shared").CollectionLike} [deps.groups]
+   *   PORCH-068: the group collection behind the private-group conversation
+   *   gate — every interaction surface on a private-group post resolves only
+   *   for members of that group.
    */
-  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews, push }) {
+  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews, push, groups = null }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -53,6 +58,7 @@ export class InteractionService {
     this.previews = previews ?? null;
     this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
+    this.groups = groups;
     this.models = socialModels;
   }
 
@@ -90,7 +96,10 @@ export class InteractionService {
       createdAt: new Date().toISOString(),
     };
     await this.comments.insertOne(comment);
-    await this.notifications.forComment({ comment, parent, mentions });
+    // PORCH-068 ac-5: a private-group post's triggers never compose a
+    // notification for a non-member — the post rides the fan-out for the
+    // group-membership filter inside the notification service.
+    await this.notifications.forComment({ comment, parent, mentions, post: session.post });
     await this.#recount({ postId: payload.postId });
     await this.audit("comment_create", {
       networkId,
@@ -108,6 +117,10 @@ export class InteractionService {
       networkId,
       type: "reply.created",
       postId: payload.postId,
+      // PORCH-068: the envelope carries the post's group target so the
+      // delivery layer can hold a private-group conversation event out of a
+      // non-member's room and catch-up.
+      groupId: session.post.groupId ?? null,
       content: commentContent,
     });
     return { comment: (await this.#withAttribution([commentContent], networkId))[0] };
@@ -156,25 +169,29 @@ export class InteractionService {
       detail: { postId: payload.postId, reactionId: reaction._id },
     });
     // PORCH-047: reaction.applied to the origin room — the as-authored emoji
-    // view only (open vocabulary is content, always).
+    // view only (open vocabulary is content, always). The envelope carries
+    // the post's group target so the delivery layer can hold the event out
+    // of a private-group non-member's room and catch-up (PORCH-068).
     await this.realtime?.published({
       networkId,
       type: "reaction.applied",
       postId: payload.postId,
+      groupId: session.post.groupId ?? null,
       content: InteractionService.reactionView(reaction),
     });
     // PORCH-059: "reactions to your post" — the post's author gets the push
     // through the send pipeline (live membership + settings at send time);
     // they authored the target, so the caption/excerpt rides. The reactor
-    // never receives their own reaction.
-    const target = await this.posts.findOne({ _id: payload.postId });
+    // never receives their own reaction. A private-group post's author
+    // holds the group membership (the write gate enforces it), so the
+    // target is never a non-member here.
     await this.push?.notify({
       networkId,
       type: "reaction",
-      targetDids: [target?.authorId ?? ""],
+      targetDids: [session.post.authorId ?? ""],
       postId: payload.postId,
       actorDid: session.did,
-      excerpt: target?.caption ?? target?.body ?? null,
+      excerpt: session.post.caption ?? session.post.body ?? null,
     });
     return { reaction: InteractionService.reactionView(reaction) };
   }
@@ -343,12 +360,24 @@ export class InteractionService {
       // prompted them; a post of another origin is unaddressable here.
       throw typedError("E_POST_NOT_FOUND", "That post doesn't exist in this network.");
     }
+    // Private-group conversation gate (PORCH-068 ac-2): a private group's
+    // posts and conversation render for members of that group only — every
+    // interaction read AND write on the post refuses a non-member.
+    if (post.groupId && this.groups) {
+      const group = await this.groups.findOne({ _id: post.groupId });
+      if (!canSeeGroup(group, perimeter.session.did)) {
+        throw typedError("E_GROUP_NOT_MEMBER", "Only members of the group can read or join this conversation.");
+      }
+    }
     // Session projection carries {did, deviceId}; the ORIGIN rides on the
-    // membership row (PORCH-005 verifyAccessToken contract).
+    // membership row (PORCH-005 verifyAccessToken contract). The post rides
+    // back so the write paths gate notifications/events on the same
+    // resolution instead of a second read.
     return {
       did: perimeter.session.did,
       deviceId: perimeter.session.deviceId,
       networkId: perimeter.membership.networkId,
+      post,
     };
   }
 

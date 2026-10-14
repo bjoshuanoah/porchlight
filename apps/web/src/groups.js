@@ -13,6 +13,29 @@
 
 const idOf = (item) => String(item?._id ?? item?.id ?? "");
 
+/**
+ * Group visibility (PORCH-068): private (invite-only, members-only) or
+ * public (the whole network views). Groups that predate the field resolve
+ * private — the ruling's explicit default — and every private group a
+ * member holds rides the member gate.
+ */
+export function groupVisibility(group = {}) {
+  return group?.visibility === "public" ? "public" : "private";
+}
+
+export function isGroupMember(group = {}, did) {
+  return Boolean(did) && (group?.members ?? []).includes(did);
+}
+
+/**
+ * The composer's write targets (PORCH-068 ac-4): only groups the author
+ * belongs to are offered — never every group in the network, and neither a
+ * private nor a public group the author does not hold.
+ */
+export function composableGroups(groups = [], did = null) {
+  return (groups || []).filter((group) => group && idOf(group) && isGroupMember(group, did));
+}
+
 /** Groups of the member's own origin network, names first, then by age. */
 export function groupRows(groups = [], networkId = null) {
   return (groups || [])

@@ -156,6 +156,10 @@ export function createSocialRouter(controllers) {
   router.get("/groups/:groupId", groups.detail);
   router.post("/groups", groups.create);
   router.post("/groups/:groupId/members", groups.addMembers);
+  // Visibility change (PORCH-068 ac-1): the managing member flips a group
+  // between private and public; the gate decisions everywhere downstream
+  // resolve the group's CURRENT visibility at every read/delivery.
+  router.post("/groups/:groupId/visibility", groups.updateVisibility);
 
   return router;
 }

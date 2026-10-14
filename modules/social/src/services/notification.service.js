@@ -1,4 +1,5 @@
 import { socialModels } from "../models.js";
+import { canSeeGroup } from "./group.service.js";
 
 /**
  * Notification service (PORCH-006 ac-3, PORCH-014): mention/reply triggers
@@ -11,6 +12,10 @@ import { socialModels } from "../models.js";
  * ac-2): a notification is only ever composed for an active member of the
  * origin network, and a cross-origin reply trigger is refused here exactly
  * as every interaction surface refuses cross-origin writes.
+ *
+ * Group visibility holds at the same surface (PORCH-068 ac-5): a trigger
+ * on a private-group post never composes a row — nor a push send — for a
+ * network member who holds no membership in that group.
  */
 export class NotificationService {
   /**
@@ -21,29 +26,47 @@ export class NotificationService {
    *   PORCH-059: the push send pipeline — the mention/reply triggers below
    *   fan out to Web Push beside the content-free inbox row (read-side
    *   behavior unchanged).
+   * @param {import("@porchlight/shared").CollectionLike} [deps.groups]
+   *   PORCH-068: the group collection behind the private-group suppression.
    */
-  constructor({ notifications, membership, push }) {
+  constructor({ notifications, membership, push = null, groups = null }) {
     this.notifications = notifications;
     this.membership = membership;
     this.push = push ?? null;
+    this.groups = groups;
     this.models = socialModels;
+  }
+
+  /**
+   * PORCH-068 ac-5: does this recipient get a trigger on this post? A
+   * post outside every group does; on a private-group post only the
+   * group's members do. Missing group collection (wiring gap) fails
+   * closed: no trigger composes.
+   */
+  async #triggerReaches({ post, memberId }) {
+    if (!post?.groupId) return true;
+    if (!this.groups) return false;
+    return canSeeGroup(await this.groups.findOne({ _id: post.groupId }), memberId);
   }
 
   /**
    * Fan-out for a comment: mention notifications to every mentioned member
    * (never the author), plus a reply notification to the parent's author —
    * skipped when a mention already reached them. Content-free payloads for
-   * every recipient. Composition refuses a cross-origin parent.
+   * every recipient. Composition refuses a cross-origin parent. Recipients
+   * who may not see the trigger's private-group post receive nothing.
    */
-  async forComment({ comment, parent, mentions }) {
+  async forComment({ comment, parent, mentions, post = null }) {
     if (parent !== null && parent.networkId !== comment.networkId) {
       // Containment at the notification surface (ac-2): a reply trigger whose
       // parent lives on another origin is refused, never composed across
       // origins — the same containment every interaction write enforces.
       throw typedError("E_NOTIFICATION_CROSS_ORIGIN", "Notifications cannot reach across networks.");
     }
+    const triggerPost = post ?? null;
     const mentioned = new Set(mentions.filter((memberId) => memberId !== comment.authorDid));
     for (const memberId of mentioned) {
+      if (!(await this.#triggerReaches({ post: triggerPost, memberId }))) continue;
       await this.record({
         networkId: comment.networkId,
         memberId,
@@ -53,7 +76,10 @@ export class NotificationService {
         actorDid: comment.authorDid,
       });
     }
-    if (parent !== null && parent.authorDid !== comment.authorDid && !mentioned.has(parent.authorDid)) {
+    if (
+      parent !== null && parent.authorDid !== comment.authorDid && !mentioned.has(parent.authorDid) &&
+      (await this.#triggerReaches({ post: triggerPost, memberId: parent.authorDid }))
+    ) {
       await this.record({
         networkId: comment.networkId,
         memberId: parent.authorDid,

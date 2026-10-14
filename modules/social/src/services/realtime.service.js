@@ -20,6 +20,9 @@
  * shaped with the shared member views (postView / commentView /
  * reactionView) that already strip rank inputs and actor signatures.
  */
+/** Payload privacy module import (PORCH-068 group gate helpers). */
+import { canSeeGroup } from "./group.service.js";
+
 export const EVENT_TYPES = Object.freeze(["post.created", "reply.created", "reaction.applied", "media.attached"]);
 
 /** Field names that must NEVER appear on an event envelope (payload-privacy contract). */
@@ -171,15 +174,21 @@ export class RealtimeService {
    *   The bounded replay window the client contract names (24h);
    *   documented config value (`realtime.replayHours`, packages/shared).
    */
-  constructor({ membership, plane, replayHours = 24 }) {
+  constructor({ membership, plane, groups = null, replayHours = 24 }) {
     this.membership = membership;
     this.plane = plane;
+    // PORCH-068: the group collection behind the private-group event gate.
+    // A private group's post/reply/reaction events leave the origin room
+    // only for that group's members — never for any other network member.
+    // Fail-closed when the wiring is absent: gated envelopes stay in the
+    // plane window but deliver (and replay) to nobody.
+    this.groups = groups;
     this.replayHours = replayHours;
     /** channelId → { id, networkId, membershipId, did, emit, close } — the live rooms. */
     this.channels = new Map();
     /** Per-origin publish serialization: append/publish order = delivery order. */
     this.#chains = new Map();
-    this.plane.onInbound((networkId, envelope) => this.#deliver(networkId, envelope));
+    this.plane.onInbound((networkId, envelope) => void this.#deliver(networkId, envelope));
   }
 
   /** Non-serializable field (class private state). */
@@ -190,7 +199,7 @@ export class RealtimeService {
    * payload). Write services call this after the origin commit lands.
    * The envelope is privacy-checked BEFORE the plane ever sees it.
    */
-  async published({ networkId, type, postId = null, content }) {
+  async published({ networkId, type, postId = null, groupId = null, content }) {
     if (!EVENT_TYPES.includes(type)) {
       throw new Error(`Unknown event type "${type}" (the event vocabulary is closed)`);
     }
@@ -198,11 +207,29 @@ export class RealtimeService {
       type,
       networkId: String(networkId),
       postId: postId ?? null,
+      // PORCH-068: the post's group target (null outside every group) —
+      // the delivery layer applies the private-group member gate to these
+      // envelopes and these envelopes alone.
+      groupId: groupId ?? null,
       content: content ?? null,
       createdAt: new Date().toISOString(),
     };
     assertPayloadPrivacy(event);
     return this.#enqueue(networkId, event);
+  }
+
+  /**
+   * The private-group delivery predicate (PORCH-068 ac-2/ac-5): a gated
+   * envelope (one carrying a group target) leaves the origin room only for
+   * members of a PRIVATE group; a public group's events ride for the whole
+   * network. Resolve at delivery/replay time against the live roster, so a
+   * member newly added to the group receives from their add onward.
+   */
+  async #eventReaches(envelope, did) {
+    if (!envelope.groupId) return true;
+    if (this.groups == null) return false;
+    const group = await this.groups.findOne({ _id: envelope.groupId });
+    return canSeeGroup(group, did);
   }
 
   /**
@@ -282,6 +309,7 @@ export class RealtimeService {
       throw error;
     }
     const networkId = perimeter.membership.networkId;
+    const did = perimeter.session.did;
     const sinceCursor = typeof since === "string" && since.length > 0 && since.length <= 128 ? since : null;
     // The bounded window contract: a cursor OLDER than the replay window
     // resolves stale (REST fallback with the freshness note) even when the
@@ -292,8 +320,15 @@ export class RealtimeService {
       ageCursor !== null &&
       Date.now() - Number(ageCursor[1]) > this.replayHours * 60 * 60 * 1000;
     const { events, stale, cursor } = await this.plane.readSince(networkId, pastWindow ? null : sinceCursor);
+    // The private-group gate applies to the replay window too (PORCH-068
+    // ac-2): a gated envelope replays only to a member of its private
+    // group — the same predicate the live delivery applies.
+    const visible = [];
+    for (const event of stale || pastWindow ? [] : events) {
+      if (await this.#eventReaches(event, did)) visible.push(event);
+    }
     return {
-      events: stale || pastWindow ? [] : events,
+      events: visible,
       stale: stale || pastWindow,
       cursor,
       replayHours: this.replayHours,
@@ -328,11 +363,24 @@ export class RealtimeService {
     return run;
   }
 
-  /** Deliver one fan-out arrival to every live channel of the origin — and only those. */
+  /** Deliver one fan-out arrival to every live channel of the origin — and
+   *  only those the envelope's private-group gate admits (PORCH-068).
+   *  Ungated envelopes (no group target) deliver synchronously, exactly as
+   *  shipped; gated envelopes resolve the group's live roster first. */
   #deliver(networkId, envelope) {
+    const targets = [];
     for (const channel of this.channels.values()) {
-      if (channel.networkId === String(networkId)) channel.emit(envelope);
+      if (channel.networkId === String(networkId)) targets.push(channel);
     }
+    if (!envelope.groupId) {
+      for (const channel of targets) channel.emit(envelope);
+      return Promise.resolve();
+    }
+    return (async () => {
+      for (const channel of targets) {
+        if (await this.#eventReaches(envelope, channel.did)) channel.emit(envelope);
+      }
+    })();
   }
 }
 

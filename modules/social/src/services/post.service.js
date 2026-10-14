@@ -1,4 +1,5 @@
 import { socialModels } from "../models.js";
+import { canSeeGroup } from "./group.service.js";
 
 /** Plain-language content failures for member clients. */
 export const POST_MESSAGES = {
@@ -161,6 +162,10 @@ export class PostService {
       networkId,
       type: "post.created",
       postId: post._id,
+      // PORCH-068: the envelope carries the group target so the delivery
+      // layer can hold a private-group post's event out of a non-member's
+      // room and catch-up (the envelope is content-only metadata).
+      groupId: post.groupId ?? null,
       content: { ...postView(post), preview: this.previewPayload(preview) },
     });
     // PORCH-059: group posts fan out to the group's own members through the
@@ -181,25 +186,45 @@ export class PostService {
     return { post: (await this.memberViews([post], networkId))[0], did: session.did };
   }
 
-  /** Read one post as a member view (no counters, no vote data). */
+  /** Read one post as a member view (no counters, no vote data). A
+   *  private-group post resolves only for members of that group (PORCH-068
+   *  ac-2): for a non-member the read is refused exactly as a post of
+   *  another origin — it simply does not exist here. */
   async get({ accessToken, postId } = {}) {
     const session = await this.#requireSession(accessToken);
     const post = await this.posts.findOne({ _id: postId });
-    if (!post || post.originNetworkId !== session.networkId) {
-      // Containment: a post of another origin simply does not exist here.
+    if (!post || post.originNetworkId !== session.networkId || !(await this.#visibleTo(post, session.did))) {
+      // Containment: a post of another origin simply does not exist here;
+      // a private-group post a non-member asks for reads the same way.
       throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
     }
     return { post: (await this.memberViews([post], session.networkId))[0], did: session.did };
   }
 
-  /** List the origin network's posts, newest first (base timeline read). */
+  /** List the origin network's posts, newest first (base timeline read), with
+   *  private-group posts the viewer does not hold removed (PORCH-068 ac-2). */
   async list({ accessToken } = {}) {
     const session = await this.#requireSession(accessToken);
     const rows = await this.posts.find({ originNetworkId: session.networkId });
     // Base timeline ordering (PORCH-007): newest first by latest activity;
     // reverse-chron pagination only — this read never re-sorts by rank.
     newestFirstByActivity(rows);
-    return { posts: await this.memberViews(rows, session.networkId), did: session.did };
+    return { posts: await this.memberViews(await this.#visibleRowsOf(session.networkId, session.did, rows), session.networkId), did: session.did };
+  }
+
+  /** The visibility gate for one post document against one viewer did. */
+  async #visibleTo(post, did) {
+    if (!post?.groupId) return true;
+    return canSeeGroup(await this.groups.findOne({ _id: post.groupId }), did);
+  }
+
+  /** Origin rows filtered down to the viewer's visible set (PORCH-068 ac-2). */
+  async #visibleRowsOf(networkId, did, rows = null) {
+    const resolved = rows ?? await this.posts.find({ originNetworkId: networkId });
+    const groupsById = new Map((await this.groups.find({ networkId: String(networkId) })).map((group) => [group._id, group]));
+    return resolved.filter(
+      (post) => !post?.groupId || canSeeGroup(groupsById.get(String(post.groupId)), did),
+    );
   }
 
   /** Member views with attribution, mediaMeta (PORCH-044), and previews (PORCH-052). */
