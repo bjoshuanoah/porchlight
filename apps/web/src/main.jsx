@@ -11,7 +11,7 @@ import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
 // PORCH-055: the signed-out marker and boot routing for the device front state.
 import { bootRoute, readSignedOut, markSignedOut, clearSignedOut } from "./front-state.js";
 import { fullName } from "./setup-state.js";
-import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin } from "./api.js";
+import { request, loadFeeds, setUnauthorizedHandler, connectionForPostOrigin, markUnreachable } from "./api.js";
 import { cachedTimeline, hiddenPosts, hidePost, connectionsStorageKey, readConnections, readLocal, saveConnections, saveTimeline, unhidePost, writeLocal } from "./store.js";
 import { createCustody } from "./session-sync.js";
 import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials.js";
@@ -692,7 +692,12 @@ function App() {
       // Pending previews are fetched once, authorized and never cached —
       // committed rungs ride the content address, so the browser's own
       // cache answers repeats.
-      const response = await fetch(target, { headers: { authorization: `Bearer ${token}` }, cache: pendingToken ? "no-store" : "default" });
+      let response;
+      try {
+        response = await fetch(target, { headers: { authorization: `Bearer ${token}` }, cache: pendingToken ? "no-store" : "default" });
+      } catch (cause) {
+        throw markUnreachable(cause);
+      }
       if (!response.ok) {
         const refused = await response.json().catch(() => ({}));
         const error = new Error(refused.error || `The family server returned ${response.status}.`);
@@ -715,16 +720,21 @@ function App() {
       const contentType = file.type || "application/octet-stream";
       const payload = { scope: "identity-avatar", action: "ingest", size: bytes.byteLength, sha256: await sha256Hex(bytes), contentType };
       const signature = await signDevicePayload(new URL(active.url).origin, active.identity.id, active.deviceId, payload);
-      const response = await fetch(new URL("/api/identity/accounts/me/avatar", active.url), {
-        method: "POST",
-        headers: {
-          "content-type": contentType,
-          authorization: `Bearer ${active.identityToken}`,
-          "x-porchlight-avatar-payload": JSON.stringify(payload),
-          "x-porchlight-signature": signature,
-        },
-        body: bytes,
-      });
+      let response;
+      try {
+        response = await fetch(new URL("/api/identity/accounts/me/avatar", active.url), {
+          method: "POST",
+          headers: {
+            "content-type": contentType,
+            authorization: `Bearer ${active.identityToken}`,
+            "x-porchlight-avatar-payload": JSON.stringify(payload),
+            "x-porchlight-signature": signature,
+          },
+          body: bytes,
+        });
+      } catch (cause) {
+        throw markUnreachable(cause);
+      }
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
         const error = new Error(result.error || `The family server returned ${response.status}.`);

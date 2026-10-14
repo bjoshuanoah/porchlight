@@ -18,7 +18,7 @@ import { NotificationSettings } from './notifications.jsx';
 // PORCH-070: the member's photo — every face on every surface renders
 // through the one avatar-face code path (authorized fetch + the identity-
 // keyed blob cache; the metas-less fallback stays initials).
-import { AvatarFace, ownFaceSources } from './avatar-face.js';
+import { AvatarFace, ownFaceSources, rungOf } from './avatar-face.js';
 
 /** Removal capability on the ladder (PORCH-053): the owner removes anyone
  * (the final-owner invariant guards the last one); a delegate removes
@@ -652,7 +652,10 @@ function AvatarPanel({ account, actions, origin, name }) {
     setBusy(false);
     // The hub's typed refusals already speak family language — the copy
     // renders verbatim, never a generic stand-in when the hub named one.
-    setError(cause instanceof TypeError
+    // The unreachability copy is reserved for the fetch-rejection class
+    // api.js names E_HUB_UNREACHABLE (PORCH-073): a client-side error must
+    // never be dressed as the hub being unreachable.
+    setError(cause?.code === 'E_HUB_UNREACHABLE'
       ? 'The family server could not be reached. Check its address and try again.'
       : (cause?.message || 'The hub could not complete this action. No change was made.'));
   }
@@ -662,7 +665,13 @@ function AvatarPanel({ account, actions, origin, name }) {
     releasePreview();
     try {
       const result = await actions.uploadAvatar(file);
-      const rung = (result?.pending?.renditions ?? []).find((row) => row?.kind === 'chooser');
+      // PORCH-073: the hub's ingest response carries the rendition metas as
+      // the { kind: rung } map avatarMetas builds. The bare `.find` this
+      // line once ran on that map threw a TypeError on every successful
+      // ingest, and the panel dressed the client-side logic error as "the
+      // family server could not be reached." The one dual-shape lookup
+      // avatar-face owns reads both shapes without ever throwing.
+      const rung = rungOf(result?.pending?.renditions ?? null, 'chooser');
       const bytes = rung?.sha256
         ? await actions.loadAvatarRendition({ did: face.did, kind: 'chooser', version: rung.sha256, pendingToken: result.pending.token })
         : null;

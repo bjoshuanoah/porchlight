@@ -339,6 +339,114 @@ test("member avatar, deployed-hub stage 2: every client route the Profile flow c
       assert.equal(me.avatar?.chooser?.sha256, recommitted.avatar.chooser.sha256, "no partial write: the face is exactly as confirmed");
     })());
   
+    // PORCH-073: the installed-app context drives the same Profile flow —
+    // the standalone surface is its own browser context at the same origin,
+    // same member identity and device. The sequence the fixed panel runs
+    // (ingest → read the chooser rung out of the metas map → pending
+    // preview → confirm → committed serve) must land the route's documented
+    // contract class end to end: a 200 class on the happy path, the named
+    // 4xx refusals otherwise — never a shape the client can only misread as
+    // unreachability.
+    const appIngest = await runStep("installed-app context: ingest reads the metas map the panel consumes", (async () => {
+      const distinct = await sharp({ create: { width: 512, height: 384, channels: 3, noise: { type: "gaussian", sigma: 8 } } }).jpeg().toBuffer();
+      const appDecl = { scope: "identity-avatar", action: "ingest", size: Buffer.byteLength(distinct), sha256: sha256(distinct), contentType: "image/jpeg" };
+      const res = await fetch(`${base}/api/identity/accounts/me/avatar`, {
+        method: "POST",
+        headers: {
+          "content-type": "image/jpeg",
+          authorization: `Bearer ${memberIdentityToken}`,
+          "x-porchlight-avatar-payload": JSON.stringify(appDecl),
+          "x-porchlight-signature": signNonce(memberPrivJwk, canonical(appDecl)),
+        },
+        body: distinct,
+      });
+      const body = await res.json();
+      assert.equal(res.status, 200, JSON.stringify(body));
+      // The hub ships the rendition metas as the { kind: rung } map — the
+      // shape the fixed panel reads (rungOf, PORCH-073), never an array
+      // whose absence threw the false-connectivity TypeError.
+      assert.equal(typeof body.pending?.renditions, "object", JSON.stringify(body.pending));
+      assert.ok(!Array.isArray(body.pending.renditions), "metas ship as the map, not a rungs array");
+      const chooser = body.pending?.renditions?.chooser;
+      assert.ok(chooser?.sha256, JSON.stringify(body.pending));
+      assert.equal(chooser.kind, "chooser");
+      assert.equal(chooser.width, chooser.height, "every rung stamps square dims");
+      return { pending: body.pending, chooser };
+    })());
+    assert.ok(appIngest?.pending?.token, "pending token in hand");
+
+    await runStep("installed-app context: pending preview serves through both token classes", (async () => {
+      const preview = (token) => fetch(`${base}/api/identity/avatars/${encodeURIComponent(memberDid)}/renditions/chooser?v=${appIngest.chooser.sha256}&pending=${encodeURIComponent(appIngest.pending.token)}`, { headers: { authorization: `Bearer ${token}` } });
+      // The panel's direct authorization: the identity session token.
+      const direct = await preview(memberIdentityToken);
+      assert.equal(direct.status, 200, String(direct.status));
+      assert.equal(direct.headers.get("content-type"), "image/webp");
+      assert.equal(direct.headers.get("cache-control"), "private, no-store", "a face nobody confirmed yet is nobody's face to cache");
+      // The install-context media-auth worker substitutes the membership
+      // token for intercepted rendition GETs; the route must answer that
+      // class identically (the browser-path parity at the same URL shape).
+      const relayed = await preview(memberToken);
+      assert.equal(relayed.status, 200, String(relayed.status));
+      assert.equal(relayed.headers.get("x-porchlight-media-width"), "144");
+      assert.equal(relayed.headers.get("x-porchlight-media-height"), "144");
+    })());
+
+    await runStep("installed-app context: confirm commits the face over the identity-session route", (async () => {
+      const cp = { scope: "identity-avatar", action: "commit", token: appIngest.pending.token };
+      const res = await fetch(`${base}/api/identity/accounts/me/avatar`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${memberIdentityToken}` },
+        body: JSON.stringify({ payload: cp, signature: signNonce(memberPrivJwk, canonical(cp)) }),
+      });
+      const body = await res.json();
+      assert.equal(res.status, 200, JSON.stringify(body));
+      assert.equal(body.avatar?.chooser?.sha256, appIngest.chooser.sha256, JSON.stringify(body.avatar));
+      // The confirmed face serves from the standalone surface's own follow-up
+      // reads: committed rung, content-addressed, immutable.
+      const serve = await fetch(`${base}/api/identity/avatars/${encodeURIComponent(memberDid)}/renditions/chooser?v=${appIngest.chooser.sha256}`, { headers: { authorization: `Bearer ${memberIdentityToken}` } });
+      assert.equal(serve.status, 200, String(serve.status));
+      assert.equal(serve.headers.get("cache-control"), "private, max-age=31536000, immutable");
+      assert.equal(serve.headers.get("etag"), `"${appIngest.chooser.sha256}"`);
+      const bytes = Buffer.from(await serve.arrayBuffer());
+      assert.equal(sha256(bytes), appIngest.chooser.sha256, "served bytes equal the content address");
+    })());
+
+    await runStep("installed-app context: refusals keep the route's named 4xx class", (async () => {
+      // The panel never dresses these as unreachability: the refusal body
+      // carries the hub's plain-language error and code, the documented
+      // contract class per PRD 12.
+      const pdf = Buffer.from("%PDF-1.4 not from the standalone surface either", "utf8");
+      const pdfDecl = { scope: "identity-avatar", action: "ingest", size: pdf.length, sha256: sha256(pdf), contentType: "application/pdf" };
+      const pdfRes = await fetch(`${base}/api/identity/accounts/me/avatar`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/pdf",
+          authorization: `Bearer ${memberIdentityToken}`,
+          "x-porchlight-avatar-payload": JSON.stringify(pdfDecl),
+          "x-porchlight-signature": signNonce(memberPrivJwk, canonical(pdfDecl)),
+        },
+        body: pdf,
+      });
+      const pdfBody = await pdfRes.json();
+      assert.equal(pdfRes.status, 415, JSON.stringify(pdfBody));
+      assert.equal(pdfBody.code, "E_AVATAR_UNSUPPORTED_TYPE");
+      const big = await sharp({ create: { width: 2600, height: 2600, channels: 3, noise: { type: "gaussian", sigma: 40 } } }).png({ compressionLevel: 0 }).toBuffer();
+      const bigDecl = { scope: "identity-avatar", action: "ingest", size: big.length, sha256: sha256(big), contentType: "image/png" };
+      const bigRes = await fetch(`${base}/api/identity/accounts/me/avatar`, {
+        method: "POST",
+        headers: {
+          "content-type": "image/png",
+          authorization: `Bearer ${memberIdentityToken}`,
+          "x-porchlight-avatar-payload": JSON.stringify(bigDecl),
+          "x-porchlight-signature": signNonce(memberPrivJwk, canonical(bigDecl)),
+        },
+        body: big,
+      });
+      const bigBody = await bigRes.json();
+      assert.equal(bigRes.status, 413, JSON.stringify(bigBody));
+      assert.equal(bigBody.code, "E_AVATAR_TOO_LARGE");
+    })());
+
     await runStep("cascaded purge retires the face with the member", (async () => {
       const members = (await (await fetch(`${base}/api/social/console/members`, { headers: { authorization: `Bearer ${ownerToken}` } })).json()).members;
       const row = members.find((m) => m.did === memberDid);
