@@ -19,10 +19,8 @@ export const photoFirst = {
   // Desktop card padding (Oct 9 tokens). Media pulls past it so the media
   // spans the full interior post width with no internal horizontal padding.
   postPad: 20,
-  // Post separation ships as the continuous-album 1px warm-neutral divider
-  // (preferred mode; no card gap mode on mobile). The value rides the token
-  // layer as a custom property — light per PORCH-043, dark per PORCH-042 —
-  // so the feed divider never carries a screen-level mode branch.
+  // The old mobile inter-post divider is retired. This warm-neutral token
+  // now separates the post's controls from its in-feed conversation.
   dividerColor: "var(--porch-timeline-divider)",
   dividerValues: { light: lightTokens.timelineDivider, dark: darkTokens.timelineDivider },
   // Extreme images only: the single crop-adjacent allowance. Landscapes and
@@ -38,19 +36,16 @@ export const photoFirst = {
   mediaWashValues: { light: lightTokens.subtle, dark: darkTokens.subtle },
   // 12–14px media radius permitted at ≥900px; mobile media is square-cornered.
   desktopMediaRadius: 12,
-  // Mobile vertical rhythm in px — 25–30% tighter than the Oct 9 spacing:
-  // Header→caption 8–12; Caption→media 12; Media→utility 8; Utility→actions
-  // 16; Actions→reactions 12; Reactions→conversation slice 8 (PORCH-046);
-  // slice→divider 16.
+  // Header→caption 8–12; caption→media 12; media→actions 8–16;
+  // actions→rendered reactions 12; reactions→replies divider 12;
+  // divider→first comment 8–12.
   spacing: {
     headerCaption: 8,
     captionMedia: 12,
     mediaUtility: 8,
     utilityActions: 16,
     actionsReactions: 12,
-    // PORCH-046: Reactions → conversation slice sits 8px above the card's
-    // last text on the 16px mobile rail (build contract rhythm table).
-    reactionsSlice: 8,
+    reactionsSlice: 12,
     endToDivider: 16,
   },
 };

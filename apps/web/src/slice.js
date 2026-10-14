@@ -1,10 +1,6 @@
-// Conversation preview slice on timeline cards (PORCH-046 ac-5/ac-6):
-// each card renders its five most-recent replies in natural reading order,
-// with a quantity-only expander for the rest, and the member's own writes
-// render optimistically. This module holds the pure window/dedup arithmetic;
-// the rendering surface treats these rows as one cohesive slice.
-
-export const REPLY_SLICE_LIMIT = 5;
+// Timeline cards show four latest root comments in reading order. Nested
+// responses stay collapsed until the member expands their parent in place.
+export const REPLY_SLICE_LIMIT = 4;
 
 const replyKey = (reply) => String(reply?._id ?? reply?.id ?? '');
 
@@ -15,9 +11,8 @@ export function conversationOf(post) {
   return { replies, total };
 }
 
-// The rendered window: the five latest replies, oldest-first (reading
-// direction). An arriving reply enters the window in place; the oldest
-// in-slice reply exits into the expander count when the window is full.
+// An arriving root enters the window in place; the oldest visible root
+// moves into the more-comments count.
 export function windowOf(replies) {
   const sorted = (replies ?? [])
     .slice()
@@ -46,14 +41,8 @@ export function repliesByParent(comments) {
 }
 
 /**
- * The card's display slice (ac-2 optimistic + ac-5 window + ac-6 count):
- * - server slice + confirmed replies (acknowledged, next read pending)
- *   + pending replies (write in flight, rolled back on failure) merge by id;
- * - the rendered window is the five latest of the merge;
- * - the conversation total grows by the replies still local-only, so a full
- *   window exits its oldest reply into "(and N more)" immediately.
- * A confirmed reply the server slice already carries (same id) is ignored —
- * its quantity lives in the server total, never counted twice.
+ * Merge the hub's root slice with local optimistic roots. The count describes
+ * root comments only; responses belong to their parent, not this window.
  */
 export function sliceDisplay(post, local = null) {
   const base = conversationOf(post);
@@ -68,22 +57,12 @@ export function sliceDisplay(post, local = null) {
   return { replies: windowed, total };
 }
 
-/**
- * Expander math (ac-6): the quiet amber control carries conversation length
- * minus the on-card slice — nothing else. At or below the slice limit there
- * is no expander.
- */
+/** Root-comment quantity beyond the four visible on the card. */
 export function expanderCount(total) {
   return Math.max(0, total - REPLY_SLICE_LIMIT);
 }
 
-/**
- * Reconcile (ac-2): an acknowledged reply is kept locally only until a feed
- * read can hold it — every reply total sampled after the write exists fully
- * includes it, so once the read's total passes the total the write was
- * confirmed against, the local copy retires. A stale read (total still at
- * the confirm-time value) keeps the local row visible until it does.
- */
+// A confirmed root stays local until a feed read includes its quantity.
 export function reconcileConfirmed(confirmed, serverTotal) {
   return (confirmed ?? []).filter(
     (entry) => !Number.isFinite(serverTotal) || serverTotal < entry.basis + 1,

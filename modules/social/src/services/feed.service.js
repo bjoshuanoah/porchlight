@@ -10,8 +10,8 @@ export const FEED_MESSAGES = {
   E_SEARCH_QUERY_REQUIRED: "Search needs a plain-text query.",
 };
 
-/** Conversation slice window (PORCH-046 ac-5): the card carries the five most recent replies. */
-export const REPLY_SLICE_LIMIT = 5;
+/** Timeline cards carry the four most recent root comments in reading order. */
+export const REPLY_SLICE_LIMIT = 4;
 
 /**
  * Feed service (PORCH-007): timeline ordering and feed assembly.
@@ -45,9 +45,8 @@ export class FeedService {
    * @param {import("./ranking.service.js").RankingService} deps.ranking
    * @param {import("./media.service.js").MediaService} deps.media
    * @param {import("@porchlight/shared").CollectionLike} deps.comments
-   *   Conversation previews (PORCH-046): the feed read decorates each post
-   *   view with its latest-five reply slice and reply count so cards render
-   *   the conversation without follow-up per-card requests.
+   *   Conversation previews: feed views carry the latest four root comments,
+   *   their nested response counts, and the root total without per-card reads.
    * @param {import("@porchlight/shared").CollectionLike} deps.reactions
    *   Reaction rows ride the member view as authored (PORCH-046): cards
    *   reflect arriving reactions in place from the same feed read.
@@ -219,17 +218,13 @@ export class FeedService {
   }
 
   /**
-   * Conversation previews (PORCH-046 ac-5/ac-6): one origin-scoped read of
-   * the network's replies and reaction rows decorates every post view, so a
-   * card renders its latest-five reply slice, its "(and N more)" count, and
-   * the reactions rendered as given — all in one feed read, and arriving
-   * activity reflects in place on the next read without per-card requests.
+   * Conversation previews: one origin-scoped read of comments and reactions
+   * decorates every post view with its latest-four root slice, root total,
+   * nested response counts, and authored reactions in one feed read.
    *
-   * - The slice is the LENGTH of the conversation rendered as content
-   *   quantity ("and 47 more" expander, Brian Oct 14 2026; quantity-versus-
-   *   engagement boundary) — never an engagement count and never a
-   *   reaction count; reaction rows render as given without numbers
-   *   (PORCH-036) and votes never enter any read (vote privacy contract).
+   * - The root total is conversation content quantity for the expander,
+   *   never an engagement or reaction count; reaction rows render as given
+   *   without numbers (PORCH-036), and votes never enter any read.
    * - Origin containment applies to the decoration itself: only the token's
    *   network rows are read, so a foreign-network reply never rides a view,
    *   live or cached (PORCH-046 ac-4).
@@ -248,11 +243,9 @@ export class FeedService {
   }
 
   /**
-   * Pure decoration (unit-pinned): group the origin's comments and reaction
-   * rows by post, attach each post's latest-five chronological reply slice
-   * with read-time attribution, the conversation reply total, and the
-   * reaction rows as authored — the exact member views the member surfaces
-   * already serve through the interactions read paths.
+   * Pure decoration: group origin comments and reactions by post. Cards show
+   * only the latest four roots, in chronological order; each visible root
+   * carries the count of all descendants, not their content.
    */
   static withConversationPreviews(views, comments, reactions, names) {
     const commentsByPost = new Map();
@@ -266,17 +259,35 @@ export class FeedService {
       rowsByPost.get(row.postId).push(InteractionService.reactionView(row));
     }
     return views.map((view) => {
-      const mine = (commentsByPost.get(view._id) ?? [])
-        .slice()
+      const mine = commentsByPost.get(view._id) ?? [];
+      const roots = mine
+        .filter((comment) => comment.parentId == null)
         .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-      const slice = mine.slice(-REPLY_SLICE_LIMIT).map((comment) => ({
-        ...InteractionService.commentView(comment),
-        authorName: names.get(String(comment.authorDid)) ?? null,
-      }));
+      const visibleRoots = roots.slice(-REPLY_SLICE_LIMIT);
+      const children = new Map();
+      for (const comment of mine) {
+        if (comment.parentId == null) continue;
+        if (!children.has(comment.parentId)) children.set(comment.parentId, []);
+        children.get(comment.parentId).push(comment);
+      }
+      const slice = visibleRoots.map((comment) => {
+        let responseCount = 0;
+        const pending = [...(children.get(comment._id) ?? [])];
+        while (pending.length) {
+          const child = pending.pop();
+          responseCount += 1;
+          for (const next of children.get(child._id) ?? []) pending.push(next);
+        }
+        return {
+          ...InteractionService.commentView(comment),
+          authorName: names.get(String(comment.authorDid)) ?? null,
+          responseCount,
+        };
+      });
       return {
         ...view,
         replySlice: slice,
-        replyTotal: mine.length,
+        replyTotal: roots.length,
         reactionRows: rowsByPost.get(view._id) ?? [],
       };
     });
