@@ -44,8 +44,8 @@ test("ac-4: grant consumption wins over the front state, deep paths ride their o
   assert.equal(bootRoute({ pathname: "/", search: "?invite=inv-code_123", connections: [], signedOut: false }), "/join");
 });
 
-test("ac-3/ac-5: no signed-out marker means a device without registrations never sees the chooser", () => {
-  assert.equal(bootRoute({ pathname: "/", search: "", connections: [], signedOut: true }), "/join");
+test("ac-3/ac-5: an uninstalled device without registrations never sees the chooser (PORCH-055; the installed-app carve-out is PORCH-074)", () => {
+  assert.equal(bootRoute({ pathname: "/", search: "", connections: [], signedOut: true, standalone: false }), "/join");
 });
 
 test("the signed-out marker is a client-local, per-origin toggle", () => {
@@ -93,4 +93,73 @@ test("ac-2: the superseded direct-to-timeline sign-out reopen is gone (PORCH-055
   const source = await readFile(join(webRoot, "src", "identity.jsx"), "utf8");
   assert.doesNotMatch(source, /opens straight into your timeline/);
   assert.match(source, /Switch person/);
+});
+
+// PORCH-074: the installed home-screen app opens as its own browser context
+// holding zero registrations. Its first launch leads with the pairing prompt
+// (Brian's verbatim ask) instead of the join form, and the "New here" door
+// stays beside it for a member without any working device.
+test("ac-1: the installed app's first launch boots the pairing front state (PORCH-074)", () => {
+  // Standalone launch with zero registrations lands on the front state.
+  assert.equal(bootRoute({ pathname: "/", search: "", connections: [], standalone: true }), "/who-is-here");
+  // Grant consumption wins over the front state: an invite in the query still routes into its flow.
+  assert.equal(bootRoute({ pathname: "/", search: "?invite=inv-code_123", connections: [], standalone: true }), "/join");
+  // A device link arriving as a deep path owns its grant wherever the device is.
+  assert.equal(bootRoute({ pathname: "/device-link/dk_123", search: "", connections: [], standalone: true }), "/device-link/dk_123");
+  // Grant consumption wins over the front state: an invite or code in the query routes into its flow.
+  assert.equal(bootRoute({ pathname: "/", search: "?code=inv-code_123", connections: [], standalone: true }), "/join");
+  // Uninstalled browsers keep the join front door at zero registrations.
+  assert.equal(bootRoute({ pathname: "/", search: "", connections: [], standalone: false }), "/join");
+  // A signed-out registered device is unaffected by the standalone flag.
+  assert.equal(bootRoute({ pathname: "/", search: "", connections: [face("june")], signedOut: true, standalone: true }), "/who-is-here");
+});
+
+test("ac-1: the zero-registration front state leads with the pairing prompt beside the New here door (PORCH-074)", async () => {
+  const source = await readFile(join(webRoot, "src", "identity.jsx"), "utf8");
+  const chooser = source.slice(
+    source.indexOf("export function WhoIsHere"),
+    source.indexOf("function invitationUrl"),
+  );
+  // The lead prompt rides Brian's verbatim ask, with the code input on the surface.
+  assert.match(chooser, /Coming here from another device or browser\?/);
+  assert.match(chooser, /Get your pairing code from the profile section, and enter it here\./);
+  assert.match(chooser, /<PairingCodeEntry data=\{data\} actions=\{actions\} navigate=\{navigate\} autoFocus showLinkFallback=\{false\}/);
+  // The "New here" door renders beside the pairing lead, owner-routed admission only.
+  assert.match(chooser, />New here<\/Typography>/);
+  assert.match(chooser, /Join with your link or code/);
+  // The Add someone sheet serves only the chosen-state chooser; the
+  // zero-registration lead shows both doors inline.
+  assert.match(chooser, /\{faces\.length > 0 && <Button variant="outlined" onClick=\{\(\) => setAddOpen\(true\)\}/);
+  // The greeting and face row render only when the device holds registrations.
+  assert.match(chooser, /\{faces\.length > 0 && <Stack direction="row" spacing=\{4\}/);
+});
+
+test("ac-2: the lead surface consumes the code through the existing pairing mechanics (PORCH-074)", async () => {
+  const source = await readFile(join(webRoot, "src", "identity.jsx"), "utf8");
+  const entry = source.slice(
+    source.indexOf("export function PairingCodeEntry"),
+    source.indexOf("export function Pair("),
+  );
+  // Same one-time/short-lived consumption, same success copy, same `pair`
+  // action the /pair route runs; bindDevice owns the completion target.
+  assert.match(entry, /operation\.run\('pair', \[code\.trim\(\)\], 'This device is now yours\.'\)/);
+  assert.match(entry, /label="Pairing code"/);
+  // One code path: the /pair route renders the shared entry, no fork.
+  const pair = source.slice(source.indexOf("export function Pair("), source.indexOf("export function DeviceLink("));
+  assert.match(pair, /<PairingCodeEntry data=\{data\} actions=\{actions\} navigate=\{navigate\} \/>/);
+  assert.doesNotMatch(pair, /<form/);
+});
+
+test("ac-3: the client surface adds no new pairing endpoint or grant class (PORCH-074)", async () => {
+  const source = await readFile(join(webRoot, "src", "identity.jsx"), "utf8");
+  // The component surface routes everything through the action set; no
+  // endpoint string exists anywhere in identity.jsx (the hub paths live
+  // only in main.jsx's action wiring, unchanged by this task).
+  assert.doesNotMatch(source, /\bidentity\/[a-z-]+/);
+  const shell = await readFile(join(webRoot, "src", "main.jsx"), "utf8");
+  // The existing pairing endpoints survive unchanged; bootRoute learned
+  // only the standalone launch fact.
+  assert.match(shell, /"identity\/pairing-code"/);
+  assert.match(shell, /bindDevice\("identity\/pair", code\)/);
+  assert.match(shell, /standalone: standaloneBoot/);
 });

@@ -515,24 +515,39 @@ export function Setup({ data, actions, navigate }) {
   </SetupShell>;
 }
 
-export function Pair({ data, actions, navigate }) {
+/**
+ * The pairing-code consumer (PORCH-074): one code entry for every surface
+ * that consumes a pairing code — the /pair route and the installed-app
+ * front state's lead panel. The mechanics are the existing self-serve
+ * pairing flow (a one-time, short-lived code consumed through the `pair`
+ * action; bindDevice owns the completion target: a signed-out device
+ * returns to the WhoIsHere front state with the refreshed face present,
+ * PORCH-055, and a device with no open turn lands on the timeline),
+ * the success copy reads "This device is now yours.", and the origin
+ * device still shows its binding confirmation. No new endpoint, no new
+ * grant class, no new machinery anywhere.
+ */
+export function PairingCodeEntry({ data, actions, navigate, autoFocus = false, showLinkFallback = true }) {
   const [code, setCode] = useState('');
   const operation = useOperation(actions);
   async function submit(event) {
     event.preventDefault();
-    // bindDevice owns the completion target: a signed-out device returns to
-    // the WhoIsHere front state with the refreshed face present (PORCH-055).
     await operation.run('pair', [code.trim()], 'This device is now yours.');
   }
+  return <form onSubmit={submit}><Stack spacing={2}>
+    <TextField label="Pairing code" value={code} onChange={event => setCode(event.target.value)}
+      required autoFocus={autoFocus} autoComplete="off" fullWidth />
+    <Typography variant="body2" color="text.secondary">The code works once and for ten minutes. If anything unexpected connects, your other device shows it right away so it can be removed in one tap.</Typography>
+    <Feedback operation={operation} />
+    <Button variant="contained" type="submit" disabled={operation.busy}>Connect this device</Button>
+    {showLinkFallback && <Button onClick={() => navigate?.('/device-link')}>Use a device link instead</Button>}
+  </Stack></form>;
+}
+
+export function Pair({ data, actions, navigate }) {
   return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
     <Heading title="Add this device" subtitle={`You're already part of ${networkName(data)}. Enter the code shown on your other device once, and this device joins your place.`} />
-    <Paper sx={{ p: 3 }}><form onSubmit={submit}><Stack spacing={2}>
-      <TextField label="Pairing code" value={code} onChange={event => setCode(event.target.value)} required autoComplete="off" fullWidth />
-      <Typography variant="body2" color="text.secondary">The code works once and for ten minutes. If anything unexpected connects, your other device shows it right away so it can be removed in one tap.</Typography>
-      <Feedback operation={operation} />
-      <Button variant="contained" type="submit" disabled={operation.busy}>Connect this device</Button>
-      <Button onClick={() => navigate?.('/device-link')}>Use a device link instead</Button>
-    </Stack></form></Paper>
+    <Paper sx={{ p: 3 }}><PairingCodeEntry data={data} actions={actions} navigate={navigate} /></Paper>
   </Box>;
 }
 
@@ -920,12 +935,44 @@ export function WhoIsHere({ data, actions, navigate }) {
   return <Box sx={{ maxWidth: 560, mx: 'auto', textAlign: 'center', pt: { xs: 2, sm: 6 } }}>
     <Box component="header" sx={{ mb: 4 }}>
       <Lockup size={30} sx={{ mb: 3 }} />
-      <Typography variant="h1" component="h1">Who's using Porchlight?</Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
-        {faces.length ? 'Tap a face to open. A local PIN is optional; without one, one tap opens.' : 'No faces are connected on this device yet.'}
-      </Typography>
+      {faces.length > 0 && <>
+        <Typography variant="h1" component="h1">Who's using Porchlight?</Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
+          Tap a face to open. A local PIN is optional; without one, one tap opens.
+        </Typography>
+      </>}
     </Box>
-    <Stack direction="row" spacing={4} justifyContent="center" sx={{ flexWrap: 'wrap', rowGap: 3 }}>
+    {/* PORCH-074: the installed app's own browser context opens holding zero
+        registrations. Its front state leads with the pairing prompt (Brian's
+        verbatim ask) and the code input right on the surface — the confused
+        member gets the path named before anything else. Beside the prompt
+        sits the "New here" door for a member with no working device (join
+        link, device link, plain-text code), so admission stays owner-routed
+        on both paths and this device never mints or authorizes credentials. */}
+    {faces.length === 0 && <Box sx={{ textAlign: 'left', mb: 5 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: 'stretch' }}>
+        <Paper elevation={0} sx={{ ...frontPanel, flex: { sm: 5 } }} component="section">
+          <Stack spacing={1.5}>
+            <Typography variant="h6" component="h2">Coming here from another device or browser?</Typography>
+            <Typography>Get your pairing code from the profile section, and enter it here.</Typography>
+            <Typography variant="body2" color="text.secondary">
+              On the device where you are already connected: open Profile, tap “Make pairing code”, and enter that code below.
+            </Typography>
+            <Box component="section" sx={{ pt: 1 }}>
+              <PairingCodeEntry data={data} actions={actions} navigate={navigate} autoFocus showLinkFallback={false} />
+            </Box>
+          </Stack>
+        </Paper>
+        <Paper elevation={0} sx={{ ...frontPanel, flex: { sm: 2 }, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }} component="section">
+          <Typography variant="h6" component="h2">New here</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ my: 1 }}>
+            Use the link or code your family owner sent you.
+          </Typography>
+          <Button variant="outlined" onClick={() => navigate?.('/join')}>Join with your link or code</Button>
+        </Paper>
+      </Stack>
+    </Box>}
+    {faces.length > 0 && <Stack direction="row" spacing={4} justifyContent="center" sx={{ flexWrap: 'wrap', rowGap: 3 }}>
       {faces.map(item => {
         const faceSource = faceFaces[item.identity.id] ?? null;
         return <Stack key={`${item.url}:${item.identity.id}:${item.deviceId}`} spacing={1} alignItems="center" sx={{ width: 108 }}>
@@ -946,7 +993,7 @@ export function WhoIsHere({ data, actions, navigate }) {
           <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{named(item.identity)}</Typography>
         </Stack>;
       })}
-    </Stack>
+    </Stack>}
     <Feedback operation={operation} />
     {chosen && <Paper sx={{ p: 3, mt: 2, textAlign: 'left' }}>
       <Typography variant="h6" gutterBottom>{named(chosen.identity)}</Typography>
@@ -955,7 +1002,9 @@ export function WhoIsHere({ data, actions, navigate }) {
         <Button variant="contained" type="submit" disabled={operation.busy}>Continue as {named(chosen.identity)}</Button>
       </Stack></form>}
     </Paper>}
-    <Button variant="outlined" onClick={() => setAddOpen(true)} sx={{ mt: 5 }}>Add someone</Button>
+    {/* The Add someone sheet serves the chosen-state chooser; the
+        zero-registration lead already shows both doors inline (PORCH-074). */}
+    {faces.length > 0 && <Button variant="outlined" onClick={() => setAddOpen(true)} sx={{ mt: 5 }}>Add someone</Button>}
     <Dialog open={addOpen} onClose={() => setAddOpen(false)} fullWidth maxWidth="xs">
       <DialogTitle>Add someone</DialogTitle>
       <DialogContent><Stack spacing={2}>

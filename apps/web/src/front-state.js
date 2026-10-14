@@ -35,7 +35,12 @@ export function clearSignedOut(storage, origin) {
  * Boot routing.
  * 1. A deep path passes through untouched: the join and device link routes
  *    own their grant consumption wherever the device is.
- * 2. A device with no registrations is the join front door.
+ * 2. A device that owns no registration boots the join front door — except
+ *    an installed home-screen app (PORCH-074): its own browser context
+ *    carries nothing from the browser that installed it, so its first
+ *    launch should lead with the pairing prompt, not the join form. A join
+ *    link in the query still wins (grant consumption over the front state).
+ *    A device link arriving as a deep path already passes through (rule 1).
  * 3. A signed-out registered device renders the front state; grant
  *    consumption wins over the chooser, so a join link tapped on the front
  *    state routes into its flow immediately (never a dead chooser).
@@ -53,9 +58,14 @@ export function selfGrantArrival(search) {
   return new URLSearchParams(search ?? '').get('reauth') === '1';
 }
 
-export function bootRoute({ pathname, search, connections, signedOut = false, pinned = false }) {
+export function bootRoute({ pathname, search, connections, signedOut = false, pinned = false, standalone = false }) {
   if (pathname && pathname !== "/") return pathname;
-  if (!connections.length) return "/join";
+  if (!connections.length) {
+    // PORCH-074: the installed app's first launch is the pairing front
+    // state; every other zero-registration context (and a join link in the
+    // URL) stays the join front door.
+    return standalone && !readJoinQuery(search) ? "/who-is-here" : "/join";
+  }
   if (signedOut) return readJoinQuery(search) ? "/join" : "/who-is-here";
   return connections.length > 1 || pinned ? "/who-is-here" : "/timeline";
 }
