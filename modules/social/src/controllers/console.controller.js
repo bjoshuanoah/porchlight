@@ -440,9 +440,9 @@ export class ConsoleController {
     if (!network) {
       return res.status(409).json({ error: "No network exists yet" });
     }
-    const { name, members } = req.body ?? {};
+    const { name, members, visibility } = req.body ?? {};
     try {
-      const group = await this.groups.create({ networkId: network._id, name, members, createdBy: perimeter.session.did });
+      const group = await this.groups.create({ networkId: network._id, name, members, visibility, createdBy: perimeter.session.did });
       await this.audit.record({ networkId: network._id, did: null, action: "group_create", detail: { groupId: group._id } });
       res.status(201).json({ group });
     } catch (error) {

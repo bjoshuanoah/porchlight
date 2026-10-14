@@ -96,9 +96,9 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     vapid: pushVapid,
     sender: pushSender,
   });
-  const notifications = new NotificationService({ notifications: collections.notifications, membership, push });
+  const notifications = new NotificationService({ notifications: collections.notifications, membership, push, groups: collections.groups });
   const plane = createMemoryEventPlane();
-  realtime = new RealtimeService({ membership, plane });
+  realtime = new RealtimeService({ membership, plane, groups: collections.groups });
   const posts = new PostService({
     posts: collections.posts,
     comments: collections.comments,
@@ -124,6 +124,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     audit,
     realtime,
     push,
+    groups: collections.groups,
   });
 
   for (const networkId of networkIds) {

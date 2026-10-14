@@ -19,7 +19,7 @@ import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './me
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from './reactions.js';
-import { groupRows, groupMemberRows, canManageGroup, addableCandidates } from './groups.js';
+import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility } from './groups.js';
 import { dateOf, relativeTime } from './time.js';
 import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, visibleFeedPosts } from './feed-filter.js';
 import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, pendingReply, conversationOf } from './slice.js';
@@ -1080,8 +1080,8 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
   const current = loaded?.id === selectedId ? loaded : null;
   const group = current?.group ?? groups.find((item) => identityOf(item) === String(selectedId));
   const posts = current ? rows(current.posts).map((post) => atCurrentOrigin(post, data)) : rows(data.posts).filter((post) => String(post.groupId ?? '') === String(selectedId) && (!group?.networkId || String(originOf(post)) === String(group.networkId)));
-  const onCreate = async (name) => {
-    const result = await invoke(actions, 'createGroup', name);
+  const onCreate = async (name, visibility) => {
+    const result = await invoke(actions, 'createGroup', name, visibility);
     setCreating(false);
     if (result?.group?._id) navigate?.(`/groups/${encodeURIComponent(result.group._id)}`);
     return result;
@@ -1100,7 +1100,7 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
     </Stack>}
     {!selectedId && <Stack spacing={2}>
       <Stack direction="row" spacing={1} flexWrap="wrap"><Button variant="contained" onClick={() => setCreating(true)} data-testid="create-group">Create a group</Button></Stack>
-      {groups.length ? <Stack spacing={2}>{groups.map((item) => <Card key={identityOf(item)} variant="outlined"><CardContent><Typography variant="h6">{item.name}</Typography><Typography color="text.secondary">Within {data.network?.name ?? 'this family network'} · {(Array.isArray(item.members) ? item.members.length : 0)} member{(item.members?.length ?? 0) === 1 ? '' : 's'}</Typography><Button onClick={() => navigate?.(`/groups/${encodeURIComponent(identityOf(item))}`)}>View group</Button></CardContent></Card>)}</Stack> : <Alert severity="info">{data.offline || data.availability?.groups === false ? 'Groups cannot be loaded from your family server right now.' : 'No groups yet. Create one — every member of the network can.'}</Alert>}
+      {groups.length ? <Stack spacing={2}>{groups.map((item) => <Card key={identityOf(item)} variant="outlined"><CardContent><Typography variant="h6">{item.name}</Typography><Typography color="text.secondary">Within {data.network?.name ?? 'this family network'} · {(Array.isArray(item.members) ? item.members.length : 0)} member{(item.members?.length ?? 0) === 1 ? '' : 's'} · {groupVisibility(item) === 'public' ? 'Public — the whole network can view' : 'Private — invite-only'}</Typography><Button onClick={() => navigate?.(`/groups/${encodeURIComponent(identityOf(item))}`)}>View group</Button></CardContent></Card>)}</Stack> : <Alert severity="info">{data.offline || data.availability?.groups === false ? 'Groups cannot be loaded from your family server right now.' : 'No groups yet. Create one — every member of the network can.'}</Alert>}
     </Stack>}
     {creating && <CreateGroupDialog data={data} actions={actions} onClose={() => setCreating(false)} onCreate={onCreate} />}
   </Box>;
@@ -1108,16 +1108,30 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
 
 function MembersCard({ group, data, actions, onchanged }) {
   const [adding, setAdding] = useState(false);
+  const [visibilityError, setVisibilityError] = useState('');
   const manage = canManageGroup(group, data);
   const roster = groupMemberRows(group);
+  // Visibility (PORCH-068 ac-1): the managing member flips the group
+  // between private (invite-only) and public (the network views it).
+  const flipVisibility = async () => {
+    const next = groupVisibility(group) === 'public' ? 'private' : 'public';
+    setVisibilityError('');
+    try { await invoke(actions, 'updateGroupVisibility', group._id ?? group.id, next); onchanged?.(); }
+    catch (cause) { setVisibilityError(messageOf(cause)); }
+  };
   return <Card variant="outlined"><CardContent>
     <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
       <Typography variant="h6">Members</Typography>
       {manage && <Button onClick={() => setAdding(true)} data-testid="add-group-members">Add members</Button>}
     </Stack>
     <Typography color="text.secondary" sx={{ mb: 1 }}>
-      {group.createdBy === data.identity?.id ? 'You created this group; you add its members.' : 'Only the group\'s creator (or the network owner) adds members.'}
+      {groupVisibility(group) === 'public' ? 'Public — every member of the network can view this group and its posts.' : 'Private — invite-only; only members see this group and its posts.'}
+      {manage ? (group.createdBy === data.identity?.id ? ' You created this group; you add its members.' : ' Only the group\'s creator (or the network owner) adds members.') : ''}
     </Typography>
+    {manage && <Button size="small" sx={{ mb: 1 }} onClick={() => void flipVisibility()} data-testid="toggle-group-visibility">
+      {groupVisibility(group) === 'public' ? 'Make private' : 'Make public'}
+    </Button>}
+    {visibilityError && <Alert severity="error">{visibilityError}</Alert>}
     <List dense disablePadding>
       {roster.map((member) => <ListItemButton key={member.did} disableGutters>
         <ListItemText primary={member.name ?? (member.did === data.identity?.id ? 'You' : member.did)}
@@ -1131,13 +1145,16 @@ function MembersCard({ group, data, actions, onchanged }) {
 
 function CreateGroupDialog({ data, actions, onClose, onCreate }) {
   const [name, setName] = useState('');
+  const [visibility, setVisibility] = useState('private');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  // New groups default private (PORCH-068 ac-1, the ruling's [Assumed]
+  // default); the creator picks public explicitly at creation.
   const save = async () => {
     if (!name.trim()) { setError('A group needs a name.'); return; }
     setSaving(true);
     setError('');
-    try { await onCreate(name); } catch (cause) { setError(messageOf(cause)); setSaving(false); }
+    try { await onCreate(name, visibility); } catch (cause) { setError(messageOf(cause)); setSaving(false); }
   };
   return <Dialog open onClose={onClose} aria-label="Create a group">
     <DialogTitle>Create a group</DialogTitle>
@@ -1145,6 +1162,13 @@ function CreateGroupDialog({ data, actions, onClose, onCreate }) {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>A space within {data.network?.name ?? 'your family network'}. You create it, you add its members — its posts stay inside the network.</Typography>
       <TextField autoFocus fullWidth label="Group name" value={name} onChange={(event) => setName(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter') void save(); }} error={Boolean(error)} helperText={error} />
+      <FormControl fullWidth sx={{ mt: 2 }}>
+        <InputLabel id="group-visibility-label">Who can see it</InputLabel>
+        <Select labelId="group-visibility-label" label="Who can see it" value={visibility} onChange={(event) => setVisibility(event.target.value)}>
+          <MenuItem value="private">Private — invite-only; only members see its posts</MenuItem>
+          <MenuItem value="public">Public — the whole network can view its posts</MenuItem>
+        </Select>
+      </FormControl>
     </DialogContent>
     <DialogActions>
       <Button onClick={onClose}>Cancel</Button>
@@ -1410,7 +1434,11 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
   const operation = useOperation();
   const reset = () => { setBody(''); setCaption(''); setFiles([]); setGroupId(''); setType('text'); setPreview(null); setPreviewAttached(true); setPreviewLoading(false); lastResolvedRef.current = null; };
   const mediaType = type !== 'text';
-  const groups = groupRows(data.groups, data.network?.id);
+  // PORCH-068 ac-4: the composer offers only the groups the author belongs
+  // to — the write target picker never shows another member's group (the
+  // server refuses group-targeted writes from non-members; the gate is
+  // server-enforced, this keeps the picker honest).
+  const groups = composableGroups(groupRows(data.groups, data.network?.id), data.identity?.id);
   // Debounce-tolerant detection: one resolve per distinct URL once typing
   // settles — mid-typing URL fragments don't fire hub fetches (bounded
   // fetch hygiene); the chip re-arms on URL change and no chip at all when

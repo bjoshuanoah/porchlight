@@ -63,13 +63,14 @@ export async function createRedisEventPlane(
   const everKey = (networkId: string) => `${CHANNEL_PREFIX}:ever:${networkId}`;
 
   const toEnvelope = (entry: { id: string; message: Record<string, string> }): RealtimeEnvelope => {
-    const { content, ...event } = entry.message;
+    const { content, groupTarget, ...event } = entry.message;
     return {
       ...event,
       postId: event.postId === "" ? null : event.postId,
+      groupId: groupTarget === "" ? null : groupTarget,
       content: content === "" ? null : (JSON.parse(content) as unknown),
       seq: entry.id,
-    } as RealtimeEnvelope;
+    } as unknown as RealtimeEnvelope;
   };
 
   const inbound = new Set<(networkId: string, envelope: RealtimeEnvelope) => void>();
@@ -98,6 +99,9 @@ export async function createRedisEventPlane(
       // The stream entry id IS the cursor (opaque "<epochMs>-<n>"); the
       // MAXLEN trim keeps the per-origin window bounded inside the 24h
       // replay contract (`realtime.replayHours`, packages/shared).
+      // PORCH-068: the post's group target rides the window too — the
+      // private-group delivery gate resolves from it at REPLAY time the
+      // same way the live pub/sub side carries it.
       const seq = await publisher.xAdd(
         streamKey(networkId),
         "*",
@@ -105,6 +109,7 @@ export async function createRedisEventPlane(
           type: String(event.type),
           networkId: String(event.networkId),
           postId: String(event.postId ?? ""),
+          groupTarget: String(event.groupId ?? ""),
           createdAt: String(event.createdAt),
           content: event.content === undefined || event.content === null ? "" : JSON.stringify(event.content),
         },

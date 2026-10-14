@@ -64,6 +64,7 @@ export class GroupsController {
       E_GROUP_NOT_CREATOR: 403,
       E_GROUP_NAME_REQUIRED: 400,
       E_GROUP_MEMBERS_INVALID: 400,
+      E_GROUP_VISIBILITY_INVALID: 400,
     };
     const status = statusByCode[error.code] ?? 500;
     const message =
@@ -73,19 +74,24 @@ export class GroupsController {
     res.status(status).json({ error: message, code: error.code ?? "E_INTERNAL" });
   }
 
-  /** GET /groups — every group container on the member's origin network (ac-1). */
+  /** GET /groups — every group container on the member's origin network (ac-1);
+   *  a private group the member does not hold is not on the index (PORCH-068 ac-2). */
   list = async (req, res) => {
     const perimeter = await this.#requireMember(req, res);
     if (!perimeter) return;
     try {
-      const groups = await this.groups.list({ networkId: perimeter.membership.networkId });
+      const groups = await this.groups.list({
+        networkId: perimeter.membership.networkId,
+        viewerDid: perimeter.session.did,
+      });
       res.json({ groups });
     } catch (error) {
       this.memberError(res, error);
     }
   };
 
-  /** GET /groups/:groupId — one group, origin-scoped (ac-1; the Members view reads this). */
+  /** GET /groups/:groupId — one group, origin-scoped (ac-1; the Members view reads this).
+   *  A private group opens only for its members (PORCH-068 ac-2). */
   detail = async (req, res) => {
     const perimeter = await this.#requireMember(req, res);
     if (!perimeter) return;
@@ -93,6 +99,7 @@ export class GroupsController {
       const group = await this.groups.get({
         networkId: perimeter.membership.networkId,
         groupId: req.params?.groupId,
+        viewerDid: perimeter.session.did,
       });
       res.json({ group });
     } catch (error) {
@@ -103,17 +110,20 @@ export class GroupsController {
   /**
    * POST /groups — open group creation for every member (ac-2): no owner or
    * delegate elevation; the calling member is recorded as the group's
-   * creator and enters its membership.
+   * creator and enters its membership. The creator picks the group's
+   * visibility at creation (PORCH-068 ac-1): private by default, public
+   * explicitly.
    */
   create = async (req, res) => {
     const perimeter = await this.#requireMember(req, res);
     if (!perimeter) return;
-    const { name, members } = req.body ?? {};
+    const { name, members, visibility } = req.body ?? {};
     try {
       const group = await this.groups.create({
         networkId: perimeter.membership.networkId,
         name,
         members,
+        visibility,
         createdBy: perimeter.session.did,
       });
       await this.audit.record({
@@ -151,6 +161,35 @@ export class GroupsController {
         did: perimeter.session.did,
         action: "group_member_add",
         detail: { groupId: group._id, added: dids },
+      });
+      res.status(200).json({ group });
+    } catch (error) {
+      this.memberError(res, error);
+    }
+  };
+
+  /**
+   * POST /groups/:groupId/visibility — the Members view's visibility change
+   * (PORCH-068 ac-1): the group's creator (or the network owner) flips a
+   * group between private and public; the group service enforces the same
+   * managing-member authority as membership.
+   */
+  updateVisibility = async (req, res) => {
+    const perimeter = await this.#requireMember(req, res, "groups.members");
+    if (!perimeter) return;
+    const visibility = req.body?.visibility;
+    try {
+      const group = await this.groups.updateVisibility({
+        groupId: req.params?.groupId,
+        networkId: perimeter.membership.networkId,
+        actorDid: perimeter.session.did,
+        visibility,
+      });
+      await this.audit.record({
+        networkId: perimeter.membership.networkId,
+        did: perimeter.session.did,
+        action: "group_visibility_change",
+        detail: { groupId: group._id, visibility },
       });
       res.status(200).json({ group });
     } catch (error) {

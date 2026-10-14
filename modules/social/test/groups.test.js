@@ -75,10 +75,11 @@ async function mkPost(fx, token, memberDevice, payload) {
 
 /* ---- ac-1: member-visible groups index and detail ------------------------ */
 
-test("ac-1: the groups index and detail render for every member, scoped to their origin", async () => {
+test("ac-1: the groups index and detail render for members; a private group hides from non-members", async () => {
   const fx = await memberFixture();
   const { base, close } = await serve(fx.mod);
   const ownerAuth = { "content-type": "application/json", authorization: `Bearer ${fx.tokens.owner}` };
+  const devonAuth = { authorization: `Bearer ${fx.tokens.devon}` };
   try {
     const created = await fetch(`${base}/console/groups`, {
       method: "POST",
@@ -88,15 +89,29 @@ test("ac-1: the groups index and detail render for every member, scoped to their
     assert.equal(created.status, 201);
     const groupId = (await created.json()).group._id;
 
-    // A plain member (no owner elevation) reads the groups index.
-    const list = await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.cass}` } });
+    // PORCH-068 ac-2: the group is private by default — a member who holds
+    // no group membership never sees it on the index.
+    const cassList = await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.cass}` } });
+    assert.equal(cassList.status, 200);
+    assert.deepEqual((await cassList.json()).groups.map((row) => row.name), []);
+
+    // ...and the private group's detail (the Members view's read) and
+    // timeline are refused unknown-shaped, as if it did not exist.
+    const CassAuth = { authorization: `Bearer ${fx.tokens.cass}` };
+    const hidden = await fetch(`${base}/groups/${groupId}`, { headers: CassAuth });
+    assert.equal(hidden.status, 404);
+    assert.equal((await hidden.json()).code, "E_GROUP_UNKNOWN");
+    const hiddenTimeline = await fetch(`${base}/timeline/groups/${groupId}`, { headers: CassAuth });
+    assert.equal(hiddenTimeline.status, 404);
+
+    // A group member reads the index and opens the detail (the Members view).
+    const list = await fetch(`${base}/groups`, { headers: devonAuth });
     assert.equal(list.status, 200);
     const groups = (await list.json()).groups;
     assert.deepEqual(groups.map((row) => row.name), ["Picnic"]);
     assert.equal(groups[0].networkId, FAMILY);
 
-    // ...and opens it to its group detail (the Members view reads this).
-    const detail = await fetch(`${base}/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.cass}` } });
+    const detail = await fetch(`${base}/groups/${groupId}`, { headers: devonAuth });
     assert.equal(detail.status, 200);
     const group = (await detail.json()).group;
     assert.equal(group._id, groupId);
@@ -108,9 +123,39 @@ test("ac-1: the groups index and detail render for every member, scoped to their
     assert.deepEqual(group.names, { [OWNER]: "Brian Rivers", [DEVON]: "Devon Mills" });
 
     // ...and opens its group timeline (origin-filtered, member-scoped).
-    const timeline = await fetch(`${base}/timeline/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.cass}` } });
+    const timeline = await fetch(`${base}/timeline/groups/${groupId}`, { headers: devonAuth });
     assert.equal(timeline.status, 200);
     assert.equal((await timeline.json()).group.name, "Picnic");
+
+    // A member who belongs flips it public; then every member sees it on
+    // the index and opens the detail (PORCH-068 ac-1 change + ac-3).
+    const flip = await fetch(`${base}/groups/${groupId}/visibility`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...ownerAuth },
+      body: JSON.stringify({ visibility: "public" }),
+    });
+    assert.equal(flip.status, 200);
+    assert.equal((await flip.json()).group.visibility, "public");
+    const cassAfter = await fetch(`${base}/groups/${groupId}`, { headers: CassAuth });
+    assert.equal(cassAfter.status, 200);
+    assert.equal((await cassAfter.json()).group.members.length, 2);
+
+    // A plain member who manages nothing cannot flip it.
+    const strangerFlip = await fetch(`${base}/groups/${groupId}/visibility`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.devon}` },
+      body: JSON.stringify({ visibility: "private" }),
+    });
+    assert.equal(strangerFlip.status, 403);
+    assert.equal((await strangerFlip.json()).code, "E_GROUP_NOT_CREATOR");
+    // ...and an invalid visibility never stores.
+    const invalidFlip = await fetch(`${base}/groups/${groupId}/visibility`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...ownerAuth },
+      body: JSON.stringify({ visibility: "secret" }),
+    });
+    assert.equal(invalidFlip.status, 400);
+    assert.equal((await invalidFlip.json()).code, "E_GROUP_VISIBILITY_INVALID");
 
     // Anonymous reads are 401; membership is the perimeter.
     const anon = await fetch(`${base}/groups`);
@@ -135,6 +180,162 @@ test("ac-1: the groups index and detail render for every member, scoped to their
     const foreign = await fetch(`${base}/groups/${groupId}`, { headers: { authorization: `Bearer ${admitted.accessToken}` } });
     assert.equal(foreign.status, 404);
     assert.equal((await foreign.json()).code, "E_GROUP_UNKNOWN");
+  } finally {
+    close();
+  }
+});
+
+/* ---- ac-1 (PORCH-068): private default, public opt-in, legacy resolution -- */
+
+test("ac-1: new groups default private, public needs the pick, legacy rows resolve private", async () => {
+  const fx = await memberFixture();
+  const { base, close } = await serve(fx.mod);
+  const cassAuth = { "content-type": "application/json", authorization: `Bearer ${fx.tokens.cass}` };
+  try {
+    const created = await fetch(`${base}/groups`, {
+      method: "POST",
+      headers: cassAuth,
+      body: JSON.stringify({ name: "Boat Club" }),
+    });
+    assert.equal(created.status, 201);
+    const group = (await created.json()).group;
+    assert.equal(group.visibility, "private", "a new group defaults private");
+
+    // An explicit public pick stores public.
+    const opened = await fetch(`${base}/groups`, {
+      method: "POST",
+      headers: cassAuth,
+      body: JSON.stringify({ name: "Harbor", visibility: "public" }),
+    });
+    assert.equal((await opened.json()).group.visibility, "public");
+
+    // An unknown pick is refused.
+    const bad = await fetch(`${base}/groups`, {
+      method: "POST",
+      headers: cassAuth,
+      body: JSON.stringify({ name: "Nah", visibility: "secret" }),
+    });
+    assert.equal(bad.status, 400);
+    assert.equal((await bad.json()).code, "E_GROUP_VISIBILITY_INVALID");
+
+    // Groups before this change carry no visibility field and resolve
+    // private — Brian's sister's group class.
+    const legacy = {
+      _id: "grp_legacy", networkId: FAMILY, name: "Sister's group",
+      createdBy: DEVON, members: [DEVON], createdAt: new Date().toISOString(),
+    };
+    await fx.collections.groups.insertOne(legacy);
+    // The old row resolves private: the member inside it (Devon) still
+    // sees it on their index; the member outside it (Pip) does not.
+    const devonRows = (await (await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.devon}` } })).json()).groups.map((row) => row.name).sort();
+    assert.deepEqual(devonRows, ["Harbor", "Sister's group"], "a member of the legacy group still sees it");
+    const pipRows = (await (await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } })).json()).groups.map((row) => row.name);
+    assert.deepEqual(pipRows, ["Harbor"], "the legacy private group hides from a non-member");
+    // The legacy group's member list renders only for its members.
+    const nonMember = await fetch(`${base}/groups/grp_legacy`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } });
+    assert.equal(nonMember.status, 404);
+  } finally {
+    close();
+  }
+});
+
+/* ---- ac-2 (PORCH-068): private-group posts hide from non-members ---------- */
+
+test("ac-2: a private-group post never renders for a non-member on any surface", async () => {
+  const fx = await memberFixture();
+  const { close } = await serve(fx.mod);
+  try {
+    const group = await fx.groups.create({ networkId: FAMILY, name: "Picnic", members: [CASS], createdBy: CASS });
+    await fx.collections.groups.updateOne({ _id: group._id }, { $set: { members: [CASS] } });
+    const secret = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "hidden from pip", caption: "secret picnic", groupId: group._id });
+    const plain = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "plain post" });
+
+    // A group member sees both posts on the main feed, and the private
+    // post's group timeline (the standing group-post rule keeps).
+    const memberFeed = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.cass })).posts.map((post) => post._id).sort();
+    assert.deepEqual(memberFeed, [plain._id, secret._id].sort());
+    const groupTimeline = (await fx.mod.feedService.groupTimeline({ accessToken: fx.tokens.cass, groupId: group._id })).posts;
+    assert.deepEqual(groupTimeline.map((post) => post._id), [secret._id]);
+
+    // A non-member sees only the plain post everywhere: main feed, ranked,
+    // search (matching the private post's caption), and the legacy list read.
+    const feed = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.pip })).posts.map((post) => post._id);
+    assert.deepEqual(feed, [plain._id]);
+    const ranked = (await fx.mod.feedService.ranked({ accessToken: fx.tokens.pip })).posts.map((post) => post._id);
+    assert.deepEqual(ranked, [plain._id]);
+    const results = (await fx.mod.feedService.search({ accessToken: fx.tokens.pip, query: "secret picnic" })).posts.map((post) => post._id);
+    assert.deepEqual(results, []);
+    const listed = (await fx.mod.postService.list({ accessToken: fx.tokens.pip })).posts.map((post) => post._id);
+    assert.deepEqual(listed, [plain._id]);
+
+    // The private post's detail reads as not-found for the non-member.
+    await assert.rejects(
+      () => fx.mod.postService.get({ accessToken: fx.tokens.pip, postId: secret._id }),
+      (error) => error.code === "E_POST_NOT_FOUND",
+    );
+
+    // Its conversation refuses the non-member plain-language on reads too.
+    await assert.rejects(
+      () => fx.mod.interactionService.commentThread({ accessToken: fx.tokens.pip, postId: secret._id }),
+      (error) => error.code === "E_GROUP_NOT_MEMBER",
+    );
+    await assert.rejects(
+      () => fx.mod.interactionService.reactionsFor({ accessToken: fx.tokens.pip, postId: secret._id }),
+      (error) => error.code === "E_GROUP_NOT_MEMBER",
+    );
+
+    // Albums skip the private post entirely: a non-member's album list
+    // never counts it, even when a member keyed it into an album.
+    const payload = { kind: "album.add", networkId: FAMILY, postId: secret._id, album: "Boat trip" };
+    await fx.mod.albumService.addItem({ accessToken: fx.tokens.cass, name: "Boat trip", postId: secret._id, signature: fx.devs.cass.signPayload(payload) });
+    const albums = (await fx.mod.albumService.list({ accessToken: fx.tokens.pip })).albums;
+    assert.deepEqual(albums, [], "the album renders nothing for the non-member");
+  } finally {
+    close();
+  }
+});
+
+/* ---- ac-3 (PORCH-068): public groups viewable by the whole network --------- */
+
+test("ac-3: a public group and its posts render for the whole network; non-member writes still refuse", async () => {
+  const fx = await memberFixture();
+  const { base, close } = await serve(fx.mod);
+  try {
+    const group = await fx.groups.create({ networkId: FAMILY, name: "Harbor", members: [CASS], createdBy: CASS, visibility: "public" });
+    const groupId = group._id;
+    const harbor = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "dock party", groupId });
+
+    // Every member sees the group on the index and opens detail + timeline.
+    const list = (await (await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } })).json()).groups.map((row) => row._id);
+    assert.deepEqual(list, [groupId]);
+    const detail = await fetch(`${base}/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } });
+    assert.equal(detail.status, 200);
+    const timeline = await fetch(`${base}/timeline/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } });
+    assert.equal(timeline.status, 200);
+    assert.deepEqual((await timeline.json()).posts.map((post) => post._id), [harbor._id]);
+
+    // The post rides the whole network's main feed and ranked path exactly
+    // as today (with its group chip for every viewer).
+    void groupId;
+    const pipFeed = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.pip })).posts;
+    assert.ok(pipFeed.some((post) => post._id === harbor._id));
+    assert.equal(pipFeed.find((post) => post._id === harbor._id).groupName, "Harbor");
+    const pipRanked = (await fx.mod.feedService.ranked({ accessToken: fx.tokens.pip })).posts;
+    assert.ok(pipRanked.some((post) => post._id === harbor._id));
+
+    // Public conversation reads stay open to any network member.
+    const comments = await fx.mod.interactionService.commentThread({ accessToken: fx.tokens.pip, postId: harbor._id });
+    assert.deepEqual(comments.comments, []);
+
+    // Trailing spec point ([Assumed], open pending Brian): viewing is the
+    // ruling for non-members — posting rights into a public group stay
+    // governed by the shipped membership gate, which refuses the non-member
+    // with plain language and zero documents.
+    const payload = { type: "text", body: "nope", groupId };
+    await assert.rejects(
+      () => fx.mod.postService.create({ accessToken: fx.tokens.pip, payload, signature: fx.devs.pip.signPayload(payload) }),
+      (error) => error.code === "E_GROUP_NOT_MEMBER",
+    );
   } finally {
     close();
   }
@@ -165,9 +366,12 @@ test("ac-2: any member creates a group without elevation; the creator is recorde
     assert.equal(auditRow.did, CASS);
     assert.equal(auditRow.detail.groupId, group._id);
 
-    // The group is on the member-visible index for the whole network.
-    const list = await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } });
-    assert.deepEqual((await list.json()).groups.map((row) => row._id), [group._id]);
+    // The private group is on the index only for its members (PORCH-068):
+    // the creator sees it; a member outside the group does not.
+    const ownIndex = await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.cass}` } });
+    assert.deepEqual((await ownIndex.json()).groups.map((row) => row._id), [group._id]);
+    const otherIndex = await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } });
+    assert.deepEqual((await otherIndex.json()).groups.map((row) => row._id), []);
 
     // No elevation required: a fresh token with no owner role creates fine
     // (the owner-role guard would be 403 — creation is the member plane).

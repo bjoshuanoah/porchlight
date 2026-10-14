@@ -178,7 +178,7 @@ export function assembleSocialModule(store, options = {}) {
     sender: options.push?.sender ?? null,
     log: options.log ?? null,
   });
-  const notificationService = new NotificationService({ notifications, membership: membershipService, push: pushService });
+  const notificationService = new NotificationService({ notifications, membership: membershipService, push: pushService, groups });
   // Real-time event delivery (PORCH-047): the event plane is injected by
   // the hub runtime (Redis-backed fan-out + replay window) and defaults to
   // the in-memory plane (tests, daemon-less runs). The service needs only
@@ -189,6 +189,10 @@ export function assembleSocialModule(store, options = {}) {
   const realtimeService = new RealtimeService({
     membership: membershipService,
     plane: options.realtime?.plane ?? createMemoryEventPlane(),
+    // PORCH-068: the private-group event gate resolves the group's live
+    // roster at delivery/replay time (member-added events reach new
+    // members from their add onward).
+    groups,
     replayHours: options.realtime?.replayHours ?? 24,
   });
   // Media pipeline (PORCH-008): the blob store is content-addressed —
@@ -293,6 +297,7 @@ export function assembleSocialModule(store, options = {}) {
     realtime: realtimeService,
     previews: linkPreviewService,
     push: pushService,
+    groups,
   });
   const rankingService = new RankingService({ config: options.rankingConfig ? normalizeRankingConfig(options.rankingConfig) : undefined });
   const feedService = new FeedService({
@@ -325,6 +330,7 @@ export function assembleSocialModule(store, options = {}) {
     media: mediaService,
     postsService: postService,
     audit,
+    groups,
   });
   // Member administration (PORCH-053): the owner-only permanent deletion —
   // the typed-confirmation gate plus the sovereignty purge (content sweep,

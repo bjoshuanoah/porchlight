@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { typedError, newestFirstByActivity, postView } from "./post.service.js";
+import { postVisibleToViewer, canSeeGroup } from "./group.service.js";
 import { socialModels } from "../models.js";
 
 /** Plain-language album-surface failures for member clients. */
@@ -58,15 +59,18 @@ export class AlbumService {
    * @param {import("./media.service.js").MediaService} deps.media
    * @param {import("./post.service.js").PostService} deps.postsService
    *   borrowed only for the shared transactional cascade mechanism.
+   * @param {import("@porchlight/shared").CollectionLike} [deps.groups]
+   *   PORCH-068: the group collection behind the private-group album filter.
    * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
    */
-  constructor({ derivedData, posts, membership, media, postsService, audit }) {
+  constructor({ derivedData, posts, membership, media, postsService, audit, groups = null }) {
     this.derivedData = derivedData;
     this.posts = posts;
     this.membership = membership;
     this.media = media;
     this.postsService = postsService;
     this.audit = audit ?? (async () => {});
+    this.groups = groups;
     this.models = socialModels;
   }
 
@@ -74,7 +78,7 @@ export class AlbumService {
   async list({ accessToken } = {}) {
     const session = await this.#requireSession(accessToken);
     const rows = await this.derivedData.find({ networkId: session.networkId, class: ALBUM_CLASS });
-    const postsById = await this.#originPostsById(session.networkId);
+    const postsById = await this.#originPostsById(session.networkId, session.did);
     const albums = new Map();
     for (const row of rows) {
       const post = postsById.get(row.postId);
@@ -107,7 +111,7 @@ export class AlbumService {
     if (rows.length === 0) {
       throw typedError("E_ALBUM_NOT_FOUND", ALBUM_MESSAGES.E_ALBUM_NOT_FOUND);
     }
-    const postsById = await this.#originPostsById(session.networkId);
+    const postsById = await this.#originPostsById(session.networkId, session.did);
     const items = rows.map((row) => postsById.get(row.postId)).filter((post) => post);
     newestFirstByActivity(items);
     return {
@@ -151,7 +155,7 @@ export class AlbumService {
       payload: { kind: "album.add", networkId: session.networkId, postId: targetId, album: normalized },
       signature,
     });
-    const post = await this.#originPost(targetId, session.networkId);
+    const post = await this.#originPost(targetId, session.networkId, session.did);
     if (!post) {
       throw typedError("E_POST_NOT_FOUND", ALBUM_MESSAGES.E_POST_NOT_FOUND);
     }
@@ -195,7 +199,7 @@ export class AlbumService {
       payload: { kind: "album.remove", networkId: session.networkId, postId: targetId, album: normalized },
       signature,
     });
-    const post = await this.#originPost(targetId, session.networkId);
+    const post = await this.#originPost(targetId, session.networkId, session.did);
     if (!post) {
       throw typedError("E_POST_NOT_FOUND", ALBUM_MESSAGES.E_POST_NOT_FOUND);
     }
@@ -258,7 +262,7 @@ export class AlbumService {
     if (rows.length === 0) {
       throw typedError("E_ALBUM_NOT_FOUND", ALBUM_MESSAGES.E_ALBUM_NOT_FOUND);
     }
-    const postsById = await this.#originPostsById(session.networkId);
+    const postsById = await this.#originPostsById(session.networkId, session.did);
     const seen = new Set();
     const entries = [];
     for (const row of rows) {
@@ -320,15 +324,30 @@ export class AlbumService {
     return rows.filter((row) => row.value === name);
   }
 
-  async #originPostsById(networkId) {
+  async #originPostsById(networkId, did = null) {
     const rows = await this.posts.find({ originNetworkId: networkId });
-    return new Map(rows.map((post) => [post._id, post]));
+    // PORCH-068 ac-2 ("any surface"): a private-group post is not an album
+    // item a non-member resolves — item counts, covers, and media serving
+    // lists skip it exactly as the feed paths do. Write-time target
+    // resolution (#originPost) applies the same gate.
+    if (!did) return new Map(rows.map((post) => [post._id, post]));
+    const groupsById = new Map((await this.groups.find({ networkId: String(networkId) })).map((group) => [group._id, group]));
+    return new Map(rows.filter((post) => postVisibleToViewer(post, groupsById, did)).map((post) => [post._id, post]));
   }
 
-  async #originPost(postId, networkId) {
+  async #originPost(postId, networkId, did = null) {
     if (!postId) return null;
     const post = await this.posts.findOne({ _id: postId });
-    return post && post.originNetworkId === networkId ? post : null;
+    if (!post || post.originNetworkId !== networkId) return null;
+    // PORCH-068 ac-2 ("any surface"): album writes resolve the target post
+    // too — a non-member cannot key a private-group post into an album of
+    // their own; the read-side filter already hides such rows from them,
+    // and the add must not create the invisible item in the first place.
+    if (post.groupId && did !== null) {
+      const group = await this.groups.findOne({ _id: post.groupId });
+      if (!canSeeGroup(group, did)) return null;
+    }
+    return post;
   }
 
   #normalizeName(name) {

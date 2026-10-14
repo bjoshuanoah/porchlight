@@ -878,14 +878,23 @@ function App() {
       const annotate = (post) => origin ? { ...post, origin } : post;
       return { group: { ...detail.group, ...timeline.group }, posts: (timeline.posts ?? []).map(annotate) };
     },
-    createGroup: async (name) => {
-      const result = await request(active, "social/groups", { method: "POST", body: JSON.stringify({ name }) });
+    createGroup: async (name, visibility) => {
+      const result = await request(active, "social/groups", { method: "POST", body: JSON.stringify({ name, visibility }) });
       await reload();
       return result;
     },
     addGroupMembers: async (groupId, dids) => {
       const result = await request(active, `social/groups/${encodeURIComponent(groupId)}/members`, {
         method: "POST", body: JSON.stringify({ dids }),
+      });
+      await reload();
+      return result;
+    },
+    // Visibility change (PORCH-068 ac-1): the managing member flips a group
+    // between private (invite-only) and public (the network views it).
+    updateGroupVisibility: async (groupId, visibility) => {
+      const result = await request(active, `social/groups/${encodeURIComponent(groupId)}/visibility`, {
+        method: "POST", body: JSON.stringify({ visibility }),
       });
       await reload();
       return result;

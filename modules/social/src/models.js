@@ -155,12 +155,15 @@ export const socialModels = {
   },
   /**
    * Group (PORCH-006, groups ruling Brian Oct 8 2026; creation + membership
-   * management amended Oct 14 2026): a container inside a network with its
-   * own timeline in the feed layer. Every network member can create a
-   * group, and the creating member manages its membership (the earlier
-   * owner-or-delegate management wording is superseded). Group membership
-   * is a subset of that network's membership. A post belongs to at most one
-   * network and at most one group; no cross-network groups in V1.
+   * management amended Oct 14 2026; visibility ruling Oct 14 2026,
+   * PORCH-068): a container inside a network with its own timeline in the
+   * feed layer. Every network member can create a group, and the creating
+   * member manages its membership (the earlier owner-or-delegate management
+   * wording is superseded). Group membership is a subset of that network's
+   * membership. A post belongs to at most one network and at most one
+   * group; no cross-network groups in V1. `visibility`: private is
+   * invite-only and members-only everywhere; public is viewable by the
+   * whole network. Rows predating the field resolve private.
    */
   group: {
     type: "object",
@@ -173,6 +176,8 @@ export const socialModels = {
       createdBy: { type: ["string", "null"] },
       /** Subset of the network's active membership (member DIDs). */
       members: { type: "array", items: { type: "string" } },
+      /** private (invite-only, members-only everywhere) | public (the whole network views). */
+      visibility: { type: "string", enum: ["private", "public"] },
       createdAt: { type: "string" },
     },
   },

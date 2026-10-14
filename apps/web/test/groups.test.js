@@ -3,7 +3,7 @@
 // without a DOM.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupRows, groupMemberRows, canManageGroup, addableCandidates } from "../src/groups.js";
+import { groupRows, groupMemberRows, canManageGroup, addableCandidates, groupVisibility, composableGroups } from "../src/groups.js";
 
 const NET = "net_family";
 const identity = (id, name) => ({ id, name });
@@ -66,4 +66,25 @@ test("addableCandidates: origin candidates minus the group's existing membership
   ]);
   // Everyone already in the group means the picker says so, not an empty list crash.
   assert.deepEqual(addableCandidates([{ did: "did:cass" }], group), []);
+});
+
+test("groupVisibility: absent field resolves private; public reads as public", () => {
+  assert.equal(groupVisibility({ visibility: "public" }), "public");
+  assert.equal(groupVisibility({}), "private", "rows predating the visibility field resolve private");
+  assert.equal(groupVisibility(null), "private");
+});
+
+test("composableGroups: the composer offers only groups the author belongs to", () => {
+  const groups = [
+    { _id: "grp_mine_private", networkId: NET, name: "Picnic", members: ["did:cass"] },
+    { _id: "grp_public_not_mine", networkId: NET, name: "Harbor", members: ["did:devon"], visibility: "public" },
+    { _id: "grp_mine_public", networkId: NET, name: "Boat Club", members: ["did:cass"], visibility: "public" },
+  ];
+  const composable = composableGroups(groups, "did:cass");
+  assert.deepEqual(
+    composable.map((group) => group._id),
+    ["grp_mine_private", "grp_mine_public"],
+    "never another member's group — private or public",
+  );
+  assert.deepEqual(composableGroups(groups, null), [], "no did, no targets");
 });
