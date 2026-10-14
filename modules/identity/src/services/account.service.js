@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { avatarMetas } from "./avatar.service.js";
 
 /**
  * Account service (Slice B): bootstrap-period account surface for the
@@ -330,6 +331,9 @@ export class AccountService {
    * against the identity rows. Read-only display fields only — the social
    * module consumes this through the server-wired boundary callback and never
    * reads identity internals (CI boundary).
+   * PORCH-070: rows now carry the face too — the avatar's per-rung square
+   * stamps (or null), so authored-content views render the family's faces;
+   * the social module passes the shape through verbatim and derives no URL.
    */
   async namesFor(dids = []) {
     const wanted = [...new Set((dids ?? []).filter((did) => typeof did === "string" && did.length > 0))];
@@ -342,9 +346,38 @@ export class AccountService {
           .filter((part) => typeof part === "string" && part.length > 0)
           .join(" ");
         const displayName = row.displayName ?? (composed || null);
-        return displayName ? { did: row.did, displayName } : null;
+        if (!displayName && !row.avatar) return null;
+        return {
+          did: row.did,
+          displayName: displayName ?? null,
+          avatar: avatarMetas(row.avatar),
+        };
       })
       .filter((row) => row !== null);
+  }
+
+  /**
+   * The member's own account read (PORCH-070 GET /accounts/me): the
+   * session-bound self view of the account record. Carries the avatar's
+   * per-rung stamps (the "avatar blob" the profile reads already ride) and
+   * — for pre-PORCH-070 owner-setup rows — the legacy data-URL face that
+   * still renders until the first treated upload replaces it.
+   */
+  async accountFor({ did } = {}) {
+    const row = did ? await this.identities.findOne({ did }) : null;
+    if (!row) throw typed("E_IDENTITY_NOT_FOUND", `no identity for ${did}`);
+    return {
+      did: row.did,
+      firstName: row.firstName ?? null,
+      lastName: row.lastName ?? null,
+      displayName: row.displayName ?? null,
+      email: row.email ?? null,
+      handle: row.handle ?? null,
+      actorType: row.actorType,
+      avatar: avatarMetas(row.avatar),
+      legacyAvatar: typeof row.profile?.avatar === "string" ? row.profile.avatar : null,
+      createdAt: row.createdAt,
+    };
   }
 
   /** Update the identity's profile fields (profile data lives on the account row). */

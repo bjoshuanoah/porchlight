@@ -1,4 +1,5 @@
 export declare const DOMAIN: string;
+export declare function canonicalJson(value: unknown): string;
 export declare function isPresent(value: unknown): boolean;
 
 export declare const CONFIG_SCHEMA_VERSION: number;

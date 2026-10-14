@@ -27,9 +27,15 @@ test("the V1 route table admits no federation surface (perimeter fence audit)", 
   const apiPaths = routePaths(identity.api);
   assert.deepEqual(apiPaths, [
     "GET /account",
+    // PORCH-070: the member's own account read + the profile photo surface.
+    "GET /accounts/me",
+    // PORCH-070: the avatar rendition serving surface (member faces)
+    "GET /avatars/:did/renditions/:kind",
     "GET /devices",
     "GET /did/:did",
     "POST /account/profile",
+    // PORCH-070: upload/replace/clear — one route carries all three actions.
+    "POST /accounts/me/avatar",
     "POST /bootstrap/account",
     "POST /bootstrap/adopt",
     "POST /device-link",

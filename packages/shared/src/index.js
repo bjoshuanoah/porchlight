@@ -10,6 +10,29 @@ import { isAbsolute, join } from "node:path";
 
 export const DOMAIN = "porchlight";
 
+/**
+ * Canonical JSON encoding (sorted keys, arrays in order) — the stable
+ * byte-string device signatures are verified over. The web device vault
+ * (apps/web/src/device.js `canonical`) and the social plane's write
+ * verification (membership.js `verifyMemberWrite`) both sign exactly this
+ * encoding, so it lives here as cross-module wire law, not per-module code.
+ */
+export function canonicalJson(value) {
+  return JSON.stringify(canonicalKeys(value));
+}
+
+function canonicalKeys(value) {
+  if (Array.isArray(value)) return value.map(canonicalKeys);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalKeys(value[key])]),
+    );
+  }
+  return value;
+}
+
 export function isPresent(value) {
   return value !== undefined && value !== null && value !== "";
 }

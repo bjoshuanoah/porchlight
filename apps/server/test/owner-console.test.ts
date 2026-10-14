@@ -335,9 +335,10 @@ test("ac-2: owners view member roles, and revocation is instant — sessions die
   assert.ok(rows.some((row) => row.did === member.did && row.role === "member"));
   const memberView = rows.find((row) => row.did === member.did) as Json;
   const memberKeys = Object.keys(memberView).sort();
-  // The full owner-visible record is identity + name (PORCH-029 directory) +
-  // role + state only.
-  assert.deepEqual(memberKeys, ["_id", "admittedAt", "did", "name", "networkId", "revokedAt", "role", "state"]);
+  // The full owner-visible record is identity + name + the member's face
+  // stamps (PORCH-070 avatar beside the PORCH-029 directory name) + role +
+  // state only.
+  assert.deepEqual(memberKeys, ["_id", "admittedAt", "avatar", "did", "name", "networkId", "revokedAt", "role", "state"]);
   assert.equal(memberView.name, "Tom", "the directory shows the member's identity-plane display name");
 
   // The member's perimeter is live before revocation.

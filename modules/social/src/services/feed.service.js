@@ -195,11 +195,14 @@ export class FeedService {
    * family-facing name, resolved at READ time against the origin's active
    * membership — never a frozen copy on the post document. A DID that holds
    * no active membership at the origin renders the plain nameless fallback
-   * (names render for network members only).
+   * (names render for network members only). PORCH-070: `authorAvatar`
+   * rides beside the name on every fed post view — timeline, group
+   * timelines, ranked, and search share this one copy — the identity-plane
+   * avatar meta passed through verbatim, never mutated here.
    */
   async #withAttribution(views, networkId) {
     const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorId) });
-    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId)) ?? null }));
+    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId))?.name ?? null, authorAvatar: names.get(String(view.authorId))?.avatar ?? null }));
   }
 
   /**
@@ -280,7 +283,7 @@ export class FeedService {
         }
         return {
           ...InteractionService.commentView(comment),
-          authorName: names.get(String(comment.authorDid)) ?? null,
+          authorName: names.get(String(comment.authorDid))?.name ?? null,
           responseCount,
         };
       });

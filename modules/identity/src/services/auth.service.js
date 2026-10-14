@@ -153,6 +153,19 @@ export class AuthService {
   }
 
   /**
+   * The device-signed write resolution (PORCH-070): an access token resolves
+   * with the session's own device — the (did, deviceId) pair a write
+   * signature verifies against, the same possession-proven key the social
+   * plane's verifyMemberWrite resolves. Null on any failed verify.
+   */
+  async verifyAccessTokenWithDevice(accessToken, now = () => new Date()) {
+    const resolved = await this.verifyAccessToken(accessToken, now);
+    if (!resolved) return null;
+    const session = await this.sessions.findOne({ _id: resolved.sessionId });
+    return session ? { ...resolved, deviceId: session.deviceId } : null;
+  }
+
+  /**
    * Resolve WHY an access token failed (PORCH-019 ac-1): the failing step in
    * the session path, plus the session and device identity state, for the
    * auth-failure capture the transport guards log. Token material never

@@ -7,7 +7,7 @@
 import {
   getPublicKey, hashes as edHashes, sign as ed25519Sign, utils as edUtils,
 } from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha2.js";
+import { sha256, sha512 } from "@noble/hashes/sha2.js";
 
 // @noble/ed25519 v3 is crypto-agnostic: the consumer injects SHA-512, then the
 // synchronous keygen/sign paths run (matching subtle's wire format exactly —
@@ -72,4 +72,16 @@ export async function signMessage(privateKey, bytes) {
     return new Uint8Array(await crypto.subtle.sign("Ed25519", privateKey, bytes));
   }
   return Uint8Array.from(ed25519Sign(Uint8Array.from(bytes), seedFromB64url(privateKey)));
+}
+
+function hexOf(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** SHA-256 hex over bytes: subtle on secure origins, the same @noble path
+ * as signing on the plain-http LAN addresses hubs serve (PORCH-070 — the
+ * avatar ingest declaration carries the file's content address). */
+export async function sha256Hex(bytes) {
+  if (hasSubtle()) return hexOf(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
+  return hexOf(sha256(Uint8Array.from(bytes)));
 }

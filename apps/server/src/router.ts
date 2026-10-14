@@ -162,6 +162,50 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     activeDeviceRegistration: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown>; [key: string]: unknown } | null>;
   } | null = null;
   let socialModule: ReturnType<typeof assembleSocialModule> | null = null;
+  // PORCH-070: the member avatar plane — identity stores its rendition bytes
+  // through the media pipeline's content-addressed blob store (same root,
+  // same re-point) and SERVES to a member token of this hub; social
+  // assembles after identity, so both adapters late-bind, and a hub running
+  // identity alone refuses avatar storage plainly (never a silent no-op).
+  let socialBlobs: {
+    put: (key: string, bytes: Buffer) => Promise<unknown>;
+    get: (key: string) => Promise<Buffer | null>;
+    has: (key: string) => Promise<boolean>;
+    delete: (key: string) => Promise<boolean>;
+  } | null = null;
+  /** The avatar store is unwired (no social serving): refuse plainly, never silently. */
+  const avatarStoreDown = () => {
+    const error: Error & { code?: string } = new Error("The hub's media storage isn't available, so photos can't be stored right now.");
+    error.code = "E_AVATAR_UNAVAILABLE";
+    return error;
+  };
+  interface AvatarBlobStore {
+    put: (key: string, bytes: Buffer) => Promise<unknown>;
+    get: (key: string) => Promise<Buffer | null>;
+    has: (key: string) => Promise<boolean>;
+    delete: (key: string) => Promise<boolean>;
+  }
+  const avatarBlobStore = (): AvatarBlobStore =>
+    new Proxy({} as AvatarBlobStore, {
+      get: (_target, method: string) => {
+        if (method === "put") {
+          return (key: string, bytes: Buffer) => (socialBlobs ? socialBlobs.put(String(key), bytes) : Promise.reject(avatarStoreDown()));
+        }
+        if (method === "get") return (key: string) => socialBlobs?.get(String(key)) ?? Promise.resolve(null);
+        if (method === "has") return (key: string) => socialBlobs?.has(String(key)) ?? Promise.resolve(false);
+        if (method === "delete") return (key: string) => socialBlobs?.delete(String(key)) ?? Promise.resolve(false);
+        return undefined;
+      },
+    });
+  /** Any member token of this hub opens the faces: identity session token, or the open turn's social membership token. */
+  const avatarPerimeter = (): ((token: string | null) => Promise<{ did: string } | null>) => async (token) => {
+    const identity = await identityAuth?.verifyAccessToken(token ?? "");
+    const did: string | undefined | null =
+      identity?.did
+      ?? (await socialModule?.membershipService.verifyAccessToken(token ?? "", { surface: "avatar" }) as { session?: { did?: string }; membership?: { did?: string } } | null | undefined)?.session?.did
+      ?? null;
+    return did ? { did } : null;
+  };
   // PORCH-065: the re-auth orchestration (system vertical). Declared before
   // the modules assemble so the identity consume-observer can late-bind to
   // it — social assembles after identity, and the reauth service needs both.
@@ -176,6 +220,17 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     const identity = assembleIdentityModule(options.store, {
       hubUrl,
       ledger: { record: ledger.record },
+      // PORCH-070: the avatar plane rides the media pipeline's blob store
+      // (late-bound above — social assembles after identity) and serves to
+      // any member token of this hub (identity sessions always; social
+      // membership tokens once social is up).
+      avatar: {
+        blobs: avatarBlobStore(),
+        // The serving perimeter (one verifier, both token planes): the
+        // social perimeter resolves {membership, session}; the session
+        // carries the did.
+        verifyMemberToken: avatarPerimeter(),
+      },
       // PORCH-026: second-hub identity adoption is flag-hidden (default off);
       // the runtime config flip re-enables the unchanged architecture.
       adoptionEnabled: options.config.identity.adoptionEnabled,
@@ -225,6 +280,12 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       mintOwnerDeviceLink: identityModule
         ? (did: string) => identityModule.deviceService.mintDeviceLink({ did })
         : undefined,
+      // PORCH-070: the member purge calls the identity-plane avatar
+      // retirement in the same cascade — the avatar set dies with the
+      // account record.
+      purgeAvatar: identityModule
+        ? (did: string) => identityModule.avatarService.retireFor(did)
+        : undefined,
       media: {
         // PORCH-054: the media root is runtime configuration — the config
         // file's media.root (set at setup, editable post-install from the
@@ -261,6 +322,11 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       log: options.log ?? null,
     });
     router.use("/social", socialModule.api);
+    // PORCH-070: the identity avatar plane's byte storage binds to the
+    // media pipeline's store (same content-addressed root, same re-point —
+    // the owner's media-root edit moves avatar bytes exactly as it moves
+    // renditions).
+    socialBlobs = socialModule.blobs;
     // PORCH-054 (ac-1): the health surface names the configured media root
     // and its readiness state (ready / volume not ready) — late-bound to
     // the social module's volume status, never a stale copy.

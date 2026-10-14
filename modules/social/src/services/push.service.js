@@ -341,7 +341,7 @@ export class PushService {
       let authorName = null;
       if (actorDid) {
         const names = await this.membership.attributionNames({ networkId, dids: [actorDid] });
-        authorName = names.get(actorDid) ?? null;
+        authorName = names.get(actorDid)?.name ?? null;
       }
       let sent = 0;
       let skipped = 0;

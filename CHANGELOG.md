@@ -7,6 +7,7 @@ heading is missing).
 
 ## Unreleased
 
+- PORCH-070: member profile photo from the Profile screen — upload, replace, and clear, with hub-side square crop and compression (no manual crop step; devices never transcode). The face rides the identity, so it renders across every network the member belongs to: timeline and reply headers, the WhoIsHere chooser, owner-console member rows. Renditions are content-addressed squares with long-lived caching and square geometry stamps; replacing retires the prior set whole and clearing reverts to initials, never touching authored content; a PDF or over-5 MB upload refuses in plain language; the member purge cascade retires the set with the account record.
 - PORCH-069: timeline cards now keep Lift, Lower, Reply, and React in a compact icon row; Hide and Open conversation live in the header menu. Four latest root comments and their collapsed response counts expand in the feed; mobile posts have a 14px page-background gap instead of a divider.
 
 ## v0.2.0 — 2026-10-14

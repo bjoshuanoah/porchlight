@@ -134,7 +134,7 @@ export class AlbumService {
    */
   async #withAttribution(views, networkId) {
     const names = await this.membership.attributionNames({ networkId, dids: views.map((view) => view.authorId) });
-    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId)) ?? null }));
+    return views.map((view) => ({ ...view, authorName: names.get(String(view.authorId))?.name ?? null }));
   }
 
   /**

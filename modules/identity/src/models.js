@@ -28,6 +28,13 @@ export const identityModel = {
     /** Presentation-plane handle: changeable, resolves to the DID. No global registry. */
     handle: { type: ["string", "null"] },
     profile: { type: "object" },
+    /**
+     * PORCH-070: the member's profile photo — the treated square rendition
+     * set (rungs with content-addressed sha256 + blob keys, square geometry
+     * stamps) plus the one pre-confirm pending slot. Written ONLY by the
+     * avatar service; null is the no-avatar state.
+     */
+    avatar: { type: ["object", "null"] },
     /** Exactly one home: "home" while hosted here, "moved" after migration. */
     homingStatus: { type: "string", enum: ["home", "moved"] },
     /** Issuer of the new home after a migration handoff (null otherwise). */

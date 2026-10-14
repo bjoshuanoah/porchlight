@@ -15,6 +15,10 @@ import { formatStorage, formatStorageMb, ceilingMbToGb, ceilingGbToMb } from './
 import { Lockup, LampMark } from './brand.jsx';
 import { cssVars } from './theme.js';
 import { NotificationSettings } from './notifications.jsx';
+// PORCH-070: the member's photo — every face on every surface renders
+// through the one avatar-face code path (authorized fetch + the identity-
+// keyed blob cache; the metas-less fallback stays initials).
+import { AvatarFace, ownFaceSources } from './avatar-face.js';
 
 /** Removal capability on the ladder (PORCH-053): the owner removes anyone
  * (the final-owner invariant guards the last one); a delegate removes
@@ -614,6 +618,127 @@ function DeviceList({ devices, operation, actions, currentDeviceId }) {
   </>;
 }
 
+/**
+ * PORCH-070: the member's photo block inside the Profile identity card. One
+ * flow, no cropping step — the member picks a file, the hub ingests the raw
+ * bytes and replaces any older pending set, the squared chooser rung comes
+ * back for a look, and the commit flips the face everywhere the family sees
+ * this member — right away, without a re-login. Refusals render the hub's
+ * own plain copy verbatim (the 5 MB limit and the type refusal say what
+ * they mean); a refusal leaves no part of the state changed.
+ */
+function AvatarPanel({ account, actions, origin, name }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [pending, setPending] = useState(null); // { token, preview }
+  const previewUrl = useRef(null);
+  const face = ownFaceSources(account);
+  const hasFace = face.kind !== 'initials';
+  const ready = typeof actions?.loadAvatarRendition === 'function'
+    && typeof actions?.uploadAvatar === 'function'
+    && typeof actions?.commitAvatar === 'function'
+    && typeof actions?.clearAvatar === 'function';
+  const control = { minHeight: 48 };
+
+  function releasePreview() {
+    if (previewUrl.current) {
+      try { URL.revokeObjectURL(previewUrl.current); } catch { /* the preview was already gone */ }
+      previewUrl.current = null;
+    }
+  }
+  function refuse(cause) {
+    setBusy(false);
+    // The hub's typed refusals already speak family language — the copy
+    // renders verbatim, never a generic stand-in when the hub named one.
+    setError(cause instanceof TypeError
+      ? 'The family server could not be reached. Check its address and try again.'
+      : (cause?.message || 'The hub could not complete this action. No change was made.'));
+  }
+  async function choose(file) {
+    if (!file) return;
+    setBusy(true); setError(''); setNotice('');
+    releasePreview();
+    try {
+      const result = await actions.uploadAvatar(file);
+      const rung = (result?.pending?.renditions ?? []).find((row) => row?.kind === 'chooser');
+      const bytes = rung?.sha256
+        ? await actions.loadAvatarRendition({ did: face.did, kind: 'chooser', version: rung.sha256, pendingToken: result.pending.token })
+        : null;
+      setBusy(false);
+      const preview = bytes instanceof Blob ? URL.createObjectURL(bytes) : null;
+      previewUrl.current = preview;
+      setPending({ token: result?.pending?.token ?? null, preview });
+    } catch (cause) { refuse(cause); }
+  }
+  async function confirm() {
+    if (!pending?.token) return;
+    setBusy(true); setError('');
+    try {
+      await actions.commitAvatar(pending.token);
+      releasePreview();
+      setPending(null);
+      setBusy(false);
+      setNotice('Your photo is updated — it shows everywhere the family sees you.');
+    } catch (cause) { refuse(cause); }
+  }
+  function retake() {
+    releasePreview();
+    setPending(null);
+    setError('');
+    inputRef.current?.click();
+  }
+  function cancel() {
+    releasePreview();
+    setPending(null);
+    setError('');
+  }
+  async function remove() {
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await actions.clearAvatar();
+      setBusy(false);
+      setNotice('Your photo was removed.');
+    } catch (cause) { refuse(cause); }
+  }
+  return <Box sx={{ ...rows, mt: 2, gap: 2 }}>
+    {pending
+      ? <Avatar alt="The squared result from the family hub" sx={{ width: 96, height: 96, fontSize: 34, flexShrink: 0 }} src={pending.preview ?? undefined}>{pending.preview ? null : initialOf(name)}</Avatar>
+      : <AvatarFace origin={origin} did={face.did} metas={face.metas} kind="chooser" load={actions?.loadAvatarRendition} src={face.legacy}
+          alt="Your photo" sx={{ width: 96, height: 96, fontSize: 34, flexShrink: 0 }}>{initialOf(name)}</AvatarFace>}
+    {ready ? <Stack spacing={1} sx={{ alignItems: 'flex-start' }}>
+      <Typography variant="body2" color="text.secondary">
+        {pending ? 'This is your photo, squared and ready by the hub. Use it or take another.' : 'Optional. Your photo shows everywhere the family sees you.'}
+      </Typography>
+      {pending
+        ? <>
+          <Button variant="contained" sx={control} disabled={busy || !pending.token} onClick={() => void confirm()}>Use this photo</Button>
+          <Button sx={control} disabled={busy} onClick={retake}>Try another</Button>
+          <Button variant="text" sx={control} disabled={busy} onClick={cancel}>Cancel</Button>
+        </>
+        : <>
+          <Button variant={hasFace ? 'outlined' : 'contained'} sx={control} disabled={busy} onClick={() => inputRef.current?.click()}>
+            {hasFace ? 'Change photo' : 'Add photo'}
+          </Button>
+          {hasFace && <Button variant="text" color="error" sx={control} disabled={busy} onClick={() => void remove()}>Remove photo</Button>}
+        </>}
+      {busy && <CircularProgress size={22} aria-label="Working on your photo" />}
+      {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
+      {notice && <Alert severity="success" sx={{ mt: 1 }}>{notice}</Alert>}
+    </Stack> : null}
+    <input ref={inputRef} type="file" accept="image/*" hidden onChange={(event) => {
+      const file = event.target.files?.[0] ?? null;
+      event.target.value = '';
+      void choose(file);
+    }} />
+  </Box>;
+}
+
+function initialOf(name) {
+  return String(name ?? '').trim().charAt(0).toUpperCase() || '·';
+}
+
 export function Profile({ data, actions, navigate, mode }) {
   const operation = useOperation(actions);
   const [pairing, setPairing] = useState(null);
@@ -667,6 +792,11 @@ export function Profile({ data, actions, navigate, mode }) {
     <Heading title="Profile" subtitle={`Your place on ${networkName(data)} and the devices you use.`} />
     <Card sx={section}><CardContent><Typography variant="h5">{named(identity)}</Typography>
       <Typography color="text.secondary">{data?.server?.url || networkName(data)}</Typography>
+      {/* PORCH-070: the photo block rides the identity card — add, change,
+          confirm the hub-squared result, or remove; refusals carry the hub's
+          own plain copy verbatim. */}
+      <AvatarPanel account={data?.identityAccount ?? null} actions={actions} name={named(identity)}
+        origin={(() => { try { return new URL(data?.server?.url || window.location.origin).origin; } catch { return null; } })()} />
       <Box sx={{ ...rows, mt: 2 }}><Button onClick={() => (typeof actions?.signOut === 'function' ? actions.signOut() : navigate?.('/who-is-here'))}>Switch person</Button><Button onClick={() => setMembershipOpen(value => !value)} aria-expanded={membershipOpen}>Memberships</Button>{isOwner && <Button onClick={() => navigate?.('/members')}>Members</Button>}{isOwner && <Button onClick={() => navigate?.('/owner')}>Owner console</Button>}{typeof actions?.signOut === 'function' && <Button variant="text" disabled={operation.busy} onClick={() => actions.signOut()}>Sign out</Button>}</Box>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Signing out ends this device's open turn. The device stays connected: the next open shows the family greeting — Who's using Porchlight? — and one tap reopens your place.</Typography>
       <Collapse in={membershipOpen}><Divider sx={{ my: 2 }} /><Typography variant="h6">Your memberships</Typography>
@@ -741,6 +871,24 @@ export function WhoIsHere({ data, actions, navigate }) {
   const [pin, setPin] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const operation = useOperation(actions);
+  // PORCH-070: each face's own rungs are read with that connection's OWN
+  // identity token — the chooser never rides the open identity's session
+  // for someone else's photo. A face the read could not return (the token
+  // is stale, the hub holds no avatar) keeps the initials fallback.
+  const faceSignature = faces.map((item) => `${item.url}:${item.identity.id}`).join('|');
+  const [faceFaces, setFaceFaces] = useState({});
+  useEffect(() => {
+    if (typeof actions?.readAccount !== 'function') return undefined;
+    let stale = false;
+    faces.forEach((face) => {
+      void actions.readAccount(face).then((account) => {
+        if (stale || !account) return;
+        setFaceFaces((current) => ({ ...current, [face.identity.id]: ownFaceSources(account) }));
+      }).catch(() => { /* initials fallback for this face */ });
+    });
+    return () => { stale = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the chooser reads its faces once per device registration
+  }, [faceSignature]);
   const chosen = faces.find(item => item.identity.id === pinFor);
   const hasPin = Boolean(chosen && storedPin(chosen));
   async function openFace(face) {
@@ -769,14 +917,26 @@ export function WhoIsHere({ data, actions, navigate }) {
       </Typography>
     </Box>
     <Stack direction="row" spacing={4} justifyContent="center" sx={{ flexWrap: 'wrap', rowGap: 3 }}>
-      {faces.map(item => (
-        <Stack key={`${item.url}:${item.identity.id}:${item.deviceId}`} spacing={1} alignItems="center" sx={{ width: 108 }}>
+      {faces.map(item => {
+        const faceSource = faceFaces[item.identity.id] ?? null;
+        return <Stack key={`${item.url}:${item.identity.id}:${item.deviceId}`} spacing={1} alignItems="center" sx={{ width: 108 }}>
           <IconButton onClick={() => void openFace(item)} sx={{ p: 0 }} aria-label={`Open ${named(item.identity)}`}>
-            <Avatar sx={{ width: 72, height: 72, fontSize: 26 }}>{named(item.identity).trim().charAt(0) || '·'}</Avatar>
+            {/* PORCH-070: a 72px face rides the connection's own chooser rung
+                through the avatar-face loader; initials stay the fallback. */}
+            <AvatarFace
+              origin={(() => { try { return new URL(item.url).origin; } catch { return null; } })()}
+              did={faceSource?.did ?? item.identity.id}
+              metas={faceSource?.metas ?? null}
+              kind="chooser"
+              load={(args) => actions.loadAvatarRendition({ ...args, connection: item })}
+              src={faceSource?.legacy ?? null}
+              sx={{ width: 72, height: 72, fontSize: 26 }}>
+              {named(item.identity).trim().charAt(0) || '·'}
+            </AvatarFace>
           </IconButton>
           <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{named(item.identity)}</Typography>
-        </Stack>
-      ))}
+        </Stack>;
+      })}
     </Stack>
     <Feedback operation={operation} />
     {chosen && <Paper sx={{ p: 3, mt: 2, textAlign: 'left' }}>
@@ -1189,6 +1349,9 @@ export function Members({ data, actions, navigate }) {
   const invites = available(data, 'invites') ? data?.invites || [] : null;
   const directory = members === null ? null : directoryRows(members, data?.identity?.id);
   const links = invites === null ? null : inviteRows(invites, data?.server?.url);
+  // PORCH-070: the directory's faces load from the hub serving this list —
+  // the console members response is same-origin, so the origin is the view's own.
+  const memberOrigin = (() => { try { return new URL(data?.server?.url || window.location.origin).origin; } catch { return null; } })();
   async function makeJoinLink() {
     const result = await operation.run('issueInvite');
     if (!result) return;
@@ -1209,7 +1372,14 @@ export function Members({ data, actions, navigate }) {
       {directory === null ? <Typography color="text.secondary">The member directory is not available from this hub.</Typography>
         : directory.length === 0 ? <Typography color="text.secondary">No members to show yet. Invite a family member below.</Typography>
           : <List dense>{directory.map(person => <ListItem key={person.id} divider sx={{ minHeight: 56 }}>
-            <ListItemAvatar><Avatar sx={{ width: 36, height: 36 }}>{person.name.charAt(0).toUpperCase()}</Avatar></ListItemAvatar>
+            <ListItemAvatar>
+              {/* PORCH-070: the row's face rides its header rung through the
+                  avatar-face loader; a rung-less row keeps the initials. */}
+              <AvatarFace origin={memberOrigin} did={person.did} metas={person.avatar} kind="header"
+                load={actions?.loadAvatarRendition} sx={{ width: 36, height: 36, fontSize: 15 }}>
+                {person.name.charAt(0).toUpperCase()}
+              </AvatarFace>
+            </ListItemAvatar>
             <ListItemText primary={person.isSelf ? `${person.name} (you)` : person.name}
               secondary={[person.role, person.status, person.joined && `Joined ${displayDate(person.joined)}`].filter(Boolean).join(' · ')} />
           </ListItem>)}</List>}

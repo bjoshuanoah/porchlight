@@ -254,12 +254,15 @@ test("ac-4: interaction views carry no vote material", async () => {
   const commentView = (await interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
   assert.deepEqual(
     Object.keys(commentView).sort(),
-    ["_id", "authorDid", "authorName", "body", "createdAt", "mentionNames", "mentions", "parentId", "postId", "previewId"],
+    ["_id", "authorAvatar", "authorDid", "authorName", "body", "createdAt", "mentionNames", "mentions", "parentId", "postId", "previewId"],
   );
   // Mention names resolve at read time alongside the author name
   // (PORCH-037): one name per mention, aligned by position (null here
-  // because this fixture wires no name resolver).
+  // because this fixture wires no name resolver). PORCH-070: the face
+  // rides as `authorAvatar`, null where the identity plane carries none.
   assert.deepEqual(commentView.mentionNames, [null]);
+  assert.equal(commentView.authorName, null);
+  assert.equal(commentView.authorAvatar, null);
 
   const starPayload = { postId: post._id, emoji: "🌟" };
   const reacted = (await interactions.react({ accessToken: familyToken, payload: starPayload, signature: dev.signPayload(starPayload) })).reaction;
