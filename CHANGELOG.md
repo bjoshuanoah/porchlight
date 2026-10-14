@@ -5,6 +5,13 @@ under its `## v` heading is the line of record the release workflow copies
 into that release's notes (the npm-publish workflow fails loudly if the
 heading is missing).
 
+## v0.2.0 — 2026-10-14
+
+- Carries PORCH-067: the bundled tarball's sharp closure is platform-complete — the platform binaries and their libvips trees for darwin-arm64, darwin-x64, linux-x64 (glibc), linuxmusl-x64, and win32-x64 ride the closure (win32 embeds libvips statically, the others carry the split trees), fetched by exact version at pack time so the tarball never depends on the packer runner's OS. v0.1.1 shipped the packer-runner platform only: non-linux hubs started fine but image media operations failed with a platform error. Packed tarball: 186.1 MB, +18.7 MB (1.11x) over v0.1.1's 176.4 MB — the delta is sharp platform trees only, nothing else rides it.
+- Carries PORCH-064: device notifications opt-in default — absent or freshly created settings rows resolve enabled=false, the send pipeline enforces the master switch first (no send attempt for any event without an explicit enable through the settings route), subscription lifecycle gates on the switch, and no backfill flips members who enabled earlier.
+- Carries PORCH-065: address change owner re-auth — a hub moved to a new URL re-binds the owner through the device-link grant: the console's register-the-domain path verifies the new origin before any mutation, re-points every self-reference, and redirects to the self-grant consume route; `porchlight reauth link` / `reauth status` carry the machine-local CLI path.
+- Carries PORCH-066: the owner console's hub address panel — one field, one submit; the pre-commit verification refuses an unreachable or foreign origin in plain language before any re-point, redirect auto-consumes the self-grant at the new origin, and the arrival lands the owner bound at the new address with no manual grant handling.
+
 ## v0.1.1 — 2026-10-13
 
 - First tagged release cut: published to registry.npmjs.org by the npm-publish workflow via OIDC trusted publishing (github.com/bjoshuanoah/porchlight + npm-publish.yml binding under Brian's npm account) — zero long-lived NPM_TOKEN in repository or CI secrets, provenance attestation on the publish.
