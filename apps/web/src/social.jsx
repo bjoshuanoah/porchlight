@@ -19,7 +19,7 @@ import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './me
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from './reactions.js';
-import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility } from './groups.js';
+import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
 import { dateOf, relativeTime } from './time.js';
 import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, visibleFeedPosts } from './feed-filter.js';
 import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, pendingReply, conversationOf } from './slice.js';
@@ -1062,6 +1062,21 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
   const [loadError, setLoadError] = useState('');
   const [creating, setCreating] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState('');
+  // Self-serve join (PORCH-068 lifecycle ruling): the member's own act on a
+  // public group — no approval flow, no request stage; delivery turns on
+  // immediately (the feed predicate is the live roster).
+  const onJoin = async () => {
+    if (!actions.joinGroup) { setJoinError('Joining is not available from this build yet.'); return; }
+    setJoining(true);
+    setJoinError('');
+    try {
+      await invoke(actions, 'joinGroup', selectedId);
+      setRevision((at) => at + 1);
+    } catch (cause) { setJoinError(messageOf(cause)); }
+    setJoining(false);
+  };
   useEffect(() => {
     if (!selectedId || data.offline) return undefined;
     if (!actions.loadGroup) { setLoadError('This group timeline cannot be loaded from your family server yet.'); return undefined; }
@@ -1095,6 +1110,11 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
     {selectedId && !group && !loading && !loadError && <Alert severity="info">{data.offline ? 'This group is not saved on this device. Reconnect to check it.' : 'This group is not available in your network.'}</Alert>}
     {group && !loading && !loadError && <Stack spacing={2}>
       <Typography color="text.secondary">Posts in {group.name} stay within {data.network?.name ?? 'this family network'}. Each post shows its origin.</Typography>
+      {canJoinGroup(group, data.identity?.id) && <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+        <Button variant="contained" onClick={() => void onJoin()} disabled={joining} data-testid="join-group">Join group</Button>
+        <Typography color="text.secondary">Join to see {group.name}'s posts in your own feed.</Typography>
+      </Stack>}
+      {joinError && <Alert severity="error">{joinError}</Alert>}
       <MembersCard group={group} data={data} actions={actions} onchanged={() => setRevision((at) => at + 1)} />
       <Feed posts={posts} data={data} actions={actions} navigate={navigate} empty={data.offline ? 'No saved posts from this group are available.' : 'No posts in this group yet.'} />
     </Stack>}
@@ -1109,8 +1129,11 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
 function MembersCard({ group, data, actions, onchanged }) {
   const [adding, setAdding] = useState(false);
   const [visibilityError, setVisibilityError] = useState('');
+  const [memberError, setMemberError] = useState('');
+  const [acting, setActing] = useState(false);
   const manage = canManageGroup(group, data);
   const roster = groupMemberRows(group);
+  const blocked = blockedRows(group);
   // Visibility (PORCH-068 ac-1): the managing member flips the group
   // between private (invite-only) and public (the network views it).
   const flipVisibility = async () => {
@@ -1118,6 +1141,18 @@ function MembersCard({ group, data, actions, onchanged }) {
     setVisibilityError('');
     try { await invoke(actions, 'updateGroupVisibility', group._id ?? group.id, next); onchanged?.(); }
     catch (cause) { setVisibilityError(messageOf(cause)); }
+  };
+  // Removal lifecycle (PORCH-068, Brian's Oct 14 rulings): the managing
+  // member's removal writes the blocked entry atomically; the unblock act
+  // lifts it. The member's own posts stay.
+  const actOnMember = async (action, did) => {
+    setMemberError('');
+    setActing(true);
+    try {
+      await invoke(actions, action, group._id ?? group.id, did);
+      onchanged?.();
+    } catch (cause) { setMemberError(messageOf(cause)); }
+    setActing(false);
   };
   return <Card variant="outlined"><CardContent>
     <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
@@ -1133,11 +1168,28 @@ function MembersCard({ group, data, actions, onchanged }) {
     </Button>}
     {visibilityError && <Alert severity="error">{visibilityError}</Alert>}
     <List dense disablePadding>
-      {roster.map((member) => <ListItemButton key={member.did} disableGutters>
+      {roster.map((member) => <ListItemButton key={member.did} disableGutters
+        secondaryAction={manage && member.did !== data.identity?.id ? (
+          <Button size="small" disabled={acting} data-testid="remove-group-member" onClick={() => void actOnMember('removeGroupMember', member.did)}>
+            Remove
+          </Button>
+        ) : undefined}>
         <ListItemText primary={member.name ?? (member.did === data.identity?.id ? 'You' : member.did)}
           secondary={member.did === data.identity?.id && member.name ? 'You' : undefined} />
       </ListItemButton>)}
     </List>
+    {manage && memberError && <Alert severity="error">{memberError}</Alert>}
+    {manage && blocked.length > 0 && <Stack spacing={1} sx={{ mt: 2 }}>
+      <Typography color="text.secondary">Removed — they cannot re-join until you unblock them.</Typography>
+      <List dense disablePadding>
+        {blocked.map((row) => <ListItemButton key={row.did} disableGutters>
+          <ListItemText primary={row.did === data.identity?.id ? 'You' : row.did} />
+          <Button size="small" disabled={acting} data-testid="unblock-group-member" onClick={() => void actOnMember('unblockGroupMember', row.did)}>
+            Unblock
+          </Button>
+        </ListItemButton>)}
+      </List>
+    </Stack>}
     {adding && <AddMembersDialog group={group} actions={actions} onClose={() => setAdding(false)}
       onAdded={() => { setAdding(false); onchanged?.(); }} />}
   </CardContent></Card>;

@@ -21,7 +21,7 @@
  * reactionView) that already strip rank inputs and actor signatures.
  */
 /** Payload privacy module import (PORCH-068 group gate helpers). */
-import { canSeeGroup } from "./group.service.js";
+import { groupDeliversTo } from "./group.service.js";
 
 export const EVENT_TYPES = Object.freeze(["post.created", "reply.created", "reaction.applied", "media.attached"]);
 
@@ -177,9 +177,9 @@ export class RealtimeService {
   constructor({ membership, plane, groups = null, replayHours = 24 }) {
     this.membership = membership;
     this.plane = plane;
-    // PORCH-068: the group collection behind the private-group event gate.
-    // A private group's post/reply/reaction events leave the origin room
-    // only for that group's members — never for any other network member.
+    // PORCH-068: the group collection behind the group-post event gate —
+    // a group post's events (private and public alike) leave the origin
+    // room only for that group's members.
     // Fail-closed when the wiring is absent: gated envelopes stay in the
     // plane window but deliver (and replay) to nobody.
     this.groups = groups;
@@ -208,7 +208,7 @@ export class RealtimeService {
       networkId: String(networkId),
       postId: postId ?? null,
       // PORCH-068: the post's group target (null outside every group) —
-      // the delivery layer applies the private-group member gate to these
+      // the delivery layer applies the group-member delivery gate to these
       // envelopes and these envelopes alone.
       groupId: groupId ?? null,
       content: content ?? null,
@@ -219,17 +219,20 @@ export class RealtimeService {
   }
 
   /**
-   * The private-group delivery predicate (PORCH-068 ac-2/ac-5): a gated
-   * envelope (one carrying a group target) leaves the origin room only for
-   * members of a PRIVATE group; a public group's events ride for the whole
-   * network. Resolve at delivery/replay time against the live roster, so a
-   * member newly added to the group receives from their add onward.
+   * The group-delivery predicate (PORCH-068 ac-2/ac-5, refined Brian Oct
+   * 14: "A public group should also never show up on any non-member
+   * timeline unless they go to the group and join the group"): an envelope
+   * carrying a group target reaches a member's channel only while they
+   * hold membership in that group — private and public alike. Resolve at
+   * delivery/replay time against the live roster, so a member newly
+   * joined or added receives from that moment onward. Ungated envelopes
+   * (no group target) pass for the whole origin room as shipped.
    */
   async #eventReaches(envelope, did) {
     if (!envelope.groupId) return true;
     if (this.groups == null) return false;
     const group = await this.groups.findOne({ _id: envelope.groupId });
-    return canSeeGroup(group, did);
+    return groupDeliversTo(group, did);
   }
 
   /**
@@ -320,8 +323,8 @@ export class RealtimeService {
       ageCursor !== null &&
       Date.now() - Number(ageCursor[1]) > this.replayHours * 60 * 60 * 1000;
     const { events, stale, cursor } = await this.plane.readSince(networkId, pastWindow ? null : sinceCursor);
-    // The private-group gate applies to the replay window too (PORCH-068
-    // ac-2): a gated envelope replays only to a member of its private
+    // The group-delivery gate applies to the replay window too (PORCH-068
+    // ac-2, refined): a gated envelope replays only to a member of its
     // group — the same predicate the live delivery applies.
     const visible = [];
     for (const event of stale || pastWindow ? [] : events) {
@@ -364,7 +367,7 @@ export class RealtimeService {
   }
 
   /** Deliver one fan-out arrival to every live channel of the origin — and
-   *  only those the envelope's private-group gate admits (PORCH-068).
+   *  only those the envelope's group-delivery gate admits (PORCH-068).
    *  Ungated envelopes (no group target) deliver synchronously, exactly as
    *  shipped; gated envelopes resolve the group's live roster first. */
   #deliver(networkId, envelope) {

@@ -176,7 +176,14 @@ export const socialModels = {
       createdBy: { type: ["string", "null"] },
       /** Subset of the network's active membership (member DIDs). */
       members: { type: "array", items: { type: "string" } },
-      /** private (invite-only, members-only everywhere) | public (the whole network views). */
+      /**
+       * Removed members' DIDs (PORCH-068 lifecycle ruling): entered
+       * atomically with the removal; self-serve join and invitation refuse
+       * a blocked DID until the managing member's unblock lifts the entry.
+       * Rows predating the field resolve empty.
+       */
+      blockedMemberIds: { type: "array", items: { type: "string" } },
+      /** private (invite-only, invisible to non-members everywhere) | public (discoverable, viewable, self-joinable). */
       visibility: { type: "string", enum: ["private", "public"] },
       createdAt: { type: "string" },
     },

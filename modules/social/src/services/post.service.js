@@ -1,5 +1,5 @@
 import { socialModels } from "../models.js";
-import { canSeeGroup } from "./group.service.js";
+import { canSeeGroup, postDeliversToViewer } from "./group.service.js";
 
 /** Plain-language content failures for member clients. */
 export const POST_MESSAGES = {
@@ -202,14 +202,15 @@ export class PostService {
   }
 
   /** List the origin network's posts, newest first (base timeline read), with
-   *  private-group posts the viewer does not hold removed (PORCH-068 ac-2). */
+   *  group posts the viewer does not hold membership in removed (PORCH-068
+   *  ac-2, refined: delivery is membership-gated for both visibilities). */
   async list({ accessToken } = {}) {
     const session = await this.#requireSession(accessToken);
     const rows = await this.posts.find({ originNetworkId: session.networkId });
     // Base timeline ordering (PORCH-007): newest first by latest activity;
     // reverse-chron pagination only — this read never re-sorts by rank.
     newestFirstByActivity(rows);
-    return { posts: await this.memberViews(await this.#visibleRowsOf(session.networkId, session.did, rows), session.networkId), did: session.did };
+    return { posts: await this.memberViews(await this.#deliverableRowsOf(session.networkId, session.did, rows), session.networkId), did: session.did };
   }
 
   /** The visibility gate for one post document against one viewer did. */
@@ -218,12 +219,14 @@ export class PostService {
     return canSeeGroup(await this.groups.findOne({ _id: post.groupId }), did);
   }
 
-  /** Origin rows filtered down to the viewer's visible set (PORCH-068 ac-2). */
-  async #visibleRowsOf(networkId, did, rows = null) {
+  /** Origin rows filtered down to the viewer's DELIVERABLE set (PORCH-068
+   *  ac-2, refined): a group post rides a member's own feed only for a
+   *  member of that group, private and public alike. */
+  async #deliverableRowsOf(networkId, did, rows = null) {
     const resolved = rows ?? await this.posts.find({ originNetworkId: networkId });
     const groupsById = new Map((await this.groups.find({ networkId: String(networkId) })).map((group) => [group._id, group]));
     return resolved.filter(
-      (post) => !post?.groupId || canSeeGroup(groupsById.get(String(post.groupId)), did),
+      (post) => !post?.groupId || postDeliversToViewer(post, groupsById, did),
     );
   }
 

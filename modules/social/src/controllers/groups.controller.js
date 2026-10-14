@@ -65,6 +65,8 @@ export class GroupsController {
       E_GROUP_NAME_REQUIRED: 400,
       E_GROUP_MEMBERS_INVALID: 400,
       E_GROUP_VISIBILITY_INVALID: 400,
+      E_GROUP_BLOCKED: 403,
+      E_GROUP_MEMBER_UNKNOWN: 404,
     };
     const status = statusByCode[error.code] ?? 500;
     const message =
@@ -190,6 +192,90 @@ export class GroupsController {
         did: perimeter.session.did,
         action: "group_visibility_change",
         detail: { groupId: group._id, visibility },
+      });
+      res.status(200).json({ group });
+    } catch (error) {
+      this.memberError(res, error);
+    }
+  };
+  /**
+   * POST /groups/:groupId/join — the self-serve join (PORCH-068, lifecycle
+   * ruling): a public group joins with the member's own act, no approval
+   * flow and no request stage; delivery turns on immediately (the feed
+   * predicate is the live roster). The service enforces visibility,
+   * the blocked-rejoin gate, and the network-membership subset rule.
+   */
+  join = async (req, res) => {
+    const perimeter = await this.#requireMember(req, res, "groups.join");
+    if (!perimeter) return;
+    try {
+      const group = await this.groups.join({
+        groupId: req.params?.groupId,
+        networkId: perimeter.membership.networkId,
+        did: perimeter.session.did,
+      });
+      await this.audit.record({
+        networkId: perimeter.membership.networkId,
+        did: perimeter.session.did,
+        action: "group_join",
+        detail: { groupId: group._id },
+      });
+      res.status(200).json({ group });
+    } catch (error) {
+      this.memberError(res, error);
+    }
+  };
+
+  /**
+   * POST /groups/:groupId/members/remove — the Members view's removal
+   * (PORCH-068, lifecycle ruling): the managing member removes a member;
+   * the removal and its blocked entry land in one storage write, so a
+   * removed member can never straddle the two states.
+   */
+  removeMember = async (req, res) => {
+    const perimeter = await this.#requireMember(req, res, "groups.members");
+    if (!perimeter) return;
+    const did = req.body?.did;
+    try {
+      const group = await this.groups.removeMember({
+        groupId: req.params?.groupId,
+        networkId: perimeter.membership.networkId,
+        actorDid: perimeter.session.did,
+        did,
+      });
+      await this.audit.record({
+        networkId: perimeter.membership.networkId,
+        did: perimeter.session.did,
+        action: "group_member_remove",
+        detail: { groupId: group._id, removed: did },
+      });
+      res.status(200).json({ group });
+    } catch (error) {
+      this.memberError(res, error);
+    }
+  };
+
+  /**
+   * POST /groups/:groupId/unblock — the managing member lifts a blocked
+   * entry; the member then re-joins themselves (public) or is added
+   * (private invite).
+   */
+  unblock = async (req, res) => {
+    const perimeter = await this.#requireMember(req, res, "groups.members");
+    if (!perimeter) return;
+    const did = req.body?.did;
+    try {
+      const group = await this.groups.unblock({
+        groupId: req.params?.groupId,
+        networkId: perimeter.membership.networkId,
+        actorDid: perimeter.session.did,
+        did,
+      });
+      await this.audit.record({
+        networkId: perimeter.membership.networkId,
+        did: perimeter.session.did,
+        action: "group_unblock",
+        detail: { groupId: group._id, unblocked: did },
       });
       res.status(200).json({ group });
     } catch (error) {

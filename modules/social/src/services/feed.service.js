@@ -1,6 +1,6 @@
 import { typedError, postView, newestFirstByActivity } from "./post.service.js";
 import { InteractionService } from "./interaction.service.js";
-import { postVisibleToViewer, canSeeGroup } from "./group.service.js";
+import { postDeliversToViewer, postVisibleToViewer, canSeeGroup } from "./group.service.js";
 import { socialModels } from "../models.js";
 
 export const FEED_MESSAGES = {
@@ -72,11 +72,15 @@ export class FeedService {
     this.models = socialModels;
   }
 
-  /** Base timeline read (ac-1): origin posts, newest first by latest activity,
-   *  private-group posts of groups the viewer does not hold removed (PORCH-068 ac-2). */
+  /**
+   * Base timeline read (ac-1): origin posts, newest first by latest
+   * activity. Group-post delivery is membership-gated for both
+   * visibilities (PORCH-068 ac-2, refined): a group post the viewer does
+   * not hold membership in never rides their own timeline.
+   */
   async timeline({ accessToken } = {}) {
     const { networkId, did } = await this.#perimeterOf(accessToken);
-    return { posts: await this.#ordered(await this.#visibleRows(networkId, did), networkId) };
+    return { posts: await this.#ordered(await this.#deliverableRows(networkId, did), networkId) };
   }
 
   /**
@@ -101,13 +105,13 @@ export class FeedService {
    * Ranked section read (ac-2): prominence order from the ranking module,
    * recomputed over the capped window. The result is ordered posts only —
    * no scores, no counters, no vote arithmetic ever reaches the client.
-   * Private-group posts of groups the viewer does not hold never become
-   * candidates (PORCH-068 ac-2): the ranked path is fed the same visible
-   * set the base timeline feeds.
+   * Group-post delivery is membership-gated for both visibilities
+   * (PORCH-068 ac-2, refined): the ranked path is fed the same set the
+   * base timeline feeds.
    */
   async ranked({ accessToken } = {}) {
     const { networkId, did } = await this.#perimeterOf(accessToken);
-    const candidates = await this.#visibleRows(networkId, did);
+    const candidates = await this.#deliverableRows(networkId, did);
     const ranked = this.ranking.rank(candidates);
     const views = ranked.map(({ post }) => postView(post));
     return { posts: await this.#decorate(views, networkId) };
@@ -279,15 +283,32 @@ export class FeedService {
   }
 
   /**
-   * The origin's rows filtered down to what the viewer may be shown
-   * (PORCH-068 ac-2): a private-group post renders only for members of
-   * that group; posts outside every group pass unchanged (the standing
-   * base-feed rule), and a dangling groupId keeps rendering.
+   * The origin's rows filtered down to what the viewer may be SHOWN
+   * (PORCH-068 ac-2, view surfaces): a private-group post renders only for
+   * members of that group; posts outside every group pass unchanged (the
+   * standing base-feed rule), and a dangling groupId keeps rendering.
    */
   async #visibleRows(networkId, did) {
+    return this.#filteredRows(networkId, did, postVisibleToViewer);
+  }
+
+  /**
+   * The origin's rows filtered down to what may be DELIVERED to the
+   * viewer's own feed (PORCH-068 ac-2, refined Brian Oct 14: "A public
+   * group should also never show up on any non-member timeline unless they
+   * go to the group and join the group"): a group post rides the timeline
+   * and ranked section only for a member of that group, private and
+   * public alike.
+   */
+  async #deliverableRows(networkId, did) {
+    return this.#filteredRows(networkId, did, postDeliversToViewer);
+  }
+
+  /** One read of the origin's posts and groups, filtered by one predicate. */
+  async #filteredRows(networkId, did, predicate) {
     const rows = await this.posts.find({ originNetworkId: networkId });
     const groupsById = new Map((await this.groups.find({ networkId: String(networkId) })).map((group) => [group._id, group]));
-    return rows.filter((post) => postVisibleToViewer(post, groupsById, did));
+    return rows.filter((post) => predicate(post, groupsById, did));
   }
 
   async #perimeterOf(accessToken) {

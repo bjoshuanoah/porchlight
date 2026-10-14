@@ -11,11 +11,12 @@ import { typedError } from "./post.service.js";
  * cross-network groups exist in V1. The feed layer serves group timelines
  * from these containers; interactions stay origin-contained everywhere.
  */
-// Group visibility (PORCH-068, Brian Oct 14 2026): every group carries
-// `visibility` — private (invite-only, members see the posts, timeline, and
-// roster) or public (the whole network views the group and its posts).
-// Groups that predate the visibility field resolve PRIVATE — the ruling's
-// explicit default for existing groups.
+// Group visibility (PORCH-068, Brian Oct 14 2026; delivery refined same
+// day and the full membership lifecycle ruled the same day): every group
+// carries `visibility` — private (invite-only, invisible to non-members
+// everywhere) or public (discoverable, viewable, self-joinable by the
+// whole network). Groups that predate the visibility field resolve
+// PRIVATE — the ruling's explicit default for existing groups.
 export const GROUP_VISIBILITIES = ["private", "public"];
 
 /** Resolve a group's effective visibility: anything absent/unknown is private. */
@@ -23,7 +24,12 @@ export function groupVisibility(group) {
   return group?.visibility === "public" ? "public" : "private";
 }
 
-/** The visibility predicate every guarded read applies: public, or a member. */
+/**
+ * The VIEW predicate (discovery and view access at the group itself): a
+ * public group renders to every network member, a private group only to
+ * its members. The visibilities never differ in feed broadcast — delivery
+ * is membership-gated for both (groupDeliversTo).
+ */
 export function canSeeGroup(group, did) {
   return groupVisibility(group) === "public" || (Boolean(did) && Array.isArray(group?.members) && group.members.includes(did));
 }
@@ -34,15 +40,42 @@ export function groupVisibleRows(rows, did) {
 }
 
 /**
- * Feed/post read filter (ac-2): a private-group post never renders for a
- * non-member on any post surface. `groupsById` maps the origin's group ids
- * to documents; a post whose group is missing keeps rendering (the
- * containment gate refuses writes into unknown groups, so this is a
+ * The FEED-DELIVERY predicate (Brian Oct 14, verbatim: "A public group
+ * should also never show up on any non-member timeline unless they go to
+ * the group and join the group"): a group post reaches a member's own
+ * feed, ranked section, and event stream only while they hold membership
+ * in that group — private and public alike. Delivery resolves the live
+ * roster at read time.
+ */
+export function groupDeliversTo(group, did) {
+  return Boolean(group) && Array.isArray(group.members) && did && group.members.includes(did);
+}
+
+/**
+ * VIEW-surface post filter (ac-2): a private-group post never resolves for
+ * a non-member on any viewing surface. `groupsById` maps the origin's
+ * group ids to documents; a post whose group is missing keeps rendering
+ * (the containment gate refuses writes into unknown groups, so this is a
  * dangling legacy reference, not a visibility decision).
  */
 export function postVisibleToViewer(post, groupsById, did) {
   if (!post?.groupId) return true;
   return canSeeGroup(groupsById.get(String(post.groupId)), did);
+}
+
+/**
+ * DELIVERY-surface post filter (ac-2, refined): a group post rides a
+ * member's own feed and ranked section only for a member of that group,
+ * private and public alike. Missing-document groupIds pass (see above).
+ */
+export function postDeliversToViewer(post, groupsById, did) {
+  if (!post?.groupId) return true;
+  return groupDeliversTo(groupsById.get(String(post.groupId)), did);
+}
+
+/** A group's blocked-member set as it stands in storage (legacy rows: empty). */
+export function blockedMembersOf(group) {
+  return Array.isArray(group?.blockedMemberIds) ? group.blockedMemberIds.filter((did) => typeof did === "string" && did) : [];
 }
 
 export class GroupService {
@@ -74,6 +107,19 @@ export class GroupService {
   async #activeMembership(networkId, did) {
     const membership = await this.memberships.findOne({ networkId, did });
     return membership && membership.state === "active" ? membership : null;
+  }
+
+  /**
+   * The lifecycle's authority check (PORCH-030 ac-3, carried): the group's
+   * creator manages it, and the network owner retains the same authority
+   * on their own network.
+   */
+  async #assertManager(group, actorDid, what = "membership") {
+    if (group.createdBy === actorDid) return;
+    const actorMembership = actorDid ? await this.#activeMembership(group.networkId, actorDid) : null;
+    if (!actorMembership || actorMembership.role !== "owner") {
+      throw typedError("E_GROUP_NOT_CREATOR", `Only the group's creator or the network owner manages this group's ${what}.`);
+    }
   }
 
   /**
@@ -120,6 +166,9 @@ export class GroupService {
       name: name.trim(),
       createdBy: createdBy ?? null,
       members: roster,
+      // PORCH-068 lifecycle: removed members land here atomically with their
+      // removal and cannot self-join or be invited back until unblocked.
+      blockedMemberIds: [],
       visibility,
       createdAt: new Date().toISOString(),
     };
@@ -130,13 +179,19 @@ export class GroupService {
   /**
    * Member-visible list of the network's groups (PORCH-030 ac-1, visibility
    * per PORCH-068): a private group renders only for its members, a public
-   * group renders for every member. `viewerDid` null (the owner console's
-   * management read) skips the filter — the console lists every container
-   * the owner may still manage.
+   * group renders for every member (the self-serve join affordance reads
+   * these rows). Every row carries its resolved `visibility` and whether
+   * `viewerDid` holds membership. `viewerDid` null (the owner console's
+   * management read) skips the visibility filter — the console lists every
+   * container the owner may still manage, flagged the same way.
    */
   async list({ networkId, viewerDid = null } = {}) {
     const rows = await this.groups.find({ networkId: String(networkId) });
-    return viewerDid === null ? rows : groupVisibleRows(rows, viewerDid);
+    return (viewerDid === null ? rows : groupVisibleRows(rows, viewerDid)).map((group) => ({
+      ...group,
+      visibility: groupVisibility(group),
+      isMember: Boolean(viewerDid) && Array.isArray(group.members) && group.members.includes(viewerDid),
+    }));
   }
 
   /** Member-readable group detail: one container, scoped to the origin network.
@@ -156,7 +211,12 @@ export class GroupService {
       // not a member-plane fact — unknown-shaped, like any foreign group.
       throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
     }
-    return this.#named(group);
+    const named = await this.#named(group);
+    return {
+      ...named,
+      visibility: groupVisibility(group),
+      isMember: Boolean(viewerDid) && Array.isArray(group.members) && group.members.includes(viewerDid),
+    };
   }
 
   /**
@@ -172,12 +232,7 @@ export class GroupService {
     if (!GROUP_VISIBILITIES.includes(visibility)) {
       throw typedError("E_GROUP_VISIBILITY_INVALID", "A group is either private or public.");
     }
-    if (group.createdBy !== actorDid) {
-      const actorMembership = actorDid ? await this.#activeMembership(group.networkId, actorDid) : null;
-      if (!actorMembership || actorMembership.role !== "owner") {
-        throw typedError("E_GROUP_NOT_CREATOR", "Only the group's creator or the network owner manages this group.");
-      }
-    }
+    await this.#assertManager(group, actorDid);
     await this.groups.updateOne({ _id: group._id }, { $set: { visibility } });
     return this.#named({ ...group, visibility });
   }
@@ -198,13 +253,14 @@ export class GroupService {
     if (!Array.isArray(dids) || dids.length === 0 || dids.some((did) => typeof did !== "string" || did.length === 0)) {
       throw typedError("E_GROUP_MEMBERS_INVALID", "Group members must be a list of member DIDs.");
     }
-    if (group.createdBy !== actorDid) {
-      const actorMembership = actorDid ? await this.#activeMembership(group.networkId, actorDid) : null;
-      if (!actorMembership || actorMembership.role !== "owner") {
-        throw typedError("E_GROUP_NOT_CREATOR", "Only the group's creator or the network owner manages this group's membership.");
-      }
-    }
+    await this.#assertManager(group, actorDid);
+    const blocked = new Set(blockedMembersOf(group));
     for (const did of dids) {
+      if (blocked.has(did)) {
+        // The lifecycle gate (Brian Oct 14, lifecycle ruling): a removed
+        // member cannot be invited back until the manager's unblock act.
+        throw typedError("E_GROUP_BLOCKED", "A removed member cannot be added back until the group's manager unblocks them.");
+      }
       if (!(await this.#activeMembership(group.networkId, did))) {
         throw typedError("E_GROUP_NOT_MEMBER", `Group member ${did} is not a member of this network.`);
       }
@@ -212,6 +268,91 @@ export class GroupService {
     const members = [...new Set([...(group.members ?? []), ...dids])];
     await this.groups.updateOne({ _id: group._id }, { $set: { members } });
     return this.#named({ ...group, members });
+  }
+
+  /**
+   * Self-serve join (PORCH-068 lifecycle ruling, Brian Oct 14: "join group
+   * button with no authorization step: no approval flow, no request
+   * stage"): a public group is joinable by any active member of the
+   * network, and joining turns on that member's feed delivery immediately
+   * (the delivery predicate is the live roster). Private groups resolve
+   * unknown-shaped for a non-member — the managing member is the only path
+   * in. A removed (blocked) member cannot re-join until the manager's
+   * unblock act lifts the entry. Already being a member is a no-op read,
+   * never a mutation.
+   */
+  async join({ groupId, networkId, did } = {}) {
+    const group = await this.groups.findOne({ _id: groupId });
+    if (!group || group.networkId !== String(networkId)) {
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    const members = Array.isArray(group.members) ? group.members : [];
+    if (members.includes(did)) {
+      // Already a member: a no-op read, never a mutation.
+      return this.get({ networkId: group.networkId, groupId, viewerDid: did });
+    }
+    if (groupVisibility(group) === "private") {
+      // Invite-only and invisibility agree: the concealing refusal — a
+      // private group is not a member-plane fact for this joiner; its
+      // managing member is the only path in.
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    if (blockedMembersOf(group).includes(did)) {
+      throw typedError("E_GROUP_BLOCKED", "You were removed from this group and cannot re-join until the group's manager unblocks you.");
+    }
+    if (!(await this.#activeMembership(group.networkId, did))) {
+      throw typedError("E_GROUP_NOT_MEMBER", `Group joiner ${did} is not a member of this network.`);
+    }
+    const roster = [...new Set([...(group.members ?? []), did])];
+    await this.groups.updateOne({ _id: group._id }, { $set: { members: roster } });
+    return this.get({ networkId: group.networkId, groupId, viewerDid: did });
+  }
+
+  /**
+   * Member removal (PORCH-068 lifecycle ruling): the managing member
+   * removes a member, which leaves memberIds and enters blockedMemberIds
+   * in ONE storage write — removal and block are atomic, with the
+   * member-controlled state (their authored posts) untouched.
+   */
+  async removeMember({ groupId, networkId, actorDid, did } = {}) {
+    const group = await this.groups.findOne({ _id: groupId });
+    if (!group || group.networkId !== String(networkId)) {
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    if (typeof did !== "string" || did.length === 0) {
+      throw typedError("E_GROUP_MEMBERS_INVALID", "A removal names the member DID.");
+    }
+    await this.#assertManager(group, actorDid);
+    if (!Array.isArray(group.members) || !group.members.includes(did)) {
+      throw typedError("E_GROUP_MEMBER_UNKNOWN", "That member is not in this group.");
+    }
+    const members = group.members.filter((member) => member !== did);
+    const blockedMemberIds = [...blockedMembersOf(group), did];
+    await this.groups.updateOne({ _id: group._id }, { $set: { members, blockedMemberIds } });
+    return this.#named({ ...group, members, blockedMemberIds });
+  }
+
+  /**
+   * Unblock (PORCH-068 lifecycle ruling): lifting a blocked entry is the
+   * managing member's act; the member then re-joins themselves (self-serve,
+   * public) or is added (creator's invite, private). A DID that carries no
+   * entry is a no-op read, never a mutation.
+   */
+  async unblock({ groupId, networkId, actorDid, did } = {}) {
+    const group = await this.groups.findOne({ _id: groupId });
+    if (!group || group.networkId !== String(networkId)) {
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    if (typeof did !== "string" || did.length === 0) {
+      throw typedError("E_GROUP_MEMBERS_INVALID", "An unblock names the member DID.");
+    }
+    await this.#assertManager(group, actorDid);
+    if (!blockedMembersOf(group).includes(did)) {
+      return this.get({ networkId: group.networkId, groupId, viewerDid: actorDid });
+    }
+    const blockedMemberIds = blockedMembersOf(group).filter((member) => member !== did);
+    await this.groups.updateOne({ _id: group._id }, { $set: { blockedMemberIds } });
+    return this.get({ networkId: group.networkId, groupId, viewerDid: actorDid });
   }
 }
 

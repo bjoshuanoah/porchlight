@@ -204,7 +204,7 @@ test("realtime: a cursor older than the replay window resolves stale even when e
 /** A tick: gated deliveries resolve the group roster in a microtask. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-test("realtime: private-group events never reach a non-member's room or catch-up (PORCH-068 ac-2/ac-5)", async () => {
+test("realtime: gated group-post events never reach a non-member's room or catch-up (PORCH-068 ac-2/ac-5)", async () => {
   const fx = realtimeFixture();
   const insider = await fx.admit({ networkId: "net_family", did: "did_in", device: device("dev_in") });
   const outsider = await fx.admit({ networkId: "net_family", did: "did_out", device: device("dev_out") });
@@ -225,18 +225,20 @@ test("realtime: private-group events never reach a non-member's room or catch-up
   assert.equal(insiderSeen.length, 1, "the group member receives the private event");
   assert.equal(outsiderSeen.length, 0, "the non-member's room never emits the private event");
 
-  // A public-group post event rides both channels exactly as today.
+  // A public-group post event delivers to that GROUP's members only (the
+  // refined ruling: broadcast differs never) — the non-member's room stays
+  // silent; joining is what turns delivery on.
   await fx.realtime.published({ networkId: "net_family", type: "post.created", postId: "p_public", groupId: publicGroup._id, content: { body: "open post" } });
   await settle();
   assert.equal(insiderSeen.length, 2);
-  assert.equal(outsiderSeen.length, 1, "the public group's event reaches the whole origin room");
+  assert.equal(outsiderSeen.length, 0, "the public group's event reaches only its members");
 
-  // The catch-up face: the non-member's delta carries only the ungated and
-  // public-group envelopes; the private-group one never replays.
+  // The catch-up face: the non-member's delta carries only envelopes their
+  // memberships admit — here, none; the private-group one never replays.
   const baseline = insiderSeen[0].seq;
   const replay = await fx.realtime.catchUp({ accessToken: outsider.accessToken, since: null });
   assert.equal(replay.stale, false);
-  assert.deepEqual(replay.events.map((event) => event.postId), ["p_public"]);
+  assert.deepEqual(replay.events, [], "no gated envelope replays to a non-member");
   void baseline;
   const insiderReplay = await fx.realtime.catchUp({ accessToken: insider.accessToken, since: null });
   assert.deepEqual(insiderReplay.events.map((event) => event.postId), ["p_private", "p_public"]);
@@ -246,7 +248,30 @@ test("realtime: private-group events never reach a non-member's room or catch-up
   await fx.realtime.published({ networkId: "net_family", type: "reply.created", postId: "p_private", groupId: secretGroup._id, content: { body: "secret reply" } });
   await settle();
   assert.equal(insiderSeen.length, 3);
-  assert.equal(outsiderSeen.length, 1, "no envelope of the private conversation replays or delivers");
+  assert.equal(outsiderSeen.length, 0, "no envelope of any gated conversation replays or delivers");
+});
+
+test("realtime: joining a public group turns its delivery on from that catch-up onward (PORCH-068 refined)", async () => {
+  const fx = realtimeFixture();
+  const member = await fx.admit({ networkId: "net_family", did: "did_m", device: device("dev_m") });
+  await fx.admit({ networkId: "net_family", did: "did_o", device: device("dev_o") }); // the group's manager
+  const publicGroup = await fx.groups.create({ networkId: "net_family", name: "Harbor", members: ["did_o"], createdBy: "did_o", visibility: "public" });
+
+  const seen = [];
+  await fx.realtime.subscribe({ token: member.accessToken, networkId: "net_family", channel: { id: "ch_m", emit: (envelope) => seen.push(envelope), close: () => {} } });
+  await fx.realtime.published({ networkId: "net_family", type: "post.created", postId: "p_dock", groupId: publicGroup._id, content: { body: "dock party" } });
+  await settle();
+  assert.equal(seen.length, 0, "before the join the group's events are not this member's delivery");
+
+  // The self-serve join resolves the live roster at delivery AND replay.
+  await fx.groups.join({ groupId: publicGroup._id, networkId: "net_family", did: "did_m" });
+  await fx.realtime.published({ networkId: "net_family", type: "post.created", postId: "p_next", groupId: publicGroup._id, content: { body: "next arrival" } });
+  await settle();
+  assert.deepEqual(seen.map((envelope) => envelope.postId), ["p_next"], "from the join onward delivery is live");
+
+  const replay = await fx.realtime.catchUp({ accessToken: member.accessToken, since: null });
+  assert.deepEqual(replay.events.map((event) => event.postId), ["p_dock", "p_next"],
+    "the window replays once they hold membership — a member reads the group's whole timeline");
 });
 
 test("realtime: the private-group gate fails closed when the group is unknown", async () => {

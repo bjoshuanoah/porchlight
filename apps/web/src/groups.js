@@ -36,6 +36,29 @@ export function composableGroups(groups = [], did = null) {
   return (groups || []).filter((group) => group && idOf(group) && isGroupMember(group, did));
 }
 
+/**
+ * Self-serve join (PORCH-068 lifecycle ruling): a public group is joinable
+ * by any member of the network with their own act — no approval flow —
+ * unless a past removal's blocked entry stands; the manager lifts it.
+ */
+export function canJoinGroup(group = null, did = null) {
+  if (!group || !did || idOf(group) === "") return false;
+  if (groupVisibility(group) !== "public") return false;
+  if (isGroupMember(group, did)) return false;
+  return !(group?.blockedMemberIds ?? []).includes(did);
+}
+
+/**
+ * The blocked-members render rows (PORCH-068 lifecycle ruling): removal
+ * enters the blocked set atomically; only the managing member sees the
+ * unblock act. No read-time names ride a blocked DID's row.
+ */
+export function blockedRows(group = {}) {
+  return (group?.blockedMemberIds ?? [])
+    .filter((did) => typeof did === "string" && did)
+    .map((did) => ({ did, name: null }));
+}
+
 /** Groups of the member's own origin network, names first, then by age. */
 export function groupRows(groups = [], networkId = null) {
   return (groups || [])
