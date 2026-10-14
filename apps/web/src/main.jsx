@@ -514,7 +514,6 @@ function App() {
     }
     setIdentity(next.identity);
     setPosts(cachedTimeline(stored, `${origin}:${registration.did}`));
-    setRanked([]);
     setHidden(hiddenPosts(stored, `${origin}:${registration.did}`));
     navigate("/timeline");
     if (!next.token) setNotice("This device is connected. Ask your family's owner to finish membership on this hub before moments appear.");
@@ -549,7 +548,6 @@ function App() {
     }
     setIdentity(next.identity);
     setPosts(cachedTimeline(stored, `${origin}:${did}`));
-    setRanked([]);
     setHidden(hiddenPosts(stored, `${origin}:${did}`));
     return admitted;
   };
@@ -655,7 +653,6 @@ function App() {
       setConnections(updated);
       setIdentity(updated.find((item) => item.identity?.id === id)?.identity ?? next.identity);
       setPosts(cachedTimeline(stored, `${origin}:${id}`));
-      setRanked([]);
       setHidden(hiddenPosts(stored, `${origin}:${id}`));
       navigate("/timeline");
     },
@@ -666,7 +663,6 @@ function App() {
       markSignedOut(stored, origin);
       setIdentity(null);
       setPosts([]);
-      setRanked([]);
       setHidden(new Set());
       navigate("/who-is-here");
     },
