@@ -35,9 +35,13 @@ name: npm-publish
 #     tarball install, self-verification). Used to exercise the release path
 #     without touching the registry.
 #
-# The version step sets every workspace (and the root) to the released
-# version in the deploy working tree only; manifests on main are not
-# rewritten by deploys. Released artifacts carry the version from the tag.
+# The cut version is committed on main (PORCH-071 ac-2: an explicit bump
+# precedes the tag). The gate step fails the workflow loudly when the
+# tag/version input disagrees with the committed package.json — the tag
+# v-name, the repo checkout manifests and the registry manifest must all
+# carry one version, with no post-registry drift. The version step remains:
+# it re-stamps every workspace idempotently (no-op when main is bumped) and
+# keeps the workspace dependency pins and the lockfile in lockstep.
 
 on:
   push:
@@ -80,11 +84,17 @@ jobs:
       tag: ${{ steps.env.outputs.tag }}
       version: ${{ steps.env.outputs.version }}
     env:
-      # porchlight is the binding-covered package of record (trusted-publisher
+      # Porchlight is the binding-covered package of record (trusted-publisher
       # binding: package porchlight → repo bjoshuanoah/porchlight → workflow
-      # npm-publish.yml) and always publishes — its tarball is self-contained
-      # (bundled runtime closure; see bundle-cli.mjs), so it publishes from
-      # the release asset.
+      # npm-publish.yml) and always publishes. Its tarball is npm's own packing of
+      # the repo checkout: bundle-cli.mjs pre-stages the runtime closure (bundles
+      # + sharp platform trees + pruned ffprobe) under the workspace package
+      # directory and packs with `npm pack -w packages/cli`, so the registry
+      # manifest carries the README and every declared file; the same tarball is
+      # the GitHub release asset (one payload, registry and release never diverge;
+      # PORCH-071). The retired route — a hand-assembled staging tarball published
+      # with `npm publish <release-assets tarball>` of a detached tree — must not
+      # come back.
       #
       # @porchlight/* scoped package set: each publishes only if the registry
       # already has the package (npm OIDC trusted publishing cannot create a
@@ -137,9 +147,19 @@ jobs:
           echo "Deploying $TAG (mode: $MODE)"
         env:
           EVENT_NAME: ${{ github.event_name }}
+      - name: Gate — committed manifests must carry the cut version (one version everywhere, PORCH-071 ac-2)
+        run: |
+          set -euo pipefail
+          rootVersion="$(node -e 'console.log(require("./package.json").version)')"
+          cliVersion="$(node -e 'console.log(require("./packages/cli/package.json").version)')"
+          if [ "$rootVersion" != "$VERSION" ] || [ "$cliVersion" != "$VERSION" ]; then
+            echo "::error::cut version mismatch — tag/cut says ${VERSION} but the committed package.json says ${rootVersion} (root) / ${cliVersion} (packages/cli). Bump package.json on main to ${VERSION} before cutting (PORCH-071 ac-2: tag v-name ↔ package.json ↔ npm registry manifest must agree)."
+            exit 1
+          fi
+          echo "cut ${TAG}: committed manifests agree (root ${rootVersion}, packages/cli ${cliVersion})"
       - name: npm ci
         run: npm ci
-      - name: Version (all workspaces → $VERSION)
+      - name: Version (all workspaces → $VERSION, idempotent re-stamp)
         run: node scripts/release/version.mjs "$VERSION"
       - name: Build
         run: npm run build
@@ -150,14 +170,19 @@ jobs:
           for ws in $SCOPED; do
             npm pack -w "$ws" --pack-destination release-assets
           done
-          # The porchlight tarball must be self-contained (bundleDependencies +
-          # npm workspaces pack bug): build + verify it explicitly (PORCH-003).
+          # The porchlight tarball is npm's own packing of the repo checkout
+          # (PORCH-071 ac-1): bundle-cli.mjs pre-stages the runtime closure
+          # under the workspace package directory (bundles + sharp platform
+          # trees + pruned ffprobe) and packs via `npm pack -w packages/cli`,
+          # gates the tarball (README/LICENSE/bin surface, no symlinks, no
+          # dropped closure trees, size cap) and verifies a clean isolated
+          # install before anything publishes.
           # Remove only the workspace-packed porchlight tarball by its exact
           # name: a `porchlight-*` glob also eats the scoped packages' packed
           # tarballs (porchlight-server-<v>.tgz … all start with "porchlight-")
           # — the first v0.1.1 cut lost every scoped asset to that glob.
           rm -f release-assets/porchlight-"$VERSION".tgz
-          node scripts/release/bundle-cli.mjs "$VERSION" --out release-assets
+          node scripts/release/bundle-cli.mjs --out release-assets
           (cd release-assets && shasum -a 256 -- *.tgz > SHA256SUMS)
           echo "Packed:" && ls -la release-assets
       - name: Sign SHA256SUMS (Sigstore keyless)
@@ -169,11 +194,14 @@ jobs:
         if: env.MODE == 'publish'
         run: |
           set -euo pipefail
-          # porchlight first, always: the binding covers this package and its
-          # tarball is self-contained (registry needs nothing else for the
-          # install path). Published version must equal the tag. The ./ spec
-          # prefix is load-bearing: a bare relative path parses as a git
-          # URL to npm, not a file. Provenance is automatic under trusted
+          # porchlight first, always: the binding covers this package. The
+          # tarball is npm's own packing of the repo checkout (bundle-cli,
+          # PORCH-071) — self-contained (bundled closure carries the whole
+          # install path) and gated+verified before this step runs. Its
+          # manifest version equals the committed package.json version (the
+          # gate above proved both equal the tag). The ./ spec prefix is
+          # load-bearing: a bare relative path parses as a git URL to npm,
+          # not a file. Provenance is automatic under trusted
           # publishing — no flag, and .npmrc must carry no authToken.
           npm publish "./release-assets/porchlight-$VERSION.tgz" --access public
           # Scoped packages only when the registry already has them — npm
