@@ -1,13 +1,13 @@
 import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, Drawer, FormControl, IconButton, InputLabel, List, ListItemButton,
-  ListItemText, MenuItem, Paper, Popover, Select, Stack, TextField, Typography,
+  DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
+  ListItemText, Menu, MenuItem, Paper, Popover, Select, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import {
-  AddReactionOutlined, ChevronLeft, ChevronRight, CloseOutlined, FullscreenOutlined,
-  PauseOutlined, PlayArrowOutlined, ReplayOutlined, ShareOutlined,
-  VolumeOffOutlined, VolumeUpOutlined,
+  AddReactionOutlined, ArrowDownwardOutlined, ArrowUpwardOutlined, ChevronLeft, ChevronRight,
+  FullscreenOutlined, MoreHorizOutlined, PauseOutlined, PlayArrowOutlined, ReplayOutlined,
+  ReplyOutlined, ShareOutlined, VolumeOffOutlined, VolumeUpOutlined,
 } from '@mui/icons-material';
 import { cssVars } from './theme.js';
 import { adaptiveTrackHeight, carouselIndex, photoFirst } from './photo-first.js';
@@ -25,7 +25,6 @@ import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, 
 import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, pendingReply, conversationOf } from './slice.js';
 import { LinkPreviewBlock, LinkedBody } from './link-preview.jsx';
 import { firstUrlIn, previewOrigin } from './link-preview.js';
-import { useMediaQuery } from '@mui/material';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
@@ -582,7 +581,7 @@ function Media({ post, actions, detail = false }) {
 // adds it: change or clear, never an error (ac-2, ac-3). The row reflection
 // lives in the shared reactions module, so the timeline card and the post
 // detail reflect the same origin conversation through one routine (PORCH-038).
-function PresentReactions({ post, data, actions, reactionState, spacingY = 2 }) {
+function PresentReactions({ post, data, actions, reactionState, spacingY = 2, actionBar = null }) {
   // Controlled mode (PORCH-041 ac-4): the detail card and the conversation
   // column reflect ONE origin conversation — when reactionState is provided
   // both bars render the PostDetail owner's rows and every toggle lands in
@@ -649,50 +648,35 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2 }) 
       () => setRows(before),
     );
   };
-  return <Stack
-    direction="row"
-    spacing={1}
-    alignItems="center"
-    flexWrap="wrap"
-    sx={{ mt: spacingY }}
-    aria-label="Reactions from your family"
-  >
-    {[...new Set((rows ?? []).map((row) => row.emoji))].map((emoji) => {
-      const ownEmoji = own.has(emoji);
-      return <Chip
-        key={emoji}
-        label={emoji}
-        size="small"
-        aria-pressed={ownEmoji}
-        aria-label={ownEmoji ? `Your reaction ${emoji}` : `Reaction ${emoji}`}
-        sx={{
-          minHeight: 40,
-          minWidth: 40,
-          fontSize: 20,
-          ...(ownEmoji ? {
-            bgcolor: 'porchlight.amberSoft',
-            border: '1px solid',
-            borderColor: 'porchlight.amber',
-            color: 'text.primary',
-          } : {}),
-        }}
-      />;
-    })}
-    <IconButton
-      size="medium"
-      aria-label="Add a reaction"
-      aria-haspopup="dialog"
-      disabled={operation.busy || Boolean(data?.offline)}
-      onClick={(event) => setAnchor(event.currentTarget)}
-      sx={{ width: 40, height: 40, border: `1px dashed ${cssVars.borderStrong}` }}
-    >
-      <AddReactionOutlined fontSize="small" />
-    </IconButton>
+  const emojis = [...new Set((rows ?? []).map((row) => row.emoji))].map((emoji) => {
+    const ownEmoji = own.has(emoji);
+    return <Chip key={emoji} label={emoji} size="small" aria-pressed={ownEmoji}
+      aria-label={ownEmoji ? `Your reaction ${emoji}` : `Reaction ${emoji}`}
+      sx={{
+        minHeight: 40, minWidth: 40, fontSize: 20,
+        ...(ownEmoji ? { bgcolor: 'porchlight.amberSoft', border: '1px solid', borderColor: 'porchlight.amber', color: 'text.primary' } : {}),
+      }} />;
+  });
+  return <>
+    <Stack direction="row" spacing={actionBar ? 0 : 1} alignItems="center" flexWrap="wrap"
+      sx={{ mt: spacingY, ...(actionBar ? { justifyContent: 'flex-start', gap: '8px' } : {}) }}
+      aria-label={actionBar ? 'Post actions' : 'Reactions from your family'}>
+      {actionBar}
+      {!actionBar && emojis}
+      <Tooltip title="React"><span><IconButton aria-label={actionBar ? 'React' : 'Add a reaction'}
+        aria-haspopup="dialog" disabled={operation.busy || Boolean(data?.offline)}
+        onClick={(event) => setAnchor(event.currentTarget)}
+        sx={actionBar ? { width: 36, height: 36, p: 0, '&::after': { content: '""', position: 'absolute', inset: -4 } } : { width: 40, height: 40, border: `1px dashed ${cssVars.borderStrong}` }}>
+        <AddReactionOutlined fontSize="small" />
+      </IconButton></span></Tooltip>
+    </Stack>
+    {actionBar && emojis.length > 0 && <Stack direction="row" spacing={1} flexWrap="wrap"
+      aria-label="Reactions from your family" sx={{ mt: photoFirst.spacing.actionsReactions / 8 }}>{emojis}</Stack>}
     {anchor && <Suspense fallback={<CircularProgress size={20} />}>
       <EmojiPicker open anchorEl={anchor} onClose={() => setAnchor(null)} own={own} onToggle={toggle} busy={operation.busy} />
     </Suspense>}
     {operation.error && <Typography variant="caption" color="error" sx={{ width: '100%' }}>{operation.error}</Typography>}
-  </Stack>;
+  </>;
 }
 
 function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState }) {
@@ -707,7 +691,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   // read pending) render through sliceDisplay with the server's slice.
   const [localConversation, setLocalConversation] = useState(() => ({ pending: [], confirmed: [] }));
   const replyCountRef = useRef(0);
-  const [conversationOpen, setConversationOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState(null);
   const sliceIdentity = post
     ? `${identityOf(post)}:${Array.isArray(post.replySlice) ? post.replySlice.map((reply) => reply._id).join('|') : ''}:${Number.isFinite(post.replyTotal) ? post.replyTotal : ''}`
     : '';
@@ -735,7 +719,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
       name: data.identity?.name ?? 'You',
       localId,
     });
-    setLocalConversation((current) => ({ ...current, pending: [...current.pending, optimisticRow] }));
+    if (!parentId) setLocalConversation((current) => ({ ...current, pending: [...current.pending, optimisticRow] }));
     const revert = () => setLocalConversation((current) => ({ ...current, pending: current.pending.filter((row) => row._id !== localId) }));
     return Promise.resolve()
       .then(() => invoke(actions, 'submitReply', post, body, parentId, mentions))
@@ -744,7 +728,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
           revert();
           throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
         }
-        setLocalConversation((current) => ({
+        if (!parentId) setLocalConversation((current) => ({
           pending: current.pending.filter((row) => row._id !== localId),
           confirmed: [...current.confirmed, {
             reply: { ...result.comment, postId: result.comment.postId ?? identityOf(post) },
@@ -755,23 +739,19 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
       }, (failure) => { revert(); throw failure; });
   };
   const displaySlice = detail ? null : sliceDisplay(post, localConversation);
-  // PORCH-043 mobile post container (below 900px): width 100%, no radius,
-  // no side borders, no shadow — the Feed's 1px warm-neutral divider
-  // provides post separation (continuous album, no card gap mode). Desktop
-  // keeps the Oct 9 contained card (ac-5, ac-6).
+  // Mobile posts stay full-bleed while the feed exposes page background
+  // between neighbors. Desktop retains its contained card treatment.
   const cardSx = detail ? undefined : {
     width: '100%',
     borderRadius: { xs: 0, lg: '14px' },
     border: { xs: 'none', lg: `1px solid ${cssVars.border}` },
     boxShadow: { xs: 'none', lg: cssVars.shadowCard },
   };
-  // PORCH-043 timeline actions (mobile chrome ruling): 14px/600 amber text,
-  // no backgrounds or borders, ≥44px touch targets, distributed evenly. The
-  // detail surface keeps PORCH-041's own treatment (supersession is scoped
-  // to the timeline rebuild).
-  const actionSx = detail
-    ? undefined
-    : { fontSize: 14, fontWeight: 600, justifyContent: 'center' };
+  const compactIconSx = { width: 36, height: 36, p: 0, '&::after': { content: '""', position: 'absolute', inset: -4 } };
+  const voteButton = (direction, label, Icon) => <Tooltip title={label}><span><IconButton
+    aria-label={label} disabled={operation.busy || data.offline} sx={compactIconSx}
+    onClick={() => operation.run(() => invoke(actions, 'vote', post, direction))}
+  ><Icon fontSize="small" /></IconButton></span></Tooltip>;
   // The feed-entry anchor (PORCH-046 ac-1): a stable per-post measurement
   // point for the reading-place compensation during live arrival.
   return <Card sx={cardSx} data-feed-entry={postKey(post) || undefined}>
@@ -792,7 +772,17 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
             </Stack>
           </Box>
         </Stack>
-        <Button size="small" disabled={operation.busy} onClick={() => operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); })}>Hide</Button>
+        <Box>
+          <IconButton aria-label="Post options" aria-haspopup="menu" aria-expanded={Boolean(menuAnchor)}
+            onClick={(event) => setMenuAnchor(event.currentTarget)}><MoreHorizOutlined /></IconButton>
+          <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
+            {!detail && <MenuItem onClick={() => { setMenuAnchor(null); openPost(); }}>Open conversation</MenuItem>}
+            <MenuItem disabled={operation.busy} onClick={() => {
+              setMenuAnchor(null);
+              operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); });
+            }}>Hide</MenuItem>
+          </Menu>
+        </Box>
       </Stack>
       {/* Rhythm (PORCH-043 vertical table): 25–30% tighter post-internal
           spacing; the body line stays 16px/25px on the timeline with the
@@ -807,16 +797,17 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
           from this hub only; the embed facade waits for a member tap. */}
       {post.preview && <LinkPreviewBlock preview={post.preview} origin={previewOrigin(post, data)} />}
       <Media post={post} actions={actions} detail={detail} />
-      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2, ...(detail ? {} : { justifyContent: 'space-between' }) }}>
-        <Button disabled={operation.busy || data.offline} sx={actionSx} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'up'))}>Lift</Button>
-        <Button disabled={operation.busy || data.offline} sx={actionSx} onClick={() => operation.run(() => invoke(actions, 'vote', post, 'down'))}>Lower</Button>
-        {/* Card affordances (PORCH-038): quiet react and reply controls per
-            the product intent. The detail surface stays the full conversation
-            view; Open conversation remains available but is no longer the
-            only door. No engagement counts render on any surface. */}
-        {!detail && <Button aria-expanded={replying} disabled={data.offline} sx={actionSx} onClick={() => setReplying(!replying)}>Reply</Button>}
-        {!detail && <Button sx={actionSx} onClick={openPost}>Open conversation</Button>}
-      </Stack>
+      {detail
+        ? <Stack direction="row" spacing={1} sx={{ mt: 2 }}>{voteButton('up', 'Lift', ArrowUpwardOutlined)}{voteButton('down', 'Lower', ArrowDownwardOutlined)}</Stack>
+        : <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState}
+          spacingY={photoFirst.spacing.utilityActions / 8}
+          actionBar={<>
+            {voteButton('up', 'Lift', ArrowUpwardOutlined)}
+            {voteButton('down', 'Lower', ArrowDownwardOutlined)}
+            <Tooltip title="Reply"><span><IconButton aria-label="Reply" aria-expanded={replying}
+              disabled={data.offline} sx={compactIconSx} onClick={() => setReplying(!replying)}
+            ><ReplyOutlined fontSize="small" /></IconButton></span></Tooltip>
+          </>} />}
       {!detail && replying && !data.offline && <ReplyForm
         label="Write a reply"
         offline={data.offline}
@@ -824,17 +815,11 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
         actions={actions}
         onSubmit={(body, mentions) => submitOptimistic(body, null, mentions)}
       />}
-      <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} spacingY={detail ? 2 : photoFirst.spacing.actionsReactions / 8} />
-      {/* Conversation preview (PORCH-046 ac-5): the latest five replies,
-          readable and joinable without opening the post; the expander opens
-          the conversation in place (ac-6), quantity only. */}
-      {!detail && <ReplySliceBlock slice={displaySlice} data={data} actions={actions} onOpenConversation={() => setConversationOpen(true)} offline={data.offline} origin={previewOrigin(post, data)} />}
+      {detail && <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />}
+      {!detail && <ReplySliceBlock key={identityOf(post)} post={post} slice={displaySlice} data={data}
+        actions={actions} offline={data.offline} origin={previewOrigin(post, data)}
+        onReply={submitOptimistic} navigate={navigate} />}
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
-      {/* The in-place conversation surface: no navigation, so the feed's
-          reading place survives open and dismissal untouched (ac-3, ac-6).
-          The route surface (/posts/:id) remains the standalone full-history
-          view (PORCH-041). */}
-      {!detail && <ConversationOverlay open={conversationOpen} onClose={() => setConversationOpen(false)} postId={identityOf(post)} seed={post} data={data} actions={actions} navigate={navigate} />}
     </CardContent>
   </Card>;
 }
@@ -843,140 +828,105 @@ function Heading({ title, subtitle }) {
   return <Box sx={{ mb: 3 }}><Typography variant="h1" component="h1" fontWeight={650}>{title}</Typography>{subtitle && <Typography variant="body1" color="text.secondary">{subtitle}</Typography>}</Box>;
 }
 
-// Conversation preview slice (PORCH-046 ac-5, build contract): the card's
-// five most-recent replies in reading direction between the reaction row
-// and the post divider, each riding the ReplyItem treatment (30px avatar,
-// name, relative time, text). The expander is the quiet amber text action
-// "(and N more)" and carries the conversation-length quantity only — never
-// an engagement count (quantity-versus-engagement boundary).
-function ReplySliceBlock({ slice, data, actions, onOpenConversation, offline, origin = null }) {
-  const more = expanderCount(slice.total);
-  if (!slice.replies.length && more === 0) return null;
-  return <Stack spacing={1} sx={{ mt: photoFirst.spacing.reactionsSlice / 8 }}>
-    {slice.replies.map((reply) => (
-      <Stack key={identityOf(reply)} direction="row" spacing={1} alignItems="flex-start">
+// The hub decorates four roots and descendant counts. Full history is read
+// only when someone expands comments or a response tree; both open on the
+// card, preserving the feed's reading position and origin boundary.
+function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply, navigate }) {
+  const [loaded, setLoaded] = useState(null);
+  const [showAll, setShowAll] = useState(false);
+  const [expandedRoots, setExpandedRoots] = useState(() => new Set());
+  const [editingId, setEditingId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const signature = `${slice.total}:${slice.replies.map((row) => `${identityOf(row)}:${row.responseCount ?? 0}`).join('|')}`;
+  const scoped = (comments) => comments.filter((row) =>
+    (!row.postId || String(row.postId) === identityOf(post))
+    && (!row.networkId || !originOf(post) || String(row.networkId) === String(originOf(post))));
+  const load = async () => {
+    if (loaded) return loaded;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await invoke(actions, 'loadComments', post);
+      if (!Array.isArray(result?.comments)) throw new Error('The family server did not return this conversation.');
+      const comments = scoped(result.comments);
+      setLoaded(comments);
+      return comments;
+    } catch (failure) {
+      setError(messageOf(failure));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Once expanded, arrivals refresh the open tree without folding it or
+  // resetting the member's scroll position.
+  useEffect(() => {
+    if (!loaded || offline) return undefined;
+    let active = true;
+    Promise.resolve().then(() => invoke(actions, 'loadComments', post)).then((result) => {
+      if (active && Array.isArray(result?.comments)) setLoaded(scoped(result.comments));
+    }).catch(() => {});
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a changed decorated slice refreshes an open thread
+  }, [signature]);
+  const byParent = repliesByParent(loaded ?? []);
+  const roots = showAll && loaded
+    ? repliesByParent([...loaded, ...slice.replies.filter((row) => !loaded.some((item) => identityOf(item) === identityOf(row)))]).get('') ?? []
+    : slice.replies;
+  const more = showAll ? 0 : expanderCount(slice.total);
+  if (!roots.length && !more) return null;
+  const expand = async (id) => {
+    if (offline || busy) return;
+    if (!await load()) return;
+    if (id) setExpandedRoots((current) => new Set(current).add(id));
+    else setShowAll(true);
+  };
+  const submitNested = async (body, parentId, mentions) => {
+    const result = await onReply(body, parentId, mentions);
+    if (result?.comment && scoped([result.comment]).length) {
+      setLoaded((current) => current ? [...current, result.comment] : current);
+    }
+    return result;
+  };
+  const renderRow = (reply, depth = 0, seen = new Set(), rootId = identityOf(reply)) => {
+    const id = identityOf(reply);
+    if (!id || seen.has(id)) return null;
+    const children = byParent.get(id) ?? [];
+    const count = reply.responseCount ?? children.length;
+    const open = expandedRoots.has(rootId);
+    const nextSeen = new Set(seen).add(id);
+    return <Box key={id} sx={{ ml: depth ? { xs: Math.min(depth, 2) * 2, lg: Math.min(depth, 3) * 3.5 } : 0,
+      ...(depth ? { borderLeft: '1px solid', borderColor: 'divider', pl: 1 } : {}) }}>
+      <Stack direction="row" spacing={1} alignItems="flex-start">
         <Avatar sx={{ width: 30, height: 30, fontSize: 13 }}>{(reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)).trim().charAt(0).toUpperCase()}</Avatar>
-        <Box sx={{ minWidth: 0 }}>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography variant="caption" color="porchlight.muted">
             {reply.authorName ?? memberName(reply.authorDid, data)} · {relativeTime(reply.createdAt)}
           </Typography>
-          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data)}</Typography>
-          {/* Link preview (PORCH-052): a reply carrying a provider URL renders
-              its embed (tap to play) inline in the slice; card links open in
-              a new tab. The image always loads from the reply's own hub. */}
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
           {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={origin ?? previewOrigin(reply, data)} compact />}
+          {!offline && depth < 8 && <Button size="small" onClick={() => setEditingId(editingId === id ? null : id)}
+            sx={{ px: 0, minWidth: 0 }}>Reply</Button>}
+          {editingId === id && <ReplyForm label="Your reply" offline={offline} post={post} actions={actions}
+            onSubmit={(body, mentions) => submitNested(body, id, mentions)} />}
+          {!open && count > 0 && <Button size="small" disabled={offline || busy}
+            onClick={() => expand(id)} sx={{ display: 'block', px: 0, minWidth: 0, color: 'secondary.main' }}>
+            {`View ${count} more responses`}
+          </Button>}
         </Box>
       </Stack>
-    ))}
-    {more > 0 && <Button
-      size="small"
-      onClick={offline ? undefined : onOpenConversation}
-      aria-label={`Open the conversation — ${more} more replies`}
-      sx={{ alignSelf: 'flex-start', px: 0, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'secondary.main' }}
-    >{`(and ${more} more)`}</Button>}
-  </Stack>;
-}
-
-// The in-place conversation surface (PORCH-046 ac-6): mobile bottom sheet
-// (24px top corners), desktop side panel — one component, two responsive
-// forms, never a navigation. Dismissal restores the feed where it was (no
-// scroll was touched, so the reading place survives open AND dismissal).
-// The thread loads only on open; the same loadPost/loadComments path the
-// detail route rides keeps one conversation source.
-function ConversationOverlay({ open, onClose, postId, seed, data, actions, navigate }) {
-  const isWide = useMediaQuery('@media (min-width: 900px)');
-  const [thread, setThread] = useState(null);
-  const [pending, setPending] = useState([]);
-  const [reactionRows, setReactionRows] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState('');
-  const replyCountRef = useRef(0);
-  useEffect(() => {
-    if (!open || !postId) return undefined;
-    let current = true;
-    setLoading(true);
-    setThread(null);
-    setPending([]);
-    setReactionRows(null);
-    setLoadError('');
-    Promise.resolve().then(async () => {
-      const postResult = await invoke(actions, 'loadPost', postId);
-      if (!postResult?.post || identityOf(postResult.post) !== String(postId)) throw new Error('The family server did not return this post.');
-      const commentsResult = await invoke(actions, 'loadComments', postResult.post);
-      if (!Array.isArray(commentsResult?.comments)) throw new Error('The family server did not return this conversation.');
-      return { post: postResult.post, comments: commentsResult.comments };
-    }).then((result) => {
-      if (current) { setThread(result); if (result.post?.reactionRows) setReactionRows(reactionRowsOf(result.post.reactionRows)); setLoading(false); }
-    }).catch((error) => {
-      if (current) { setLoadError(messageOf(error)); setLoading(false); }
-    });
-    return () => { current = false; };
-  }, [open, postId]);
-  const post = thread?.post ?? (open ? seed : null);
-  const comments = thread?.comments ?? [];
-  // The rendered thread carries the load's rows plus the member's
-  // optimistic replies; confirmed rows swap for the server's copies.
-  const rowIds = new Set(comments.map((reply) => identityOf(reply)));
-  const rendered = [...comments, ...pending.filter((reply) => !rowIds.has(identityOf(reply)))];
-  const submit = async (body, parentId, mentions) => {
-    if (!thread) throw new Error('The conversation is still loading. Try again once it opens.');
-    const localId = `local:reply-${Date.now()}-${(replyCountRef.current += 1)}`;
-    const optimisticRow = pendingReply(thread.post, body, {
-      did: data.identity ? String(data.identity.id) : null,
-      name: data.identity?.name ?? 'You',
-      localId,
-    });
-    // The optimistic row joins the thread in place (ac-2); nesting under its
-    // parent renders with the same Reply treatment.
-    setPending((current) => [...current, { ...optimisticRow, parentId: parentId ?? null }]);
-    const revert = () => setPending((current) => current.filter((row) => row._id !== localId));
-    try {
-      const result = await invoke(actions, 'submitReply', thread.post, body, parentId, mentions);
-      if (!result?.comment || !identityOf(result.comment) || result.comment.postId !== identityOf(thread.post)) {
-        throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
-      }
-      // The confirmed server copy retires the optimistic row under its own
-      // _id: one copy renders in the thread, exactly once.
-      setPending((current) => current.filter((row) => row._id !== localId));
-      setThread((current) => current ? { ...current, comments: [...current.comments, result.comment] } : current);
-      return result;
-    } catch (failure) {
-      revert();
-      throw failure;
-    }
+      {open && children.map((child) => renderRow(child, depth + 1, nextSeen, rootId))}
+    </Box>;
   };
-  const filtered = rendered.filter((reply) => (!reply.postId || reply.postId === identityOf(post)) && (!reply.networkId || !post || !originOf(post) || String(reply.networkId) === String(originOf(post))));
-  return <Drawer
-    open={Boolean(open)}
-    onClose={onClose}
-    anchor={isWide ? 'right' : 'bottom'}
-    aria-label="Conversation"
-    slotProps={{ paper: {
-      sx: {
-        ...(isWide
-          ? { width: 480, borderTopLeftRadius: '18px', borderBottomLeftRadius: '18px' }
-          : { borderTopLeftRadius: '24px', borderTopRightRadius: '24px', maxHeight: '85vh' }),
-        display: 'flex',
-        flexDirection: 'column',
-      },
-    } }}
-  >
-    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
-      <Typography variant="h3" component="h2" fontWeight={650}>Replies</Typography>
-      <IconButton aria-label="Close conversation" onClick={onClose}><CloseOutlined fontSize="small" /></IconButton>
-    </Stack>
-    <Box sx={{ overflowY: 'auto', flex: 1, p: 2 }}>
-      {loading && <CircularProgress aria-label="Loading conversation" size={24} />}
-      {loadError && <Alert severity="error">{loadError}</Alert>}
-      {post && !loadError && <Stack spacing={2}>
-        <PostCard post={post} data={data} actions={actions} navigate={navigate} detail
-          reactionState={{ rows: reactionRows, setRows: setReactionRows }} />
-        <PresentReactions post={post} data={data} actions={actions} reactionState={{ rows: reactionRows, setRows: setReactionRows }} />
-        <Typography variant="h6">Replies</Typography>
-        {thread && (rendered.length ? <ReplyThread comments={filtered} post={post} data={data} actions={actions} navigate={navigate} offline={data.offline} onReply={submit} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
-      </Stack>}
-    </Box>
-  </Drawer>;
+  return <Box sx={{ mt: photoFirst.spacing.reactionsSlice / 8, borderTop: '1px solid', borderColor: photoFirst.dividerColor, pt: 1.25 }}>
+    <Stack spacing={1}>{roots.map((reply) => renderRow(reply))}</Stack>
+    {more > 0 && <Button size="small" disabled={offline || busy} onClick={() => expand(null)}
+      sx={{ mt: 1, px: 0, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'secondary.main' }}>
+      {`View ${more} more comments`}
+    </Button>}
+    {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
+  </Box>;
 }
 
 // The pending copy swaps for the confirmed server row by id: the confirm
@@ -997,13 +947,9 @@ function ReplyThread({ comments, post, data, actions, navigate, offline, onReply
   return <>{render()}</>;
 }
 
-// PORCH-043: the mobile feed breaks out of the page gutter so posts span
-// the full viewport (ac-1) and post separation is the 1px warm-neutral
-// divider — continuous-album mode, no card gap (ac-5). Desktop keeps the
-// contained 16px-gap card river (ac-6). Breakout values match the shell's
-// page padding (theme tokens: 16px mobile, 20px desktop — main.jsx).
+// Mobile posts break out of the page gutter; a 14px gap exposes page
+// background between them. Desktop keeps its 16px contained-card gap.
 const feedBreakout = { mx: { xs: -2, lg: 0 } };
-const albumDivider = <Box sx={{ height: '1px', flexShrink: 0, width: '100%', bgcolor: photoFirst.dividerColor, display: { xs: 'block', lg: 'none' } }} aria-hidden="true" />;
 
 function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
   // The one privacy filter every render rides (PORCH-046 ac-4): loaded
@@ -1011,7 +957,7 @@ function Feed({ posts, data, actions, navigate, empty, hidden, onHide }) {
   // foreign-origin posts here, never downstream.
   const visible = visibleFeedPosts(rows(posts), data, hidden).filter((post) => !actions?.isHidden?.(post));
   return visible.length
-    ? <Box sx={feedBreakout}><Stack spacing={{ xs: 0, lg: 2 }} divider={albumDivider}>{visible.map((post, index) => <PostCard key={postKey(post) || index} post={post} data={data} actions={actions} navigate={navigate} onHide={onHide} />)}</Stack></Box>
+    ? <Box sx={feedBreakout}><Stack spacing={{ xs: '14px', lg: 2 }}>{visible.map((post, index) => <PostCard key={postKey(post) || index} post={post} data={data} actions={actions} navigate={navigate} onHide={onHide} />)}</Stack></Box>
     : <Alert severity="info">{empty}</Alert>;
 }
 

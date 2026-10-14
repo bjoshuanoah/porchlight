@@ -417,8 +417,8 @@ test("ac-2/ac-3: a group post delivers to members' feeds only; joining a public 
   assert.equal(megFeedAfter.find((post) => post._id === dock._id)?.groupName, "Harbor");
 });
 
-/** PORCH-046: conversation previews on feed views (ac-5, ac-6, ac-4). */
-test("ac-5: a post view carries its latest five replies chronologically plus the conversation total", async () => {
+/** Conversation previews: latest root comments and nested response counts. */
+test("ac-5: a post view carries four latest roots, root total, and descendant counts without nested text", async () => {
   const names = { [SUSAN]: "Susan Hale", [JUNE]: "June River" };
   const testFx = fixture({ memberNames: async (dids) => dids.map((did) => ({ did, displayName: names[did] ?? null })) });
   const dev = device("dev_s");
@@ -438,23 +438,44 @@ test("ac-5: a post view carries its latest five replies chronologically plus the
   });
 
   const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "conversation starter" });
+  const createdAt = (index) => new Date(Date.parse("2026-10-14T10:00:00Z") + index * 1000).toISOString();
   for (let index = 0; index < 52; index += 1) {
-    const hourAgo = new Date(Date.now() - (1000 - index)).toISOString();
     await fx.collections.comments.insertOne({
       _id: `cmt_test_${index}`, postId: post._id, networkId: FAMILY,
       authorDid: index % 2 ? JUNE : SUSAN, parentId: null, body: `reply ${index}`,
-      mentions: [], createdAt: hourAgo,
+      mentions: [], createdAt: createdAt(index),
     });
   }
-
+  for (let index = 0; index < 26; index += 1) {
+    await fx.collections.comments.insertOne({
+      _id: `cmt_nested_${index}`, postId: post._id, networkId: FAMILY,
+      authorDid: JUNE, parentId: index % 2 ? `cmt_nested_${index - 1}` : "cmt_test_51",
+      body: `hidden nested ${index}`, mentions: [], createdAt: createdAt(52 + index),
+    });
+  }
+  await fx.collections.comments.insertOne({
+    _id: "cmt_other_nested", postId: post._id, networkId: FAMILY,
+    authorDid: JUNE, parentId: "cmt_test_50", body: "other root nested", mentions: [], createdAt: createdAt(78),
+  });
+  await fx.collections.comments.insertOne({
+    _id: "cmt_foreign_root", postId: post._id, networkId: OTHER,
+    authorDid: JUNE, parentId: null, body: "foreign root", mentions: [], createdAt: createdAt(90),
+  });
+  await fx.collections.comments.insertOne({
+    _id: "cmt_foreign_nested", postId: post._id, networkId: OTHER,
+    authorDid: JUNE, parentId: "cmt_test_51", body: "foreign nested", mentions: [], createdAt: createdAt(91),
+  });
   const [view] = (await feed.timeline({ accessToken: susan })).posts;
-  assert.equal(view.replyTotal, 52, "the expander count is the conversation's full length");
-  assert.equal(view.replySlice.length, 5, "the card slice renders only the five latest replies");
+  assert.equal(view.replyTotal, 52, "nested and foreign comments do not raise the root total");
+  assert.equal(view.replySlice.length, 4, "the card shows only four roots");
   assert.deepEqual(
     view.replySlice.map((reply) => reply.body),
-    ["reply 47", "reply 48", "reply 49", "reply 50", "reply 51"],
-    "the slice is the most recent replies in natural reading order",
+    ["reply 48", "reply 49", "reply 50", "reply 51"],
+    "the four latest roots keep chronological reading order despite newer nested and foreign comments",
   );
+  assert.deepEqual(view.replySlice.map((reply) => reply.responseCount), [0, 0, 1, 26]);
+  assert.equal(JSON.stringify(view.replySlice).includes("hidden nested"), false, "nested text stays out of the collapsed slice");
+  assert.equal(JSON.stringify(view.replySlice).includes("foreign"), false, "foreign origin cannot enter root content or response counts");
   assert.equal(
     view.replySlice.every((reply) => typeof reply.authorName === "string" && reply.authorName.length > 0),
     true,
@@ -462,7 +483,7 @@ test("ac-5: a post view carries its latest five replies chronologically plus the
   );
 });
 
-test("ac-5: a post with five or fewer replies carries them all — nothing is withheld", async () => {
+test("ac-5: a post with four or fewer roots carries them all — nothing is withheld", async () => {
   const fx = feedFixture();
   const { susan } = await admitAll(fx);
   const { feed } = withFeed(fx);
@@ -473,6 +494,7 @@ test("ac-5: a post with five or fewer replies carries them all — nothing is wi
   const [view] = (await feed.timeline({ accessToken: susan })).posts;
   assert.equal(view.replyTotal, 1);
   assert.deepEqual(view.replySlice.map((reply) => reply.body), ["first"]);
+  assert.equal(view.replySlice[0].responseCount, 0);
 });
 
 test("ac-5/ac-4: reaction rows ride the view as authored; containment excludes foreign-network rows; no counters ride views", async () => {

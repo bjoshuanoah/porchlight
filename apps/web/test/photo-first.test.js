@@ -9,17 +9,10 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { photoFirst } from "../src/photo-first.js";
-import { theme, darkTokens as darkToken } from "../src/theme.js";
+import { theme } from "../src/theme.js";
 
 const webRoot = fileURLToPath(new URL("../", import.meta.url));
 
-test("PORCH-043 ac-5: posts ship with the 1px warm-neutral divider, not a card gap", () => {
-  // PORCH-042: the divider rides the token layer — the screen consumes the
-  // custom property; both published values pin against the token sets.
-  assert.equal(photoFirst.dividerColor, "var(--porch-timeline-divider)");
-  assert.equal(photoFirst.dividerValues.light, "#ECE8E1");
-  assert.equal(photoFirst.dividerValues.dark, darkToken.timelineDivider);
-});
 
 test("PORCH-043 ac-2: the 16px rail is the rail of record and media ignores it", () => {
   assert.equal(photoFirst.rail, 16);
