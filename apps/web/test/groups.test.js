@@ -3,7 +3,7 @@
 // without a DOM.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupRows, groupMemberRows, canManageGroup, addableCandidates, groupVisibility, composableGroups } from "../src/groups.js";
+import { groupRows, groupMemberRows, canManageGroup, addableCandidates, groupVisibility, composableGroups, canJoinGroup, blockedRows } from "../src/groups.js";
 
 const NET = "net_family";
 const identity = (id, name) => ({ id, name });
@@ -87,4 +87,24 @@ test("composableGroups: the composer offers only groups the author belongs to", 
     "never another member's group — private or public",
   );
   assert.deepEqual(composableGroups(groups, null), [], "no did, no targets");
+});
+
+test("canJoinGroup: the self-serve join is the member's own act on a public group they do not hold", () => {
+  assert.equal(canJoinGroup({ _id: "grp_h", visibility: "public", members: ["did:devon"] }, "did:cass"), true, "a public group without your membership joins freely");
+  assert.equal(canJoinGroup({ _id: "grp_h", visibility: "public", members: ["did:cass"] }, "did:cass"), false, "already a member — no join affordance");
+  assert.equal(canJoinGroup({ _id: "grp_h", members: ["did:devon"] }, "did:cass"), false, "a private group (legacy rows resolve private) never self-joins");
+  assert.equal(
+    canJoinGroup({ _id: "grp_h", visibility: "public", members: [], blockedMemberIds: ["did:cass"] }, "did:cass"),
+    false,
+    "a past removal's blocked entry stands until the manager's unblock",
+  );
+  assert.equal(canJoinGroup(null, "did:cass"), false);
+  assert.equal(canJoinGroup({ visibility: "public", members: [] }, null), false);
+  assert.equal(canJoinGroup({ _id: "", visibility: "public", members: [] }, "did:cass"), false, "an idless group never renders the join affordance");
+});
+
+test("blockedRows: the blocked render rows are ids only, filtered to valid dids", () => {
+  assert.deepEqual(blockedRows({ blockedMemberIds: ["did:pip", "", null] }), [{ did: "did:pip", name: null }]);
+  assert.deepEqual(blockedRows({}), [], "rows predating the lifecycle resolve empty");
+  assert.deepEqual(blockedRows(null), []);
 });

@@ -160,6 +160,13 @@ export function createSocialRouter(controllers) {
   // between private and public; the gate decisions everywhere downstream
   // resolve the group's CURRENT visibility at every read/delivery.
   router.post("/groups/:groupId/visibility", groups.updateVisibility);
+  // Membership lifecycle (PORCH-068, Brian's Oct 14 rulings): self-serve
+  // join on a public group (no authorization step, delivery turns on
+  // immediately); removal by the managing member writes the blocked entry
+  // atomically; unblocking lifts it — all member plane, no console surface.
+  router.post("/groups/:groupId/join", groups.join);
+  router.post("/groups/:groupId/members/remove", groups.removeMember);
+  router.post("/groups/:groupId/unblock", groups.unblock);
 
   return router;
 }

@@ -297,7 +297,7 @@ test("ac-2: a private-group post never renders for a non-member on any surface",
 
 /* ---- ac-3 (PORCH-068): public groups viewable by the whole network --------- */
 
-test("ac-3: a public group and its posts render for the whole network; non-member writes still refuse", async () => {
+test("ac-3: a public group is discoverable and viewable by the whole network; its posts deliver to members only", async () => {
   const fx = await memberFixture();
   const { base, close } = await serve(fx.mod);
   try {
@@ -305,25 +305,34 @@ test("ac-3: a public group and its posts render for the whole network; non-membe
     const groupId = group._id;
     const harbor = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "dock party", groupId });
 
-    // Every member sees the group on the index and opens detail + timeline.
-    const list = (await (await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } })).json()).groups.map((row) => row._id);
-    assert.deepEqual(list, [groupId]);
+    // Every member sees the group on the index (the join affordance reads
+    // these rows) and opens detail + timeline — the view ruling.
+    const list = await (await fetch(`${base}/groups`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } })).json();
+    const pipRow = list.groups.find((row) => row._id === groupId);
+    assert.equal(pipRow.visibility, "public", "the index carries the resolved visibility");
+    assert.equal(pipRow.isMember, false, "the index says whether the viewer holds membership");
     const detail = await fetch(`${base}/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } });
     assert.equal(detail.status, 200);
     const timeline = await fetch(`${base}/timeline/groups/${groupId}`, { headers: { authorization: `Bearer ${fx.tokens.pip}` } });
     assert.equal(timeline.status, 200);
     assert.deepEqual((await timeline.json()).posts.map((post) => post._id), [harbor._id]);
 
-    // The post rides the whole network's main feed and ranked path exactly
-    // as today (with its group chip for every viewer).
-    void groupId;
+    // Delivery is never broadcast (Brian Oct 14, refined: "A public group
+    // should also never show up on any non-member timeline unless they go
+    // to the group and join the group"): the non-member's own feed, ranked
+    // path, and legacy list never carry the group post; the member's
+    // carries it with its chip.
     const pipFeed = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.pip })).posts;
-    assert.ok(pipFeed.some((post) => post._id === harbor._id));
-    assert.equal(pipFeed.find((post) => post._id === harbor._id).groupName, "Harbor");
+    assert.equal(pipFeed.some((post) => post._id === harbor._id), false, "not on a non-member's timeline");
     const pipRanked = (await fx.mod.feedService.ranked({ accessToken: fx.tokens.pip })).posts;
-    assert.ok(pipRanked.some((post) => post._id === harbor._id));
+    assert.equal(pipRanked.some((post) => post._id === harbor._id), false, "not in a non-member's ranked section");
+    const pipListed = (await fx.mod.postService.list({ accessToken: fx.tokens.pip })).posts;
+    assert.equal(pipListed.some((post) => post._id === harbor._id), false, "not in a non-member's list read");
+    const cassFeed = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.cass })).posts;
+    assert.equal(cassFeed.find((post) => post._id === harbor._id).groupName, "Harbor", "the member's feed carries the chip");
 
-    // Public conversation reads stay open to any network member.
+    // Public conversation reads stay open to any network member (the view
+    // ruling; they can read the conversation at the group itself).
     const comments = await fx.mod.interactionService.commentThread({ accessToken: fx.tokens.pip, postId: harbor._id });
     assert.deepEqual(comments.comments, []);
 
@@ -336,6 +345,126 @@ test("ac-3: a public group and its posts render for the whole network; non-membe
       () => fx.mod.postService.create({ accessToken: fx.tokens.pip, payload, signature: fx.devs.pip.signPayload(payload) }),
       (error) => error.code === "E_GROUP_NOT_MEMBER",
     );
+  } finally {
+    close();
+  }
+});
+
+/* ---- membership lifecycle (PORCH-068, Brian's Oct 14 rulings) ------------- */
+
+test("lifecycle: self-serve join, removal with its atomic block, and the rejoin gate", async () => {
+  const fx = await memberFixture();
+  const { base, close } = await serve(fx.mod);
+  const cassAuth = { "content-type": "application/json", authorization: `Bearer ${fx.tokens.cass}` };
+  try {
+    const created = await fetch(`${base}/groups`, {
+      method: "POST",
+      headers: cassAuth,
+      body: JSON.stringify({ name: "Harbor", visibility: "public" }),
+    });
+    const groupId = (await created.json()).group._id;
+    const harbor = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "dock party", groupId });
+
+    // Pip joins with no approval flow; delivery turns on immediately.
+    const join = await fetch(`${base}/groups/${groupId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.pip}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(join.status, 200);
+    const joined = (await join.json()).group;
+    assert.deepEqual(joined.members, [CASS, PIP]);
+    assert.equal(joined.isMember, true, "the join read-back says the member now holds it");
+    const pipFeed = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.pip })).posts;
+    assert.ok(pipFeed.some((post) => post._id === harbor._id), "joining turns feed delivery on immediately");
+    const auditJoin = await fx.collections.auditEvents.findOne({ action: "group_join" });
+    assert.equal(auditJoin.did, PIP);
+
+    // A repeat join is a no-op read, never a mutation.
+    const again = await fetch(`${base}/groups/${groupId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.pip}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(again.status, 200);
+    assert.deepEqual((await again.json()).group.members, [CASS, PIP]);
+
+    // A private group is unknown-shaped to a self-serve joiner.
+    const privateGroup = await fx.groups.create({ networkId: FAMILY, name: "Study", members: [CASS], createdBy: CASS });
+    const privateJoin = await fetch(`${base}/groups/${privateGroup._id}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.pip}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(privateJoin.status, 404);
+    assert.equal((await privateJoin.json()).code, "E_GROUP_UNKNOWN", "a private group is invisible to the joiner who does not hold it");
+    const memberJoin = await fetch(`${base}/groups/${privateGroup._id}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.cass}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(memberJoin.status, 200, "a member's join rides as a no-op read");
+    assert.deepEqual((await memberJoin.json()).group.members, [CASS]);
+
+    // Removal: the managing member removes Pip; the removal and its blocked
+    // entry land in one storage write.
+    const remove = await fetch(`${base}/groups/${groupId}/members/remove`, {
+      method: "POST",
+      headers: cassAuth,
+      body: JSON.stringify({ did: PIP }),
+    });
+    assert.equal(remove.status, 200);
+    const removed = (await remove.json()).group;
+    assert.deepEqual(removed.members, [CASS]);
+    assert.deepEqual(removed.blockedMemberIds, [PIP], "the blocked entry rode the removal atomically");
+    const pipFeedAfter = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.pip })).posts;
+    assert.equal(pipFeedAfter.some((post) => post._id === harbor._id), false, "removal stops the delivery immediately");
+    const auditRemove = await fx.collections.auditEvents.findOne({ action: "group_member_remove" });
+    assert.equal(auditRemove.did, CASS);
+    assert.equal(auditRemove.detail.removed, PIP);
+
+    // The rejoin gate: self-serve and invitation both refuse while blocked.
+    const blockedJoin = await fetch(`${base}/groups/${groupId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.pip}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(blockedJoin.status, 403);
+    assert.equal((await blockedJoin.json()).code, "E_GROUP_BLOCKED");
+    const strangerAuth = { "content-type": "application/json", authorization: `Bearer ${fx.tokens.cass}` };
+    const blockedInvite = await fetch(`${base}/groups/${groupId}/members`, {
+      method: "POST",
+      headers: strangerAuth,
+      body: JSON.stringify({ did: PIP }),
+    });
+    assert.equal(blockedInvite.status, 403, "a removed member is not invitable back");
+    assert.equal((await blockedInvite.json()).code, "E_GROUP_BLOCKED", "the invite gate reads the same blocked set");
+
+    // Unblocking is the managing member's act; then the paths are open again
+    // (self-serve re-join on a public group, plain add on a private one).
+    const pipUnblock = await fetch(`${base}/groups/${groupId}/unblock`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.pip}` },
+      body: JSON.stringify({ did: PIP }),
+    });
+    assert.equal(pipUnblock.status, 403, "the removed member never unblocks themselves");
+    const unblock = await fetch(`${base}/groups/${groupId}/unblock`, {
+      method: "POST",
+      headers: cassAuth,
+      body: JSON.stringify({ did: PIP }),
+    });
+    assert.equal(unblock.status, 200);
+    assert.deepEqual((await unblock.json()).group.blockedMemberIds, []);
+    const rejoin = await fetch(`${base}/groups/${groupId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.tokens.pip}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(rejoin.status, 200);
+    assert.deepEqual((await rejoin.json()).group.members, [CASS, PIP]);
+    const blockedSet = await fx.collections.groups.findOne({ _id: privateGroup._id });
+    // The private group's blocked set never gained entries in this test.
+    assert.deepEqual(blockedSet.blockedMemberIds ?? [], []);
   } finally {
     close();
   }

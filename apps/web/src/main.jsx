@@ -899,6 +899,31 @@ function App() {
       await reload();
       return result;
     },
+    // Membership lifecycle (PORCH-068, Brian's Oct 14 rulings): self-serve
+    // join rides the member's own act on a public group (no authorization
+    // step; delivery turns on immediately); removal and unblock are the
+    // managing member's acts at the group's Members view.
+    joinGroup: async (groupId) => {
+      const result = await request(active, `social/groups/${encodeURIComponent(groupId)}/join`, {
+        method: "POST", body: JSON.stringify({}),
+      });
+      await reload();
+      return result;
+    },
+    removeGroupMember: async (groupId, did) => {
+      const result = await request(active, `social/groups/${encodeURIComponent(groupId)}/members/remove`, {
+        method: "POST", body: JSON.stringify({ did }),
+      });
+      await reload();
+      return result;
+    },
+    unblockGroupMember: async (groupId, did) => {
+      const result = await request(active, `social/groups/${encodeURIComponent(groupId)}/unblock`, {
+        method: "POST", body: JSON.stringify({ did }),
+      });
+      await reload();
+      return result;
+    },
     groupMemberCandidates: (q = "") => fetchMentionCandidates(active, q),
     search: (query) => request(active, `social/search?q=${encodeURIComponent(query)}`),
     // Notification settings (PORCH-060): the open identity's membership

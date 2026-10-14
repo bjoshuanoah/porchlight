@@ -381,6 +381,42 @@ test("ac-5: plain-text search spans captions, people tags, and album names withi
   );
 });
 
+/* ---- PORCH-068 refined: group-post delivery is membership-gated ---------- */
+
+test("ac-2/ac-3: a group post delivers to members' feeds only; joining a public group turns delivery on", async () => {
+  const fx = feedFixture();
+  const { susan, june, meg } = await admitAll(fx);
+  const { feed } = withFeed(fx);
+
+  // A public group: Susan holds it (the creator) and adds June; Meg does not.
+  const group = await fx.groups.create({ networkId: FAMILY, name: "Harbor", createdBy: SUSAN, visibility: "public" });
+  await fx.groups.addMembers({ groupId: group._id, networkId: FAMILY, actorDid: SUSAN, dids: [JUNE] });
+  const dock = await mkPost(fx, june, fx.juneDev, { type: "text", body: "dock party", groupId: group._id });
+
+  // The member's own feed and ranked path carry the group post.
+  const susanFeed = (await feed.timeline({ accessToken: susan })).posts;
+  assert.ok(susanFeed.some((post) => post._id === dock._id));
+  const susanRanked = (await feed.ranked({ accessToken: susan })).posts;
+  assert.ok(susanRanked.some((post) => post._id === dock._id));
+
+  // The non-member never encounters it on their own feed or ranked path...
+  const megFeed = (await feed.timeline({ accessToken: meg })).posts;
+  assert.equal(megFeed.some((post) => post._id === dock._id), false);
+  const megRanked = (await feed.ranked({ accessToken: meg })).posts;
+  assert.equal(megRanked.some((post) => post._id === dock._id), false);
+
+  // ...but MAY view the group and its posts at the group itself.
+  const megGroupView = (await feed.groupTimeline({ accessToken: meg, groupId: group._id })).posts;
+  assert.deepEqual(megGroupView.map((post) => post._id), [dock._id]);
+
+  // Joining turns delivery on for that member immediately (the live roster).
+  await fx.groups.join({ groupId: group._id, networkId: FAMILY, did: MEG });
+  const megFeedAfter = (await feed.timeline({ accessToken: meg })).posts;
+  assert.ok(megFeedAfter.some((post) => post._id === dock._id));
+  // And the member's view carries the chip.
+  assert.equal(megFeedAfter.find((post) => post._id === dock._id)?.groupName, "Harbor");
+});
+
 /** PORCH-046: conversation previews on feed views (ac-5, ac-6, ac-4). */
 test("ac-5: a post view carries its latest five replies chronologically plus the conversation total", async () => {
   const names = { [SUSAN]: "Susan Hale", [JUNE]: "June River" };
