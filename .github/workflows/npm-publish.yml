@@ -282,6 +282,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # The media smoke rides the repo's release script at the same tag, so
+      # the evidence source matches the bundler's own verify step on every OS.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
       - name: Install globally + smoke run (binary runs from PATH, no further setup)
         run: |
           set -euo pipefail
@@ -312,23 +317,13 @@ jobs:
           echo "OK: porchlight binary ran from PATH on ${{ matrix.os }}."
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: sharp platform smoke — real resize through the installed platform binary (PORCH-067)
+      - name: sharp platform smoke — real hub media operation through the installed platform binary (PORCH-067)
         run: |
           set -euo pipefail
           # The bundled closure must run hub media operations on this OS, not
-          # just carry the tree: load sharp from the installed porchlight
-          # package and complete the same operation class the rendition
-          # encoder runs (rotate → resize → webp). A platform mismatch fails
-          # here (load error), exactly the defect class PORCH-067 closes.
-          node -e "
-            const sharp = require(process.argv[1]);
-            (async () => {
-              const raw = Buffer.alloc(160 * 160 * 3, 255);
-              const thumb = await sharp(raw, { raw: { width: 160, height: 160, channels: 3 } })
-                .rotate().resize({ width: 96, withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
-              const meta = await sharp(thumb).metadata();
-              if (meta.format !== 'webp' || meta.width > 96) process.exit(1);
-              console.log('sharp platform smoke OK on ' + process.platform + '/' + process.arch + ': webp ' + meta.width + 'x' + meta.height);
-            })().catch((err) => { console.error(err.stack || err.message || String(err)); process.exit(1); });
-          " "$(npm root -g)/porchlight/node_modules/sharp"
-          echo "OK: sharp platform binary completed a media operation on ${{ matrix.os }}."
+          # just carry the tree. The smoke drives the hub's own rendition
+          # encoder (imageMetadata + ladder rungs, rotate → resize → webp)
+          # from the INSTALLED porchlight tree, so a platform mismatch fails
+          # loudly here — exactly the defect class PORCH-067 closes.
+          node scripts/release/media-smoke.mjs
+          echo "OK: hub media operation completed on ${{ matrix.os }}."
