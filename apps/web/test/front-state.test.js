@@ -92,7 +92,11 @@ test("ac-1: the front state renders bare — app-shell chrome only mounts behind
 test("ac-2: the superseded direct-to-timeline sign-out reopen is gone (PORCH-055)", async () => {
   const source = await readFile(join(webRoot, "src", "identity.jsx"), "utf8");
   assert.doesNotMatch(source, /opens straight into your timeline/);
-  assert.match(source, /Switch person/);
+  // Sign-out reroutes the next open through the WhoIsHere front state; the
+  // interim header "Switch person" control retired with the PORCH-076
+  // header user switcher (the switcher menu owns switching now).
+  assert.match(source, /\/who-is-here/);
+  assert.doesNotMatch(source, /Switch person/);
 });
 
 // PORCH-074: the installed home-screen app opens as its own browser context
@@ -120,9 +124,10 @@ test("ac-1: the zero-registration front state leads with the pairing prompt besi
     source.indexOf("export function WhoIsHere"),
     source.indexOf("function invitationUrl"),
   );
-  // The lead prompt rides Brian's verbatim ask, with the code input on the surface.
+  // The lead prompt rides Brian's verbatim ask, with the code input on the
+  // surface; "profile" swept to "settings" with the PORCH-076 rename.
   assert.match(chooser, /Coming here from another device or browser\?/);
-  assert.match(chooser, /Get your pairing code from the profile section, and enter it here\./);
+  assert.match(chooser, /Get your pairing code from the settings section, and enter it here\./);
   assert.match(chooser, /<PairingCodeEntry data=\{data\} actions=\{actions\} navigate=\{navigate\} autoFocus showLinkFallback=\{false\}/);
   // The "New here" door renders beside the pairing lead, owner-routed admission only.
   assert.match(chooser, />New here<\/Typography>/);
