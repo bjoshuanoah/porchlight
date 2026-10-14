@@ -40,7 +40,14 @@ function dieOnError(error) {
 
 let porchlightRoot = pkgFlag ?? null;
 if (porchlightRoot === null) {
-  const globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+  const globalRoot = execFileSync(
+  // Windows: npm is npm.cmd — a bare "npm" spawnSync without a shell cannot
+  // apply PATHEXT and fails ENOENT (first windows leg ever to run: dry-run
+  // 38640875895, PORCH-071); the explicit .cmd name is the standard spawn.
+  process.platform === "win32" ? "npm.cmd" : "npm",
+  ["root", "-g"],
+  { encoding: "utf8" },
+).trim();
   porchlightRoot = join(globalRoot, "porchlight");
 }
 const encoderPath = join(
