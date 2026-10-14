@@ -229,6 +229,50 @@ for (const { packages } of SHARP_PLATFORM_SET) {
 }
 process.stdout.write("sharp platform closure complete: " + SHARP_PLATFORM_SET.map((p) => p.platform).join(", ") + "\n");
 
+// ---- prune: drop binaries outside the supported set of record (PORCH-067 ac-3) ----
+// The registry publish cap killed the first v0.2.0 pack (npm 413 Payload Too
+// Large at 186.1 MB; v0.1.1's 168.2 MB registry copy passed — the effective
+// PUT ceiling sits between). ffprobe-static ships a binary zoo inside the
+// npm package; the ia32 trees (linux/ia32, win32/ia32) are dead weight no
+// supported hub ever executes — the supported set of record is the same set
+// the sharp closure carries: darwin arm64/x64, linux x64, win32 x64. The
+// prune is explicit and named: only packages enumerated here are touched,
+// never the closure generally.
+const SUPPORTED_BINARY_PLATFORMS = {
+  darwin: ["arm64", "x64"],
+  linux: ["x64"],
+  win32: ["x64"],
+};
+
+function pruneBinaryZoo(base) {
+  if (!existsSync(base)) return 0;
+  let prunedBytes = 0;
+  for (const pkgOrOs of readdirSync(base, { withFileTypes: true })) {
+    const path = join(base, pkgOrOs.name);
+    if (pkgOrOs.isDirectory() && existsSync(join(path, "package.json"))) {
+      // The package root itself: recurse into its bin/ trees.
+      prunedBytes += pruneBinaryZoo(join(path, "bin"));
+      continue;
+    }
+    if (pkgOrOs.isDirectory() && SUPPORTED_BINARY_PLATFORMS[pkgOrOs.name]) {
+      // os level: prune arch subdirs outside the supported set.
+      for (const arch of readdirSync(path, { withFileTypes: true })) {
+        if (!SUPPORTED_BINARY_PLATFORMS[pkgOrOs.name].includes(arch.name)) {
+          prunedBytes += treeSize(join(path, arch.name));
+          rmSync(join(path, arch.name), { recursive: true, force: true });
+        }
+      }
+      continue;
+    }
+  }
+  return prunedBytes;
+}
+
+const ffprobePrunedBytes = pruneBinaryZoo(join(stageNodeModules, "ffprobe-static", "bin"));
+if (ffprobePrunedBytes > 0) {
+  process.stdout.write(`pruned ${(ffprobePrunedBytes / (1024 * 1024)).toFixed(1)} MB of out-of-support-set binaries from ffprobe-static\n`);
+}
+
 function treeSize(dir) {
   let total = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
