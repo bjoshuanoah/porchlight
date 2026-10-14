@@ -990,20 +990,17 @@ function EmptyTimeline({ navigate }) {
 
 export function Timeline({ data = {}, actions = {}, navigate }) {
   const posts = rows(data.posts);
-  const ranked = rows(data.ranked);
   const [hidden, setHidden] = useState(() => new Set());
   const onHide = (post) => setHidden((current) => new Set(current).add(postKey(post)));
-  // Timeline shell (tokens): 760–820px river inside the shell, H1 heading,
-  // single chronological feed, honest ranked section below.
+  // Timeline shell (tokens): 760–820px river inside the shell, one
+  // chronological feed with nothing above it. Porchlight UI, Oct 14 2026
+  // (PORCH-072): the "Shared moments" heading block, the header's
+  // create-post/search/albums buttons, and the "Family highlights" band
+  // (the prominent/ranked section) are all trimmed as redundant; the base
+  // chronological river is the feed.
   return <Box sx={{ maxWidth: 780 }}>
-    <Heading title="Shared moments" subtitle="The latest moments from your connected families" />
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Saved moments may be out of date; new activity is not available until you reconnect.</Alert>}
-    <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 3 }}><Button variant="contained" onClick={() => navigate?.('/compose')}>Create a post</Button><Button variant="outlined" onClick={() => navigate?.('/search')}>Search moments</Button><Button variant="outlined" onClick={() => navigate?.('/albums')}>Albums</Button></Stack>
-    <Typography variant="h6" sx={{ mb: 1 }}>Latest activity</Typography>
     {!data.offline && !posts.length ? <EmptyTimeline navigate={navigate} /> : <Feed posts={posts} data={data} actions={actions} navigate={navigate} hidden={hidden} onHide={onHide} empty={data.offline ? 'No saved moments are available.' : 'Nothing here yet. Start the conversation.'} />}
-    <Divider sx={{ my: 4 }} />
-    <Typography variant="h6" sx={{ mb: 1 }}>Family highlights</Typography>
-    <Feed posts={ranked} data={data} actions={actions} navigate={navigate} hidden={hidden} onHide={onHide} empty={data.offline ? 'Highlights are unavailable while a family server is unreachable.' : 'No highlighted posts yet.'} />
   </Box>;
 }
 
