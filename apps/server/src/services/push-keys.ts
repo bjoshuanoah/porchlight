@@ -18,28 +18,112 @@ export interface VapidMaterial {
   createdAt: string;
 }
 
-/** VAPID subject: the protocol's contact claim; no phone-home ever rides it. */
-const VAPID_SUBJECT = "mailto:owner@porchlight.hub";
+/**
+ * The VAPID subject is the protocol's contact claim; no phone-home ever
+ * rides it. But it is NOT free-form: Apple's web push relay
+ * (web.push.apple.com, the endpoint class every Safari/iOS web app serves)
+ * validates the subject inside the VAPID JWT and refuses the whole push —
+ * HTTP 403 {"reason":"BadJwtToken"} — for hosts that are not real public
+ * DNS names. Proven against the live relay (Oct 15, 2026):
+ *   mailto:owner@<real DNS host>          → 201 Accepted
+ *   mailto:owner@<ip literal>             → 403 BadJwtToken
+ *   mailto:user@localhost                 → 403 BadJwtToken
+ *   mailto:owner@<reserved/fake TLD>      → 403 BadJwtToken
+ * The invalid constant this module previously minted
+ * ("mailto:owner@porchlight.hub" — ".hub" is not a public TLD) silently
+ * undelivered every Apple push on every hub while the browser accepted
+ * registration freely. The subject is derived from the hub's own public
+ * origin; Apple does not bind the subject to the origin, so a re-derived
+ * subject never disturbs stored subscriptions. RFC 2606's reserved
+ * example.com is the placeholder for origins with no nameable host —
+ * web push requires a secure, named origin, so that path never mints a
+ * live subscription.
+ */
+const FALLBACK_SUBJECT = "mailto:owner@example.com";
+
+/**
+ * Whether a hostname is a real dotted DNS name Apple's relay accepts as a
+ * VAPID subject host: not empty, not an IP literal, not hostless. IP
+ * literals and hostless names are proven 403 `BadJwtToken` (probes above).
+ */
+function nameableHost(host: string | undefined | null): boolean {
+  if (!host || !host.includes(".")) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false; // IPv4 literal
+  if (host.includes(":")) return false; // IPv6 literal
+  return true;
+}
+
+/** The nameable host of a hub origin, or null. */
+function vapidHostCandidate(origin: string | null): string | null {
+  if (!origin) return null;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  return nameableHost(host) ? host : null;
+}
+
+/** The subject minted from a hub origin; derivable per boot. */
+export function vapidSubjectForOrigin(origin: string | null): string {
+  const host = vapidHostCandidate(origin);
+  return host ? `mailto:owner@${host}` : FALLBACK_SUBJECT;
+}
+
+function persist(file: string, material: VapidMaterial): void {
+  mkdirSync(dirname(file), { recursive: true });
+  // Server state, never committed: owner-only file mode on the state file.
+  writeFileSync(file, `${JSON.stringify(material, null, 2)}\n`, { mode: 0o600 });
+}
 
 /**
  * Load the stored VAPID material, or generate and persist it at first run.
- * Idempotent: every boot after the first reuses the same keypair. A corrupt
- * or unusable store regenerates (the browser-side subscriptions would then
- * be re-registered by their own 404/410 cleanup) with the failure logged.
+ * Idempotent: every boot after the first reuses the same keypair — the
+ * SUBJECT, though, re-derives from the hub's current origin each boot and
+ * is healed in place when the stored one differs (the older builds' invalid
+ * constant, a hand-edit, or an origin renamed after mint): the keypair and
+ * every member subscription survive the heal untouched (Apple verifies the
+ * subject against nothing). A corrupt or unusable store regenerates (the
+ * browser-side subscriptions would then be re-registered by their own
+ * 404/410 cleanup) with the failure logged.
  */
-export function loadVapidKeys(homeRoot: string | null, log?: (line: string) => void): VapidMaterial | null {
+export function loadVapidKeys(
+  homeRoot: string | null,
+  origin: string | null = null,
+  log?: (line: string) => void,
+): VapidMaterial | null {
   if (!homeRoot) return null;
   const file = join(homeRoot, "state", "vapid-keys.json");
   if (existsSync(file)) {
     try {
       const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<VapidMaterial>;
       if (typeof parsed.publicKey === "string" && typeof parsed.privateKey === "string") {
-        return {
-          subject: parsed.subject ?? VAPID_SUBJECT,
+        const material: VapidMaterial = {
+          subject: parsed.subject ?? vapidSubjectForOrigin(origin),
           publicKey: parsed.publicKey,
           privateKey: parsed.privateKey,
           createdAt: parsed.createdAt ?? new Date().toISOString(),
         };
+        const derived = vapidSubjectForOrigin(origin);
+        if (material.subject !== derived) {
+          // Heal: the stored subject fails or predates the current origin.
+          // Never drops the keypair — subscriptions ride it untouched.
+          const healed = { ...material, subject: derived };
+          persist(file, healed);
+          log?.(
+            JSON.stringify({
+              kind: "push",
+              event: "vapid.subject.migrated",
+              at: new Date().toISOString(),
+              from: material.subject,
+              to: derived,
+            }),
+          );
+          return healed;
+        }
+        return material;
       }
       log?.(JSON.stringify({ kind: "push", event: "vapid.keys.invalid", at: new Date().toISOString() }));
     } catch {
@@ -47,10 +131,12 @@ export function loadVapidKeys(homeRoot: string | null, log?: (line: string) => v
     }
   }
   const created = webpush.generateVAPIDKeys();
-  const material: VapidMaterial = { subject: VAPID_SUBJECT, ...created, createdAt: new Date().toISOString() };
-  mkdirSync(dirname(file), { recursive: true });
-  // Server state, never committed: owner-only file mode on the state file.
-  writeFileSync(file, `${JSON.stringify(material, null, 2)}\n`, { mode: 0o600 });
+  const material: VapidMaterial = {
+    subject: vapidSubjectForOrigin(origin),
+    ...created,
+    createdAt: new Date().toISOString(),
+  };
+  persist(file, material);
   log?.(JSON.stringify({ kind: "push", event: "vapid.keys.generated", at: material.createdAt }));
   return material;
 }

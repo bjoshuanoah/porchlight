@@ -329,8 +329,15 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       // PORCH-059: the hub's VAPID material — generated at first run by the
       // runtime setup, held in hub server state (never committed). Every
       // push carries the same VAPID identity across restarts, so member
-      // subscriptions never churn per boot.
-      push: { vapid: loadVapidKeys(options.homeRoot ?? null, options.log ?? undefined) },
+      // subscriptions never churn per boot. The hub origin names the VAPID
+      // subject (Apple's relay rejects non-DNS subjects; push-keys.ts).
+      push: {
+        vapid: loadVapidKeys(
+          options.homeRoot ?? null,
+          options.config.hub.tunnel?.url ?? null,
+          options.log ?? undefined,
+        ),
+      },
       // PORCH-019: 401 auth-failure capture.
       log: options.log ?? null,
     });

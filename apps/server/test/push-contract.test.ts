@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, mkdtempSync, statSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import webpush from "web-push";
 import { DEFAULT_CONFIG, createMemoryStore, normalizeConfig } from "@porchlight/shared";
 import type { PorchlightConfig } from "@porchlight/shared";
 import { BootstrapService } from "../src/services/bootstrap.service.js";
@@ -43,12 +44,57 @@ test("loadVapidKeys regenerates from a corrupt store and logs it", (t) => {
   const home = tempHome();
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const logs: string[] = [];
-  const first = loadVapidKeys(home, (line) => logs.push(line));
+  const first = loadVapidKeys(home, null, (line) => logs.push(line));
   writeFileSync(join(home, "state", "vapid-keys.json"), "{not json", { mode: 0o600 });
-  const second = loadVapidKeys(home, (line) => logs.push(line));
+  const second = loadVapidKeys(home, null, (line) => logs.push(line));
   assert.ok(second);
   assert.notEqual(second?.privateKey, first?.privateKey);
   assert.ok(logs.some((line) => line.includes("vapid.keys.corrupt")));
+});
+
+/* ---- PORCH-059 Oct 15 finding: the VAPID subject Apple's relay accepts ---- */
+
+test("loadVapidKeys derives the VAPID subject from the hub origin at mint", (t) => {
+  const home = tempHome();
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const material = loadVapidKeys(home, "https://noah-test-2.porch.love");
+  assert.equal(material?.subject, "mailto:owner@noah-test-2.porch.love", "the subject names the hub's own DNS host");
+  assert.ok(material?.publicKey.startsWith("B"));
+  // Origins without a nameable host (IP literals, hostless dev binds): the
+  // RFC 2606 placeholder — that path never mints a live web-push
+  // subscription, but the subject must still be a valid contact claim.
+  const ipHome = tempHome();
+  t.after(() => rmSync(ipHome, { recursive: true, force: true }));
+  assert.equal(loadVapidKeys(ipHome, "http://127.0.0.1:8710")?.subject, "mailto:owner@example.com");
+  const nullHome = tempHome();
+  t.after(() => rmSync(nullHome, { recursive: true, force: true }));
+  assert.equal(loadVapidKeys(nullHome, null)?.subject, "mailto:owner@example.com");
+});
+
+test("loadVapidKeys heals a stored non-DNS subject on boot — keypair and createdAt untouched", (t) => {
+  const home = tempHome();
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const stale = webpush.generateVAPIDKeys();
+  const seededAt = "2026-10-12T15:37:08.209Z";
+  const file = join(home, "state", "vapid-keys.json");
+  mkdirSync(join(home, "state"), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ subject: "mailto:owner@porchlight.hub", ...stale, createdAt: seededAt }, null, 2)}\n`, { mode: 0o600 });
+  const logs: string[] = [];
+  const healed = loadVapidKeys(home, "https://noah-test-2.porch.love", (line) => logs.push(line));
+  assert.equal(healed?.subject, "mailto:owner@noah-test-2.porch.love", "the invalid constant is healed to the derived subject");
+  assert.equal(healed?.publicKey, stale.publicKey, "the keypair rides the heal untouched — subscriptions survive");
+  assert.equal(healed?.privateKey, stale.privateKey);
+  assert.equal(healed?.createdAt, seededAt);
+  const mode = statSync(file).mode & 0o777;
+  assert.equal(mode, 0o600, "the heal rewrites the state file with the owner-only mode");
+  const migrated = logs.find((line) => line.includes("vapid.subject.migrated"));
+  assert.ok(migrated, "the heal lands a structured line for the trail");
+  assert.ok(migrated.includes("porchlight.hub"), "the line names what it migrated from");
+  // Idempotent: the healed boot re-reads without churn.
+  const logs2: string[] = [];
+  const again = loadVapidKeys(home, "https://noah-test-2.porch.love", (line) => logs2.push(line));
+  assert.equal(again?.subject, "mailto:owner@noah-test-2.porch.love");
+  assert.equal(logs2.some((line) => line.includes("vapid.subject.migrated")), false, "a healed boot does not re-migrate");
 });
 
 test("the hub's subscription route serves the VAPID public key from runtime setup (ac-5)", async (t) => {
@@ -67,7 +113,7 @@ test("the hub's subscription route serves the VAPID public key from runtime setu
   assert.equal(res.status, 200);
   const body = (await res.json()) as { publicKey: string | null; available: boolean };
   assert.equal(body.available, true, "the route serves the key the runtime setup generated");
-  assert.equal(body.publicKey, loadVapidKeys(home)?.publicKey, "the served material IS the hub server state");
+  assert.equal(body.publicKey, loadVapidKeys(home, null)?.publicKey, "the served material IS the hub server state");
 });
 /* ---- PORCH-063: the opt-in default over the production vertical ----------- */
 
