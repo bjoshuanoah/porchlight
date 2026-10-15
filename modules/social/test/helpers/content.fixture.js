@@ -50,6 +50,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     groups: store.collection("groups"),
     pushSubscriptions: store.collection("push_subscriptions"),
     pushSettings: store.collection("push_settings"),
+    ogImages: store.collection("og_images"),
   };
 
   const invites = new InviteService(collections.invites);

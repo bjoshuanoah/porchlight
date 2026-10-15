@@ -1,6 +1,7 @@
 import express, { Router } from "express";
 import type { Express } from "express-serve-static-core";
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSystemRouter } from "./routes/system.routes.js";
@@ -74,6 +75,17 @@ const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
 };
 
 /**
+ * The og: tag set (PORCH-079) the shared-route HTML injection carries —
+ * content-free by construction (fixed template frame + network name + the
+ * composed image route + the canonical link, opaque ids only).
+ */
+export interface OgTagSet {
+  title: string;
+  image: string;
+  url: string;
+}
+
+/**
  * The /api router aggregates the module routers plus the thin system routes
  * (health, bootstrap orchestration). Server performs no domain logic —
  * routes stay thin, controllers are transport-specific, services own the
@@ -81,7 +93,7 @@ const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
  * module routers so bootstrap progress is recorded without any module
  * depending on the system layer.
  */
-export function createServerRouter(options: ServerOptions): { api: Router; wellKnown: Router | null; realtime: unknown } {
+export function createServerRouter(options: ServerOptions): { api: Router; wellKnown: Router | null; realtime: unknown; ogTags: ((path: string) => Promise<OgTagSet | null>) | null } {
   const router: Router = Router();
   // Auth-scoped JSON is never cacheable: a browser-conditional revalidation
   // (304) carries no body, and a member's cached read would otherwise
@@ -156,6 +168,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
   };
   let wellKnown: Router | null = null;
   let frontDoor: Router | null = null;
+  let ogTags: ((path: string) => Promise<OgTagSet | null>) | null = null;
   let identityModule: ReturnType<typeof assembleIdentityModule> | null = null;
   let identityAuth: {
     verifyAccessToken: (token: string) => Promise<{ did: string; sessionId: unknown } | null>;
@@ -322,6 +335,31 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       log: options.log ?? null,
     });
     router.use("/social", socialModule.api);
+    // PORCH-079: the og: tag resolver behind the shared-route HTML injection —
+    // transport-level only. It matches the shareable deep-link paths (the
+    // post detail route and the join-link route, exactly; every other path
+    // yields null and the plain SPA document serves) and asks the social og
+    // service for the content-free tag set. No credentials are consulted
+    // anywhere in the chain, so a credentialed member's served HTML carries
+    // the identical tags (ac-4) — no personalized variant exists.
+    const ogTagMatcher: Array<{ pattern: RegExp; kind: "post" | "invite" }> = [
+      { pattern: /^\/posts\/([^/]+)$/, kind: "post" },
+      { pattern: /^\/join\/([^/]+)$/, kind: "invite" },
+    ];
+    ogTags = async (path: string): Promise<OgTagSet | null> => {
+      const match = ogTagMatcher.find(({ pattern }) => pattern.test(path));
+      if (!match || !socialModule) return null;
+      let id: string | null = null;
+      try {
+        id = decodeURIComponent(path.replace(match.pattern, "$1"));
+      } catch {
+        id = null;
+      }
+      if (id === null || id.length === 0) return null;
+      // The live tunnel URL of record rides in as the origin fallback: the
+      // og service prefers the network row's re-pointed hub URL, then this.
+      return socialModule.ogService.tags({ kind: match.kind, id, origin: hubUrl() });
+    };
     // PORCH-070: the identity avatar plane's byte storage binds to the
     // media pipeline's store (same content-addressed root, same re-point —
     // the owner's media-root edit moves avatar bytes exactly as it moves
@@ -381,7 +419,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     });
     router.use("/", frontDoor);
   }
-  return { api: router, wellKnown, realtime: socialModule?.realtimeService ?? null };
+  return { api: router, wellKnown, realtime: socialModule?.realtimeService ?? null, ogTags };
 }
 
 function readTunnelUrl(options: ServerOptions): () => string | null {
@@ -435,10 +473,42 @@ export function createServer(options: ServerOptions) {
     if (reservedPaths.test(req.path)) return next();
     staticFiles(req, res, next);
   });
-  app.get("*", (req, res, next) => {
+  app.get("*", async (req, res, next) => {
     // Missing assets remain real 404s, not successful HTML responses.
     if (reservedPaths.test(req.path) || req.path.startsWith("/assets/") || extname(req.path)) return next();
-    res.sendFile(join(webRoot, "index.html"));
+    // PORCH-079: shareable routes (post deep links, join links) serve the SPA
+    // document with the og: metas the unauthenticated unfetchers read — the
+    // tag set is content-free, resolved from the path alone, so a
+    // credentialed member request carries the identical HTML (ac-4). Any
+    // other client route serves the plain document.
+    try {
+      const tags = routers.ogTags ? await routers.ogTags(req.path).catch(() => null) : null;
+      if (!tags) return res.sendFile(join(webRoot, "index.html"));
+      const html = await readFile(join(webRoot, "index.html"), "utf8");
+      // Tag-bearing HTML must not cache (network renames change the tags; the
+      // og IMAGES are the content-addressed, immutable layer).
+      res.set("Content-Type", "text/html; charset=utf-8");
+      res.set("Cache-Control", "no-store");
+      return res.send(injectOgMetas(html, tags));
+    } catch (error) {
+      return next(error as Error);
+    }
   });
   return app;
+}
+
+/** HTML-attribute escaping (og: meta content values are data-derived text). */
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/[&<>"']/g, (char) =>
+    char === "&" ? "&amp;" : char === "<" ? "&lt;" : char === ">" ? "&gt;" : char === '"' ? "&quot;" : "&#39;",
+  );
+}
+
+/** The three required og: metas (PORCH-079 ac-4), injected at the top of <head>. */
+export function injectOgMetas(html: string, tags: OgTagSet): string {
+  const metas =
+    `<meta property="og:title" content="${escapeHtmlAttribute(tags.title)}" />` +
+    `<meta property="og:image" content="${escapeHtmlAttribute(tags.image)}" />` +
+    `<meta property="og:url" content="${escapeHtmlAttribute(tags.url)}" />`;
+  return html.replace(/<head[^>]*>/, (head) => `${head}${metas}`);
 }
