@@ -1,4 +1,4 @@
-import { typedError, postView, newestFirstByActivity } from "./post.service.js";
+import { typedError, postView, newestFirstByActivity, ruledRootCompare } from "./post.service.js";
 import { InteractionService } from "./interaction.service.js";
 import { postDeliversToViewer, postVisibleToViewer, canSeeGroup } from "./group.service.js";
 import { socialModels } from "../models.js";
@@ -234,8 +234,8 @@ export class FeedService {
 
   /**
    * Conversation previews: one origin-scoped read of comments and reactions
-   * decorates every post view with its latest-four root slice, root total,
-   * nested response counts, and authored reactions in one feed read.
+   * decorates every post view with the top four roots of the ruled order
+   * (PORCH-085), the root total, nested response counts, and authored
    *
    * - The root total is conversation content quantity for the expander,
    *   never an engagement or reaction count; reaction rows render as given
@@ -259,7 +259,8 @@ export class FeedService {
 
   /**
    * Pure decoration: group origin comments and reactions by post. Cards show
-   * only the latest four roots, in chronological order; each visible root
+   * the top four roots of the ruled read order (PORCH-085: threaded roots
+   * ahead of childless roots, each group newest-first); each visible root
    * carries the count of all descendants, not their content.
    */
   static withConversationPreviews(views, comments, reactions, names) {
@@ -275,16 +276,18 @@ export class FeedService {
     }
     return views.map((view) => {
       const mine = commentsByPost.get(view._id) ?? [];
-      const roots = mine
-        .filter((comment) => comment.parentId == null)
-        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-      const visibleRoots = roots.slice(-REPLY_SLICE_LIMIT);
       const children = new Map();
       for (const comment of mine) {
         if (comment.parentId == null) continue;
         if (!children.has(comment.parentId)) children.set(comment.parentId, []);
         children.get(comment.parentId).push(comment);
       }
+      // Ruled read order (PORCH-085): the slice window serves the top four
+      // of the ruled sort, not the four newest chronologically.
+      const roots = mine
+        .filter((comment) => comment.parentId == null)
+        .sort((a, b) => ruledRootCompare(a, b, (root) => (children.get(root._id)?.length ?? 0) > 0));
+      const visibleRoots = roots.slice(0, REPLY_SLICE_LIMIT);
       const slice = visibleRoots.map((comment) => {
         let responseCount = 0;
         const pending = [...(children.get(comment._id) ?? [])];

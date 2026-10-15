@@ -468,12 +468,15 @@ test("ac-5: a post view carries four latest roots, root total, and descendant co
   const [view] = (await feed.timeline({ accessToken: susan })).posts;
   assert.equal(view.replyTotal, 52, "nested and foreign comments do not raise the root total");
   assert.equal(view.replySlice.length, 4, "the card shows only four roots");
+  // Ruled read order (PORCH-085): threaded roots rank ahead of childless
+  // roots, each group newest-first — the threaded newest roots (51: 26
+  // responses, 50: 1 response) lead, then the childless newest-first.
   assert.deepEqual(
     view.replySlice.map((reply) => reply.body),
-    ["reply 48", "reply 49", "reply 50", "reply 51"],
-    "the four latest roots keep chronological reading order despite newer nested and foreign comments",
+    ["reply 51", "reply 50", "reply 49", "reply 48"],
+    "the slice serves the top four of the ruled sort despite nested and foreign comments",
   );
-  assert.deepEqual(view.replySlice.map((reply) => reply.responseCount), [0, 0, 1, 26]);
+  assert.deepEqual(view.replySlice.map((reply) => reply.responseCount), [26, 1, 0, 0]);
   assert.equal(JSON.stringify(view.replySlice).includes("hidden nested"), false, "nested text stays out of the collapsed slice");
   assert.equal(JSON.stringify(view.replySlice).includes("foreign"), false, "foreign origin cannot enter root content or response counts");
   assert.equal(
