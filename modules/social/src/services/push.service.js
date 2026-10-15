@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import webpush from "web-push";
 import { socialModels } from "../models.js";
 import { typedError } from "./post.service.js";
@@ -230,9 +229,12 @@ export class PushService {
     // Replace on BOTH supersession keys — same endpoint (the browser's own
     // re-registration, identity preserved → createdAt carries) and same
     // identity+device (the device's new endpoint).
-    const existing = await this.subscriptions.findOne({ endpoint });
-    if (existing) {
-      await this.subscriptions.deleteOne({ _id: existing._id });
+    const prior = await this.subscriptions.find({ endpoint });
+    const priorSameIdentity = prior.find((row) => row.identityId === did) ?? null;
+    if (prior.length) {
+      // deleteMany, never deleteOne: legacy psb_ rows (pre-deterministic-id)
+      // and any duplicate endpoint rows this race once produced both leave.
+      await this.subscriptions.deleteMany({ endpoint });
     }
     if (deviceId) {
       for (const sameDevice of await this.subscriptions.find({ identityId: did, deviceId })) {
@@ -240,15 +242,20 @@ export class PushService {
       }
     }
     const row = {
-      _id: `psb_${randomUUID()}`,
+      // The _id IS the endpoint: replace-never-duplicate holds against
+      // concurrent registrations (two racing same-endpoint POSTs upsert to
+      // one row — the live-hub defect observed Oct 15 as two rows 1ms
+      // apart under the old find-then-insert). Mongo keys a unique index
+      // on _id, so the upsert is the atomic race arbiter.
+      _id: endpoint,
       identityId: did,
       endpoint,
       keys: { p256dh: keys.p256dh, auth: keys.auth },
       deviceId: deviceId ?? null,
-      createdAt: existing?.identityId === did ? existing.createdAt : now,
+      createdAt: priorSameIdentity ? priorSameIdentity.createdAt : now,
       lastSeen: now,
     };
-    await this.subscriptions.insertOne(row);
+    await this.subscriptions.updateOne({ _id: endpoint }, { $set: row, upsert: true });
     return { subscription: { _id: row._id, identityId: row.identityId, endpoint, createdAt: row.createdAt, lastSeen: row.lastSeen } };
   }
 
