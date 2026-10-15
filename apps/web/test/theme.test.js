@@ -217,10 +217,28 @@ test("PORCH-042: no screen file carries a literal color or a mode branch", async
   // main.jsx is the switching machinery (it subscribes to the device
   // preference), not a screen: the no-branch rule governs screen files.
   const machinery = new Set(["theme.js", "mode.js", "main.jsx"]);
+  // PORCH-089: group-settings.js carries the ruled group-palette VALUES as
+  // data — the server's GROUP_COLOR_PALETTE mirrored for the color view's
+  // swatch rows (equality with the server tokens is pinned in
+  // group-settings-menu.test.js). The values are contract data, never
+  // styling: the file consumes no ink of its own, and the no-branch rule
+  // carries there unchanged. Its hex surface is asserted below to stay
+  // inside the palette, so the exception cannot widen silently.
+  const paletteData = new Set(["group-settings.js"]);
+  const { GROUP_COLOR_ROWS } = await import("../src/group-settings.js");
+  const palette = new Set(GROUP_COLOR_ROWS.map((row) => row.value));
   for (const name of await readdir(srcDir)) {
     if (machinery.has(name)) continue;
     const source = await readFile(join(srcDir, name), "utf8");
-    assert.doesNotMatch(source, colorPattern, `${name} carries a literal color (tokens/consume custom properties)`);
+    if (!paletteData.has(name)) {
+      assert.doesNotMatch(source, colorPattern, `${name} carries a literal color (tokens/consume custom properties)`);
+    }
     assert.doesNotMatch(source, branchPattern, `${name} branches on display mode (two token sets, one component code)`);
+  }
+  {
+    const source = await readFile(join(srcDir, "group-settings.js"), "utf8");
+    const hexes = (source.match(/#[0-9a-fA-F]{6}\b/g) ?? []).map((hex) => hex.toUpperCase());
+    assert.equal(hexes.every((hex) => palette.has(hex)), true,
+      "the palette-data file carries no color outside the ruled group palette");
   }
 });

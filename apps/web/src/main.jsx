@@ -18,7 +18,7 @@ import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage, signDevicePayload } from "./device.js";
 import { sha256Hex } from "./device-crypto.js";
 import { resolveStoredNames } from "./name-heal.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost } from "./member-actions.js";
 import { firstUrlIn } from "./link-preview.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { applyEvent, readEventCursor, saveEventCursor, catchUpSince } from "./live.js";
@@ -1146,6 +1146,65 @@ function App() {
       });
       await reload();
       return result;
+    },
+    // Group settings menu (PORCH-089): the presentation writes, the owner
+    // moderation act, and the per-group notifications toggle. The menu's
+    // server half merged with PORCH-088 on the main line; every write is
+    // device-signed and re-checked for authority at the hub.
+    // Presentation detail for the menu's own entry decisions — the menu
+    // contract's detail read alone (flags + notifications + presentation).
+    loadGroupDetail: (id) => request(active, `social/groups/${encodeURIComponent(id)}`),
+    setGroupAvatar: async (groupId, file) => {
+      const result = await setGroupAvatar(active, groupId, file);
+      await reload();
+      return result;
+    },
+    setGroupColor: async (groupId, color) => {
+      const result = await setGroupColor(active, groupId, color);
+      await reload();
+      return result;
+    },
+    removeGroupPost: async (post) => {
+      const result = await removeGroupPost(active, post);
+      await reload();
+      return result;
+    },
+    // The per-group toggle writes the member's own settings row in full
+    // (full-row-replace rules): the persisted row is read first, the
+    // entry merged, and the row written whole — an unsent groups member
+    // would ride the persisted entries, but the read-merge-write here is
+    // single-threaded member state and carries every other group's entry.
+    setGroupNotification: async (groupId, on) => {
+      const current = await request(active, "social/push/settings");
+      const row = current?.settings ?? {};
+      const result = await request(active, "social/push/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: row.enabled === true,
+          events: row.events ?? {},
+          mutes: Array.isArray(row.mutes) ? row.mutes : [],
+          groups: { ...(row.groups ?? {}), [groupId]: on === true },
+        }),
+      });
+      return result;
+    },
+    // The group face's avatar rung (content-addressed, hub origin only):
+    // the bytes fetch through the member's authorized call and land in the
+    // shared blob cache keyed avatar:group:<groupId> (the group's did in
+    // the faces cache key vocabulary).
+    loadGroupAvatarRendition: async ({ did, kind, version } = {}) => {
+      if (!active?.token || typeof did !== "string" || !did.startsWith("group:")) return null;
+      const groupId = did.slice("group:".length);
+      const target = new URL(`/api/social/groups/${encodeURIComponent(groupId)}/avatar/${encodeURIComponent(kind)}`, active.url);
+      if (version) target.searchParams.set("v", version);
+      let response;
+      try {
+        response = await fetch(target, { headers: { authorization: `Bearer ${active.token}` } });
+      } catch (cause) {
+        throw markUnreachable(cause);
+      }
+      if (!response.ok) return null;
+      return response.blob();
     },
     groupMemberCandidates: (q = "") => fetchMentionCandidates(active, q),
     search: (query) => request(active, `social/search?q=${encodeURIComponent(query)}`),
