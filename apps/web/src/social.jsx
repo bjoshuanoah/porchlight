@@ -29,6 +29,7 @@ import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, 
 import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, pendingReply, conversationOf } from './slice.js';
 import { LinkPreviewBlock, LinkedBody } from './link-preview.jsx';
 import { firstUrlIn, previewOrigin } from './link-preview.js';
+import { sharePost } from './share.js';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
@@ -696,6 +697,10 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   const [localConversation, setLocalConversation] = useState(() => ({ pending: [], confirmed: [] }));
   const replyCountRef = useRef(0);
   const [menuAnchor, setMenuAnchor] = useState(null);
+  // Share (PORCH-078): the detail surface's share entry reports only the
+  // copy-fallback outcome inline — the native dialog reports itself.
+  const [shareNote, setShareNote] = useState('');
+  const [shareError, setShareError] = useState('');
   const sliceIdentity = post
     ? `${identityOf(post)}:${Array.isArray(post.replySlice) ? post.replySlice.map((reply) => reply._id).join('|') : ''}:${Number.isFinite(post.replyTotal) ? post.replyTotal : ''}`
     : '';
@@ -786,6 +791,25 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
             onClick={(event) => setMenuAnchor(event.currentTarget)}><MoreHorizOutlined /></IconButton>
           <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
             {!detail && <MenuItem onClick={() => { setMenuAnchor(null); openPost(); }}>Open conversation</MenuItem>}
+            {/* Share (PORCH-078): the deep link rides the existing post
+                detail route; the share text carries author and photo count
+                only — never the post's body, comments, or media bytes. */}
+            {detail && <MenuItem onClick={() => {
+              setMenuAnchor(null);
+              setShareNote('');
+              setShareError('');
+              sharePost({
+                post,
+                ownDid: data.identity ? String(data.identity.id) : null,
+                data,
+                base: typeof window !== 'undefined' ? window.location.origin : '',
+              }).then((result) => {
+                if (result.mode === 'copy') {
+                  if (result.copied) setShareNote('Link copied.');
+                  else setShareError('Your browser does not offer sharing or copying here yet. Open the post and copy its link from the address bar.');
+                }
+              }).catch(() => setShareError('The share did not go through. Try again.'));
+            }}>Share</MenuItem>}
             <MenuItem disabled={operation.busy} onClick={() => {
               setMenuAnchor(null);
               operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); });
@@ -828,6 +852,8 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
       {!detail && <ReplySliceBlock key={identityOf(post)} post={post} slice={displaySlice} data={data}
         actions={actions} offline={data.offline} origin={previewOrigin(post, data)}
         onReply={submitOptimistic} navigate={navigate} />}
+      {shareNote && <Typography color="text.secondary" role="status" sx={{ mt: 1 }}>{shareNote}</Typography>}
+      {shareError && <Alert severity="warning" sx={{ mt: 1 }}>{shareError}</Alert>}
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
     </CardContent>
   </Card>;
