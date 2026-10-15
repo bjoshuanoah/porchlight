@@ -72,11 +72,11 @@ test("ac-2: a root reply enters the card slice; past the window the oldest root 
   })];
   const first = applyEvent(river, envelope("reply.created", { postId: "p1", content: { _id: "r9", parentId: null, body: "newest", createdAt: "2026-10-15T12:00:00Z" } }), context);
   assert.notEqual(first, river);
-  assert.deepEqual(first[0].replySlice.map((reply) => reply._id), ["r2", "r3", "r4", "r9"], "the latest-four window keeps reading order");
+  assert.deepEqual(first[0].replySlice.map((reply) => reply._id), ["r9", "r4", "r3", "r2"], "the arriving root is the window's head under the ruled newest-first order");
   assert.equal(first[0].replyTotal, 5, "the root total counts the arrival");
   // The expander count (conversation quantity, not engagement) grows with it.
   const second = applyEvent(first, envelope("reply.created", { postId: "p1", content: { _id: "r10", parentId: null, body: "newest 2", createdAt: "2026-10-15T12:01:00Z" } }), context);
-  assert.deepEqual(second[0].replySlice.map((reply) => reply._id), ["r3", "r4", "r9", "r10"]);
+  assert.deepEqual(second[0].replySlice.map((reply) => reply._id), ["r10", "r9", "r4", "r3"]);
   assert.equal(second[0].replyTotal, 6);
 });
 

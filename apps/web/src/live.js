@@ -107,7 +107,8 @@ function mergeNewReply(posts, envelope) {
       : root);
   } else {
     replyTotal = (replyTotal ?? slice.length) + 1;
-    // The latest-four window moves its oldest root into the expander count.
+    // The ruled top-four window (PORCH-084) re-sorts in place; the root
+    // falling past the top four moves into the expander count.
     nextSlice = windowOf([...slice, { ...content, responseCount: 0 }]);
   }
   const next = posts.slice();

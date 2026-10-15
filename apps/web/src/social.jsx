@@ -27,7 +27,7 @@ import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from 
 import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
 import { dateOf, relativeTime } from './time.js';
 import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, visibleFeedPosts } from './feed-filter.js';
-import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, pendingReply, conversationOf } from './slice.js';
+import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, ruledOrder, pendingReply, conversationOf } from './slice.js';
 import { LinkPreviewBlock, LinkedBody } from './link-preview.jsx';
 import { firstUrlIn, previewOrigin } from './link-preview.js';
 import { sharePost } from './share.js';
@@ -716,7 +716,18 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   // Card-level reply (PORCH-038 ac-1): the affordance opens an inline
   // composer riding the same mention handling as the detail composer; the
   // member never navigates to post detail to answer.
-  const [replying, setReplying] = useState(false);
+  // PORCH-084 (ac-3): no composer renders by default; the Reply action —
+  // on the post or on a comment — opens exactly one composer per card at a
+  // time. Switching targets closes the open composer in the same render
+  // frame, and each target holds its own draft so a displaced draft is
+  // never silently lost while the member re-points the composer.
+  const [composerFor, setComposerFor] = useState(null); // null | 'post' | comment id
+  const [drafts, setDrafts] = useState(() => new Map()).current;
+  const openComposer = (target) => setComposerFor(target);
+  const holdDraft = (target, text) => {
+    if (text) drafts.set(target, text); else drafts.delete(target);
+  };
+  const readDraft = (target) => drafts.get(target) ?? '';
   const operation = useOperation();
   // Conversation slice state (PORCH-046): pending replies (write in flight,
   // rolled back on failure) and acknowledged replies (write confirmed, next
@@ -876,21 +887,29 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
           actionBar={<>
             {voteButton('up', 'Lift', ArrowUpwardOutlined)}
             {voteButton('down', 'Lower', ArrowDownwardOutlined)}
-            <Tooltip title="Reply"><span><IconButton aria-label="Reply" aria-expanded={replying}
-              disabled={data.offline} sx={compactIconSx} onClick={() => setReplying(!replying)}
+            <Tooltip title="Reply"><span><IconButton aria-label="Reply" aria-expanded={composerFor === 'post'}
+              disabled={data.offline} sx={compactIconSx} onClick={() => setComposerFor(composerFor === 'post' ? null : 'post')}
             ><ReplyOutlined fontSize="small" /></IconButton></span></Tooltip>
           </>} />}
-      {!detail && replying && !data.offline && <ReplyForm
+      {/* PORCH-084 (ac-3/ac-4): the on-demand composer rides the full
+          16px text rail (the CardContent box) — nothing shrunken renders. */}
+      {!detail && composerFor === 'post' && !data.offline && <ReplyForm
         label="Write a reply"
+        replyingTo="this post"
         offline={data.offline}
         post={post}
         actions={actions}
+        initialText={readDraft('post')}
+        onDraft={(text) => holdDraft('post', text)}
+        onDone={() => { setComposerFor(null); holdDraft('post', ''); }}
         onSubmit={(body, mentions) => submitOptimistic(body, null, mentions)}
       />}
       {detail && <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />}
       {!detail && <ReplySliceBlock key={identityOf(post)} post={post} slice={displaySlice} data={data}
         actions={actions} offline={data.offline} origin={previewOrigin(post, data)}
-        onReply={submitOptimistic} navigate={navigate} />}
+        onReply={submitOptimistic} navigate={navigate}
+        composerFor={composerFor} onReplyTarget={openComposer} onDraftDone={holdDraft} readDraft={readDraft}
+        onComposerClosed={() => setComposerFor(null)} />}
       {shareNote && <Typography color="text.secondary" role="status" sx={{ mt: 1 }}>{shareNote}</Typography>}
       {shareError && <Alert severity="warning" sx={{ mt: 1 }}>{shareError}</Alert>}
       {/* The fallback outcome's in-view confirmation (PORCH-078): the same
@@ -910,11 +929,18 @@ function Heading({ title, subtitle }) {
 // The hub decorates four roots and descendant counts. Full history is read
 // only when someone expands comments or a response tree; both open on the
 // card, preserving the feed's reading position and origin boundary.
-function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply, navigate }) {
+// PORCH-084: the block renders no composer by default; the per-row Reply
+// action opens the surface's one composer (owned by the parent card), which
+// renders full-rail at the block's foot — never a small inline input inside
+// an indented row — with the target legible in the composer itself.
+// The comment surfaces are named exports for the contract tests (the
+// rendered-surface sweep in test/reply-order.test.js); no routing outside
+// social.jsx needs them.
+export function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply, navigate,
+  composerFor = null, onReplyTarget = null, onDraftDone = null, readDraft = null, onComposerClosed = null }) {
   const [loaded, setLoaded] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [expandedRoots, setExpandedRoots] = useState(() => new Set());
-  const [editingId, setEditingId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const signature = `${slice.total}:${slice.replies.map((row) => `${identityOf(row)}:${row.responseCount ?? 0}`).join('|')}`;
@@ -989,10 +1015,8 @@ function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply,
           </Typography>
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
           {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={origin ?? previewOrigin(reply, data)} compact />}
-          {!offline && depth < 8 && <Button size="small" onClick={() => setEditingId(editingId === id ? null : id)}
+          {!offline && depth < 8 && <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}
             sx={{ px: 0, minWidth: 0 }}>Reply</Button>}
-          {editingId === id && <ReplyForm label="Your reply" offline={offline} post={post} actions={actions}
-            onSubmit={(body, mentions) => submitNested(body, id, mentions)} />}
           {!open && count > 0 && <Button size="small" disabled={offline || busy}
             onClick={() => expand(id)} sx={{ display: 'block', px: 0, minWidth: 0, color: 'secondary.main' }}>
             {`View ${count} more responses`}
@@ -1002,12 +1026,34 @@ function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply,
       {open && children.map((child) => renderRow(child, depth + 1, nextSeen, rootId))}
     </Box>;
   };
+  const composerTarget = composerFor && composerFor !== 'post' ? composerFor : null;
+  const targetRow = composerTarget
+    ? (slice?.replies ?? []).find((row) => identityOf(row) === composerTarget)
+      ?? (loaded ?? []).find((row) => identityOf(row) === composerTarget)
+    : null;
+  // The open target stays legible: the composer names the comment it answers
+  // (the post-target composer sits beside the post it answers).
+  const replyTargetName = targetRow
+    ? targetRow.author?.name ?? targetRow.authorName ?? memberName(targetRow.authorDid, data)
+    : null;
   return <Box sx={{ mt: photoFirst.spacing.reactionsSlice / 8, borderTop: '1px solid', borderColor: photoFirst.dividerColor, pt: 1.25 }}>
     <Stack spacing={1}>{roots.map((reply) => renderRow(reply))}</Stack>
     {more > 0 && <Button size="small" disabled={offline || busy} onClick={() => expand(null)}
       sx={{ mt: 1, px: 0, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'secondary.main' }}>
       {`View ${more} more comments`}
     </Button>}
+    {composerTarget && !offline && <ReplyForm
+      key={composerTarget}
+      label="Your reply"
+      replyingTo={replyTargetName ?? 'this comment'}
+      offline={offline}
+      post={post}
+      actions={actions}
+      initialText={readDraft?.(composerTarget) ?? ''}
+      onDraft={(text) => onDraftDone?.(composerTarget, text)}
+      onDone={() => { onComposerClosed?.(); onDraftDone?.(composerTarget, ''); }}
+      onSubmit={(body, mentions) => submitNested(body, composerTarget, mentions)}
+    />}
     {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
   </Box>;
 }
@@ -1016,17 +1062,30 @@ function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply,
 // response carries the real _id, so the local row retires and the confirmed
 // one renders exactly once under the same conversation.
 
-// The nested reply tree (PORCH-046/PORCH-041): one structure shared by the
-// post detail route and the in-place conversation surface.
-function ReplyThread({ comments, post, data, actions, navigate, offline, onReply }) {
+// PORCH-084: the nested reply tree renders the ruled read order — roots
+// newest-first with threaded roots ahead (ruledOrder), replies chronological
+// inside each tree (repliesByParent) — so the detail column and the card
+// slice agree with the served order between fetches. The rows carry no
+// composer of their own: the column owns the one on-demand composer.
+export function ReplyThread({ comments, post, data, actions, navigate, composerFor = null, onReplyTarget = null }) {
   const byParent = repliesByParent(comments);
-  const render = (parentId = '', depth = 0, seen = new Set()) => (byParent.get(parentId) || [])
-    .filter((reply) => !seen.has(identityOf(reply)))
-    .map((reply, index) => {
-      const nextSeen = new Set(seen);
-      nextSeen.add(identityOf(reply));
-      return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} offline={offline} data={data} post={post} actions={actions} navigate={navigate} onReply={onReply}>{render(identityOf(reply), depth + 1, nextSeen)}</Reply>;
-    });
+  // The root's threaded-ness for the ruled sort: the tree the read returned,
+  // or the server's decorated count when the tree is not (yet) loaded.
+  const responseCount = (reply) => Math.max(
+    (byParent.get(identityOf(reply)) ?? []).length,
+    Number(reply?.responseCount) || 0,
+  );
+  const render = (parentId = '', depth = 0, seen = new Set()) => {
+    const children = byParent.get(parentId) ?? [];
+    const ordered = parentId === '' ? ruledOrder(children, responseCount) : children;
+    return ordered
+      .filter((reply) => !seen.has(identityOf(reply)))
+      .map((reply, index) => {
+        const nextSeen = new Set(seen);
+        nextSeen.add(identityOf(reply));
+        return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} data={data} post={post} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={onReplyTarget}>{render(identityOf(reply), depth + 1, nextSeen)}</Reply>;
+      });
+  };
   return <>{render()}</>;
 }
 
@@ -1335,8 +1394,13 @@ function renderReplyBody(reply, data, navigate) {
 // family-facing name only. The picked name enters the text; the member's id
 // stays in memory for the write and never renders. The same composer rides
 // the post-detail conversation and card-level replies when they exist.
-function ReplyForm({ label, onSubmit, offline, post, actions }) {
-  const [text, setText] = useState('');
+// PORCH-084: the one on-demand composer per comment surface. The open
+// target stays legible — the composer names the comment or post it answers
+// (replyingTo caption) — and a displaced draft persists per target through
+// the surface-held draft map (initialText/onDraft) so switching targets
+// mid-draft never silently loses text.
+function ReplyForm({ label, onSubmit, offline, post, actions, replyingTo = null, initialText = '', onDraft = null, onDone = null }) {
+  const [text, setText] = useState(initialText);
   const [mention, setMention] = useState(null); // { anchor } under the caret
   const [candidates, setCandidates] = useState([]);
   const [pickedNames, setPickedNames] = useState([]); // autocomplete closure
@@ -1358,6 +1422,7 @@ function ReplyForm({ label, onSubmit, offline, post, actions }) {
   const onTextChange = (event) => {
     const value = event.target.value;
     setText(value);
+    onDraft?.(value);
     queryCandidates(value, event.target.selectionStart ?? value.length);
   };
   const pick = (candidate) => {
@@ -1378,8 +1443,11 @@ function ReplyForm({ label, onSubmit, offline, post, actions }) {
     event.preventDefault();
     if (text.trim()) operation.run(() => onSubmit(text.trim(), [...pickedDids]), () => {
       setText(''); setMention(null); setCandidates([]); setPickedNames([]); setPickedDids([]);
+      onDraft?.('');
+      onDone?.();
     });
   }}>
+    {replyingTo && <Typography variant="caption" color="text.secondary" data-testid="reply-target">{`Replying to ${replyingTo}`}</Typography>}
     <Box ref={fieldRef} sx={{ position: 'relative' }}>
       <TextField
         inputRef={(element) => { inputRef.current = element; }}
@@ -1416,14 +1484,15 @@ function ReplyForm({ label, onSubmit, offline, post, actions }) {
   </Stack>;
 }
 
-function Reply({ reply, depth, children, onReply, offline, data, post, actions, navigate }) {
-  const [editing, setEditing] = useState(false);
+function Reply({ reply, depth, children, data, post, navigate, composerFor = null, onReplyTarget = null }) {
+  const id = identityOf(reply);
   return <Box sx={{ ml: { xs: Math.min(depth, 3) * 1.5, sm: Math.min(depth, 4) * 3 }, pl: 2, py: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}>
     <Typography variant="subtitle2">{reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)} <Typography component="span" variant="caption" color="text.secondary">{dateOf(reply.createdAt)}</Typography></Typography>
     <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
     {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={previewOrigin(post, data)} />}
-    {depth < 8 && <Button size="small" onClick={() => setEditing(!editing)}>Reply</Button>}
-    {editing && <ReplyForm label="Your reply" offline={offline} post={post} actions={actions} onSubmit={(body, mentions) => onReply(body, identityOf(reply), mentions)} />}
+    {/* PORCH-084: the row's Reply action points the column's one composer at
+        this comment; no inline input renders inside the indented row. */}
+    {depth < 8 && <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}>Reply</Button>}
     {children}
   </Box>;
 }
@@ -1444,6 +1513,15 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const reactionState = { rows: reactionRows, setRows: setReactionRows };
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  // PORCH-084 (ac-3): the conversation column renders no composer by
+  // default; the Reply action — on the post or on any comment row — opens
+  // exactly one composer per surface at a time, and each target holds its
+  // own draft so switching targets never silently loses text mid-draft.
+  const [composerFor, setComposerFor] = useState(null); // null | 'post' | comment id
+  const [drafts] = useState(() => new Map());
+  const openComposer = (target) => setComposerFor(target);
+  const holdDraft = (target, text) => { if (text) drafts.set(target, text); else drafts.delete(target); };
+  const readDraft = (target) => drafts.get(target) ?? '';
   useEffect(() => {
     if (!selectedId) { setLoading(false); return undefined; }
     if (data.offline) { setLoading(false); return undefined; }
@@ -1465,6 +1543,12 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const post = thread?.id === selectedId ? thread.post : saved;
   const comments = thread?.id === selectedId ? thread.comments : [];
   const replies = comments.filter((reply) => (!reply.postId || reply.postId === identityOf(post)) && (!reply.networkId || !originOf(post) || String(reply.networkId) === String(originOf(post))));
+  // The open target stays legible: the composer names the comment it answers.
+  const composerTargetReply = composerFor && composerFor !== 'post'
+    ? replies.find((reply) => identityOf(reply) === composerFor) : null;
+  const composerTargetName = composerTargetReply
+    ? composerTargetReply.author?.name ?? composerTargetReply.authorName ?? memberName(composerTargetReply.authorDid, data)
+    : 'this comment';
   const submit = async (body, parentId, mentions) => {
     const result = await invoke(actions, 'submitReply', post, body, parentId, mentions);
     if (!result?.comment || identityOf(result.comment) === '' || result.comment.postId !== identityOf(post)) throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
@@ -1487,9 +1571,25 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
       <PostCard post={post} data={data} actions={actions} navigate={navigate} detail reactionState={reactionState} onHide={() => navigate?.('/timeline')} />
       <Box sx={{ minWidth: 0 }}>
         <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />
-        <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Replies</Typography>
-        {!data.offline && (replies.length ? <ReplyThread comments={replies} post={post} data={data} actions={actions} navigate={navigate} offline={data.offline} onReply={submit} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
-        {!data.offline && <ReplyForm label="Write a reply" post={post} actions={actions} onSubmit={(body, mentions) => submit(body, null, mentions)} />}
+        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2, mb: 1 }}>
+          <Typography variant="h6">Replies</Typography>
+          {!data.offline && <Button size="small" data-testid="detail-reply" onClick={() => openComposer('post')}>Reply</Button>}
+        </Stack>
+        {!data.offline && (replies.length ? <ReplyThread comments={replies} post={post} data={data} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={openComposer} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
+        {/* PORCH-084 (ac-3/ac-4): the on-demand composer rides the full
+            conversation column width — never an always-visible inline input,
+            and nothing shrunken renders anywhere on the surface. */}
+        {!data.offline && composerFor && <ReplyForm
+          key={composerFor}
+          label={composerFor === 'post' ? 'Write a reply' : 'Your reply'}
+          replyingTo={composerFor === 'post' ? 'this post' : composerTargetName}
+          post={post}
+          actions={actions}
+          initialText={readDraft(composerFor)}
+          onDraft={(text) => holdDraft(composerFor, text)}
+          onDone={() => { setComposerFor(null); holdDraft(composerFor, ''); }}
+          onSubmit={(body, mentions) => submit(body, composerFor === 'post' ? null : composerFor, mentions)}
+        />}
       </Box>
     </Box>}
   </Box>;
