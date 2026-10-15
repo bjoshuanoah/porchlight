@@ -249,13 +249,14 @@ export class AlbumService {
   }
 
   /**
-   * Album serving list (ac-3): one entry per distinct media of the album's
-   * origin-contained posts. The DEFAULT serve target for every entry is the
-   * hub-generated "album" rendition; the original is never listed as the
-   * default — its retrieval is the explicit per-media action (audited
-   * original_download in the media pipeline).
+   * The album's original set of record (PORCH-083): the album's media ids
+   * in set order — album = membership-keyed order, then each post's
+   * mediaRefs order, deduplicated, with the viewer's visibility filter
+   * applied (private-group posts resolve only for their group's members).
+   * listMedia builds on the same resolution; the bulk zip consumes the set
+   * directly without per-media rendition description.
    */
-  async listMedia({ accessToken, name } = {}) {
+  async setMediaIds({ accessToken, name } = {}) {
     const session = await this.#requireSession(accessToken);
     const normalized = this.#normalizeName(name);
     const rows = await this.#albumRows(session.networkId, normalized);
@@ -264,29 +265,45 @@ export class AlbumService {
     }
     const postsById = await this.#originPostsById(session.networkId, session.did);
     const seen = new Set();
-    const entries = [];
+    const mediaIds = [];
     for (const row of rows) {
       const post = postsById.get(row.postId);
       if (!post) continue;
       for (const mediaId of post.mediaRefs ?? []) {
         if (typeof mediaId !== "string" || seen.has(mediaId)) continue;
         seen.add(mediaId);
-        const described = await this.media.describe({ accessToken, mediaId });
-        entries.push({
-          mediaId: described.mediaId,
-          contentType: described.contentType,
-          // The media-geometry stamp (PORCH-049 ac-1): the album's media
-          // list states the geometry the reserved frame reserves from.
-          width: described.width,
-          height: described.height,
-          aspect: described.aspect,
-          durationMs: described.durationMs,
-          renditionKinds: described.renditions,
-          defaultRendition: ALBUM_DEFAULT_RENDITION,
-        });
+        mediaIds.push(mediaId);
       }
     }
-    return { album: { name: normalized }, media: entries, did: session.did };
+    return { name: normalized, networkId: session.networkId, did: session.did, deviceId: session.deviceId, mediaIds };
+  }
+
+  /**
+   * Album serving list (ac-3): one entry per distinct media of the album's
+   * origin-contained posts. The DEFAULT serve target for every entry is the
+   * hub-generated "album" rendition; the original is never listed as the
+   * default — its retrieval is the explicit per-media action (audited
+   * original_download in the media pipeline).
+   */
+  async listMedia({ accessToken, name } = {}) {
+    const set = await this.setMediaIds({ accessToken, name });
+    const entries = [];
+    for (const mediaId of set.mediaIds) {
+      const described = await this.media.describe({ accessToken, mediaId });
+      entries.push({
+        mediaId: described.mediaId,
+        contentType: described.contentType,
+        // The media-geometry stamp (PORCH-049 ac-1): the album's media
+        // list states the geometry the reserved frame reserves from.
+        width: described.width,
+        height: described.height,
+        aspect: described.aspect,
+        durationMs: described.durationMs,
+        renditionKinds: described.renditions,
+        defaultRendition: ALBUM_DEFAULT_RENDITION,
+      });
+    }
+    return { album: { name: set.name }, media: entries, did: set.did };
   }
 
   /**
