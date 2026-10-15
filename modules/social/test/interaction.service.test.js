@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { device, fixture } from "./helpers/content.fixture.js";
 import { MAX_COMMENT_DEPTH } from "../src/services/interaction.service.js";
+import { FeedService } from "../src/services/feed.service.js";
+import { RankingService } from "../src/services/ranking.service.js";
 
 const SUSAN = "did:porchlight:susan";
 const JUNE = "did:porchlight:june";
@@ -22,6 +24,20 @@ async function contentFixture() {
   const postPayload = { type: "text", body: "root post" };
   const post = (await fx.posts.create({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) })).post;
   return { ...fx, dev, juneDev, megDev, familyToken, otherToken, juneToken, megToken, post };
+}
+
+/** The feed read over the content fixture: the same assembled path the card slice rides. */
+async function ruledFeed(fx) {
+  return new FeedService({
+    posts: fx.collections.posts,
+    derivedData: fx.collections.derivedData,
+    groups: fx.collections.groups,
+    membership: fx.membership,
+    ranking: new RankingService(),
+    media: fx.media,
+    comments: fx.collections.comments,
+    reactions: fx.collections.reactions,
+  });
 }
 
 test("ac-3: comments nest via parentId with the depth cap", async () => {
@@ -306,4 +322,118 @@ test("ac-4: interaction writes are actor-signed — a tampered comment does not 
   const ok = { postId: post._id, body: "ok" };
   const comment = (await interactions.comment({ accessToken: familyToken, payload: ok, signature: dev.signPayload(ok) })).comment;
   assert.equal("deviceSignature" in comment, false); // member views strip transport detail
+});
+
+/** PORCH-085: the ruled read order (paired PRD 6ad13dde89855af1a3cc050b). */
+test("PORCH-085 ac-1: the thread read serves the ruled order — threaded roots first, each group newest-first, the tree chronological", async () => {
+  const { interactions, collections, familyToken, post } = await contentFixture();
+  const at = (minute) => new Date(Date.parse("2026-10-14T10:00:00Z") + minute * 60_000).toISOString();
+  const insert = (id, parentId, minute) =>
+    collections.comments.insertOne({
+      _id: id, postId: post._id, networkId: FAMILY, authorDid: JUNE,
+      parentId, body: id, mentions: [], createdAt: at(minute),
+    });
+
+  // The directive's fixture: {A 10:00 childless, B 11:00 childless,
+  // C 12:00 with replies, D 13:00 childless}.
+  const roots = [
+    ["A", null, 0], ["B", null, 60], ["D", null, 180],
+  ];
+  for (const [id, parentId, minute] of roots) await insert(id, parentId, minute);
+  const threadRoot = ["C", null, 120];
+  await insert(...threadRoot);
+  for (let index = 0; index < 3; index += 1) await insert(`Cr${index}`, "C", 121 + index);
+
+  const read = async () => (await interactions.commentThread({ accessToken: familyToken, postId: post._id })).comments;
+  const order = async () => {
+    const rows = await read();
+    return rows.filter((row) => row.parentId == null).map((row) => row.body);
+  };
+  // Threaded roots rank ahead of childless roots; each group newest-first.
+  // (The AC's literal 'D, C, B, A' enumeration contradicts the paired PRD's
+  // ruling of record — threaded-first, then newest-first — and the merged
+  // UI of record, whose ruledOrder makes this fixture render C, D, B, A.)
+  assert.deepEqual(await order(), ["C", "D", "B", "A"]);
+  // C's replies render oldest-first inside the tree, immediately after C.
+  const rows = await read();
+  assert.deepEqual(rows.map((row) => row.body).slice(1, 4), ["Cr0", "Cr1", "Cr2"]);
+  // Deterministic read: two fetches return the identical order.
+  assert.equal(JSON.stringify(await read()), JSON.stringify(rows));
+
+  // A later childless arrival re-ranks within its group only (E 14:00).
+  await insert("E", null, 240);
+  assert.deepEqual(await order(), ["C", "E", "D", "B", "A"]);
+
+  // An equal-createdAt tie resolves threaded-ahead deterministically.
+  await insert("F", null, 240);
+  await insert("Fchild", "F", 240);
+  // F (14:00, threaded) leads the threaded group ahead of C, and E, D, B, A
+  // keep the childless group newest-first.
+  assert.deepEqual(await order(), ["F", "C", "E", "D", "B", "A"]);
+});
+
+test("PORCH-085 ac-2: the card slice serves the top four of the ruled sort plus the total-root count", async () => {
+  const fx = await contentFixture();
+  const feed = await ruledFeed(fx);
+  const cardPayload = { type: "text", body: "ruled card" };
+  const post = (await fx.posts.create({ accessToken: fx.familyToken, payload: cardPayload, signature: fx.dev.signPayload(cardPayload) })).post;
+  const at = (minute) => new Date(Date.parse("2026-10-14T10:00:00Z") + minute * 60_000).toISOString();
+  const insert = (id, parentId, minute, did = JUNE) =>
+    fx.collections.comments.insertOne({ _id: id, postId: post._id, networkId: FAMILY, authorDid: did, parentId, body: id, mentions: [], createdAt: at(minute) });
+
+  // Roots: X 10:00 threaded (two replies), Y 11:00, Z 12:00, W 13:00, V 14:00
+  // childless — the ruled top four are X, V, W, Z; Y falls into the expander.
+  await insert("X", null, 0);
+  await insert("Xr1", "X", 5);
+  await insert("Xr2", "X", 6);
+  for (const [id, minute] of [["Y", 60], ["Z", 120], ["W", 180], ["V", 240]]) await insert(id, null, minute);
+
+  const findView = async (body) => (await feed.timeline({ accessToken: fx.familyToken })).posts.find((row) => row.body === body);
+
+  const view = await findView("ruled card");
+  assert.deepEqual(
+    view.replySlice.map((row) => row.body),
+    ["X", "V", "W", "Z"],
+    "the threaded root leads the slice; the childless set trails newest-first",
+  );
+  assert.deepEqual(view.replySlice.map((row) => row.responseCount), [2, 0, 0, 0]);
+  assert.equal(view.replyTotal, 5, "the slice rides the total-root count; expander math stays total minus rendered");
+});
+
+test("PORCH-085 ac-3: containment precedes the sort; no vote-bearing field or engagement count rides any ordered read", async () => {
+  const fx = await contentFixture();
+  const feed = await ruledFeed(fx);
+  // The in-origin rows the ordered reads must actually serve.
+  await fx.collections.comments.insertOne({
+    _id: "A", postId: fx.post._id, networkId: FAMILY, authorDid: JUNE,
+    parentId: null, body: "A root", mentions: [], createdAt: "2026-10-14T10:00:00Z",
+  });
+  await fx.collections.comments.insertOne({
+    _id: "Ar1", postId: fx.post._id, networkId: FAMILY, authorDid: SUSAN,
+    parentId: "A", body: "A reply", mentions: [], createdAt: "2026-10-14T10:30:00Z",
+  });
+  // A foreign-origin root and reply on the SAME post never decorate this origin.
+  await fx.collections.comments.insertOne({
+    _id: "f_root", postId: fx.post._id, networkId: OTHER, authorDid: JUNE,
+    parentId: null, body: "foreign root", mentions: [], createdAt: "2026-10-14T23:00:00Z",
+  });
+  await fx.collections.comments.insertOne({
+    _id: "f_reply", postId: fx.post._id, networkId: OTHER, authorDid: JUNE,
+    parentId: "A", body: "foreign reply", mentions: [], createdAt: "2026-10-14T23:30:00Z",
+  });
+
+  const rows = (await fx.interactions.commentThread({ accessToken: fx.familyToken, postId: fx.post._id })).comments;
+  assert.deepEqual(rows.map((row) => row.body), ["A root", "A reply"], "only this origin's rows ride the ordered thread — never the newer foreign ones");
+  assert.equal(rows.some((row) => String(row.body).includes("foreign")), false, "foreign-origin rows never enter the ordered thread");
+  assert.equal(JSON.stringify(rows).includes("vote"), false, "no vote-bearing field rides any thread row");
+
+  const view = (await feed.timeline({ accessToken: fx.familyToken })).posts.find((row) => row.body === "root post");
+  assert.equal(JSON.stringify(view.replySlice).includes("foreign"), false, "the card slice never carries a foreign-origin row");
+  assert.equal("voteRecords" in view, false, "rank inputs stay off the view");
+  assert.equal("interactionCounters" in view, false);
+  assert.equal(
+    JSON.stringify(view.replySlice).split('"responseCount"').length - 1,
+    view.replySlice.length,
+    "responseCount is the only number a slice row carries",
+  );
 });

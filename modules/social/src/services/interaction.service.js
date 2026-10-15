@@ -1,6 +1,6 @@
 import { socialModels } from "../models.js";
 import { canSeeGroup } from "./group.service.js";
-import { typedError, computeCounters } from "./post.service.js";
+import { typedError, computeCounters, ruledRootCompare } from "./post.service.js";
 
 /**
  * Replies nest to a depth cap (directive: "a depth cap [Assumed: 8]"). A
@@ -271,13 +271,55 @@ export class InteractionService {
     return { vote: { postId: payload.postId, effective: payload.value } };
   }
 
-  /** Thread read for a member: nested comments with mentions, roots → leaves. */
+  /**
+   * Thread read for a member: mentions in views, roots → leaves. The ruled
+   * read order of record (PORCH-085, paired PRD 6ad13dde89855af1a3cc050b):
+   * roots serve threaded-first then newest-first; each root's tree serves
+   * chronological (ascending) immediately after its root. Containment and
+   * the private-group gate ran in #requireSession BEFORE the sort — the
+   * ruled order can never promote a row the member may not see.
+   */
   async commentThread({ accessToken, postId } = {}) {
     const session = await this.#requireSession({ accessToken, postId });
     const rows = await this.comments.find({ postId, networkId: session.networkId });
-    rows.sort((a, b) => (a.createdAt > b.createdAt ? 1 : -1));
-    const views = await this.#withAttribution(rows.map((row) => InteractionService.commentView(row)), session.networkId);
+    const views = await this.#withAttribution(
+      InteractionService.orderedThread(rows).map((row) => InteractionService.commentView(row)),
+      session.networkId,
+    );
     return { comments: this.previews ? await this.previews.withViews(views, session.networkId) : views };
+  }
+
+  /**
+   * The ruled detail-thread order (PORCH-085). One comparator home
+   * (ruledRootCompare, post.service.js) serves the detail read and the card
+   * slice window, so the rendered order never disagrees with the served
+   * order; a root's entire subtree rides ascending by createdAt right after
+   * it. Pure: identical rows read identically on every fetch.
+   */
+  static orderedThread(rows) {
+    const children = new Map();
+    for (const comment of rows ?? []) {
+      if (comment.parentId == null) continue;
+      if (!children.has(comment.parentId)) children.set(comment.parentId, []);
+      children.get(comment.parentId).push(comment);
+    }
+    const ordered = [];
+    const roots = (rows ?? [])
+      .filter((comment) => comment.parentId == null)
+      .sort((a, b) => ruledRootCompare(a, b, (root) => (children.get(root._id)?.length ?? 0) > 0));
+    for (const root of roots) {
+      ordered.push(root);
+      const subtree = [];
+      const pending = [...(children.get(root._id) ?? [])];
+      while (pending.length) {
+        const child = pending.shift();
+        subtree.push(child);
+        pending.push(...(children.get(child._id) ?? []));
+      }
+      subtree.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+      ordered.push(...subtree);
+    }
+    return ordered;
   }
 
   /** Reaction read for a member: as-authored emoji values, by member. */

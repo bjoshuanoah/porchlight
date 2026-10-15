@@ -44,6 +44,16 @@ export function newestFirstByActivity(rows) {
   return rows;
 }
 
+/** Root-comment read order of record (PORCH-085, paired PRD 6ad13dde89855af1a3cc050b): threaded
+ * roots rank ahead of childless roots; within each group roots serve newest-first (createdAt
+ * descending, stable otherwise). Replies serve chronological (ascending) inside each tree. */
+export function ruledRootCompare(a, b, threadedOf) {
+  const threadedA = threadedOf(a) ? 1 : 0;
+  const threadedB = threadedOf(b) ? 1 : 0;
+  if (threadedA !== threadedB) return threadedB - threadedA;
+  return a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0;
+}
+
 const ZERO_COUNTERS = Object.freeze({
   upVolume: 0,
   downVolume: 0,
