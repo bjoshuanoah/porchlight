@@ -28,6 +28,8 @@ import { GroupsController } from "./controllers/groups.controller.js";
 import { MediaController } from "./controllers/media.controller.js";
 import { AlbumController } from "./controllers/album.controller.js";
 import { PushController } from "./controllers/push.controller.js";
+import { OgController } from "./controllers/og.controller.js";
+import { OgService } from "./services/og.service.js";
 import { createSocialRouter } from "./routes.js";
 
 /**
@@ -140,6 +142,10 @@ export function assembleSocialModule(store, options = {}) {
   // the hub-enforced member settings (read at send time, never cached).
   const pushSubscriptions = collection("push_subscriptions");
   const pushSettings = collection("push_settings");
+  // OG unfurl images (PORCH-079): the composed-image cache's mapping rows
+  // (inputKey → content-addressed blob key), the same derived-ephemeral
+  // class as the URL-level link-preview cache (never a models schema).
+  const ogImages = collection("og_images");
 
   const auditService = new AuditService(auditEvents, ledger);
   const audit = auditService.recorderFor(null);
@@ -355,6 +361,17 @@ export function assembleSocialModule(store, options = {}) {
     purgeAvatar: options.purgeAvatar ?? null,
     audit,
   });
+  // OG unfurl images (PORCH-079): the composed, cached template frames for
+  // shared post and invite links. Composited from the bundled base artwork +
+  // bundled Roboto face (glyph outlines — no host font dependency); the
+  // cache rides the pipeline's content-addressed blob store, so the og
+  // surface shares the media root and its volume readiness pauses it like
+  // every other media surface. Content-free by construction (ac-5): the
+  // composer reads only the origin network and the entity's content version.
+  const ogService = new OgService(
+    { posts, invites, networks, ogImages, blobs },
+    { log: options.log ?? null },
+  );
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger, options.mintOwnerDeviceLink ?? null),
@@ -378,6 +395,7 @@ export function assembleSocialModule(store, options = {}) {
     media: new MediaController({ media: mediaService, export: exportService }),
     albums: new AlbumController({ albums: albumService }),
     push: new PushController({ push: pushService }),
+    og: new OgController(ogService, options.log ?? null),
     groups: new GroupsController({
       groups: groupService,
       membership: membershipService,
@@ -409,6 +427,7 @@ export function assembleSocialModule(store, options = {}) {
     exportService,
     albumService,
     memberAdminService,
+    ogService,
     controllers,
     api: createSocialRouter(controllers),
   };

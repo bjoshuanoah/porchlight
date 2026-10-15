@@ -15,11 +15,12 @@ import express, { Router } from "express";
    *   groups: import("./controllers/groups.controller.js").GroupsController,
    *   media: import("./controllers/media.controller.js").MediaController,
    *   albums: import("./controllers/album.controller.js").AlbumController,
+   *   og: import("./controllers/og.controller.js").OgController,
    * }} controllers
  */
 export function createSocialRouter(controllers) {
   const router = Router();
-  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums, groups, push } = controllers;
+  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums, groups, push, og } = controllers;
 
   // Bootstrap-era network + invite surface (PORCH-003 contract; unchanged).
   router.get("/network", bootstrap.get);
@@ -32,6 +33,14 @@ export function createSocialRouter(controllers) {
   router.post("/join/admit", membership.admit);
   router.post("/session/refresh", membership.refresh);
   router.post("/session/restore", membership.restore);
+
+  // OG unfurl images (PORCH-079): server-composed, cached template frames
+  // for shared post and invite links. Publicly fetchable by design — the
+  // unfurl surface carries only the fixed template frame and the network
+  // name, never post content, media, or member names (the perimeter, ac-5),
+  // so unauthenticated unfetchers (iMessage, Slack) fetch these.
+  router.get("/og/invite/:token", og.inviteImage);
+  router.get("/og/post/:postId", og.postImage);
 
   // Content engine (PORCH-006): every surface token-scoped to exactly one
   // origin network; writes are actor-signed. No route carries the origin,

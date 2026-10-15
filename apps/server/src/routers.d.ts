@@ -93,6 +93,11 @@ declare module "@porchlight/social" {
     pushService: PushService;
     /** PORCH-047: the real-time event surface (subscribe/catch-up/revoke). */
     realtimeService: unknown;
+    /** PORCH-079: the OG unfurl composer (images + the og: tag resolver). */
+    ogService: {
+      image(input: { kind: "post" | "invite"; id: string }): Promise<{ bytes: Buffer; key: string; composed: boolean }>;
+      tags(input: { kind: "post" | "invite"; id: string; origin?: string | null }): Promise<{ title: string; image: string; url: string } | null>;
+    };
     controllers: unknown;
     api: import("express").Router;
   }
