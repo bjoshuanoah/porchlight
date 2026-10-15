@@ -209,10 +209,14 @@ export function NotificationSettings({ data, actions }) {
     setError("");
     await saveOptimistic(withOwnerEvents(settings, checked));
   }
-  async function toggleMute(networkId, checked) {
+  /** The mute row toggle convention (PORCH-087): switch ON = receiving, so
+   * the checked state carries the receiving meaning and the mute flag is
+   * its inverse — checked off writes the mute, checked on removes it. The
+   * persisted mute flag itself is untouched (the hub-side semantics carry). */
+  async function toggleMute(networkId, receiving) {
     if (!settings) return;
     setError("");
-    await saveOptimistic(withMute(settings, networkId, checked));
+    await saveOptimistic(withMute(settings, networkId, !receiving));
   }
 
   // Control availability (ac-4): the toggles work only where push can
@@ -264,8 +268,11 @@ export function NotificationSettings({ data, actions }) {
             onChange={(event) => void toggleOwnerEvents(event.target.checked)} />
         }><ListItemText primary={OWNER_EVENT_LABEL} secondary="New members and new device connections for this network." /></ListItem>}
         {expanded && mutes.map((row) => <ListItem key={row.networkId} divider secondaryAction={
-          <Switch checked={settings.mutes?.includes(row.networkId)} disabled={disabled}
-            slotProps={{ input: { "aria-label": `Quiet ${row.name}` } }}
+          // The toggled value is the receiving state (PORCH-087): ON renders
+          // with the receiving line, OFF with the quiet line — never a state
+          // opposite its switch position.
+          <Switch checked={!settings.mutes?.includes(row.networkId)} disabled={disabled}
+            slotProps={{ input: { "aria-label": `${row.name} notifications` } }}
             onChange={(event) => void toggleMute(row.networkId, event.target.checked)} />
         }><ListItemText primary={row.name} secondary={settings.mutes?.includes(row.networkId) ? "Quiet: this network's notifications are paused." : "This network's moments reach you as usual."} /></ListItem>)}
       </List>}
