@@ -29,7 +29,7 @@ async function surfaces() {
   if (surfacesModule) return surfacesModule;
   await mkdir(outDir, { recursive: true });
   await build({
-    stdin: { contents: 'export { PostDetail, ReplyThread, ReplySliceBlock } from "./src/social.jsx";', resolveDir: webRoot, loader: "jsx", sourcefile: "entry.jsx" },
+    stdin: { contents: 'export { PostDetail, ReplyThread, ReplySliceBlock, PostCard } from "./src/social.jsx";', resolveDir: webRoot, loader: "jsx", sourcefile: "entry.jsx" },
     bundle: true, format: "esm", jsx: "automatic", platform: "neutral",
     external: ["react", "react-dom", "@mui/*", "@emotion/*", "@noble/*", "socket.io-client", "unicode-emoji-json", "react-transition-group", "hoist-non-react-statics"],
     outfile: join(outDir, "surfaces.built.mjs"), logLevel: "silent",
@@ -190,4 +190,21 @@ test("ac-6: no vote affordance renders on any comment row — votes stay on post
   // The vote affordance of record is the post's alone: the single vote
   // control binds to the post argument on both surfaces' action bars.
   assert.match(social, /invoke\(actions, 'vote', post, direction\)/);
+});
+
+// PORCH-086 trail (Brian's hub, Oct 15): since PORCH-084 landed, the card's
+// per-target draft map took `.current` off the useState PAIR —
+// `useState(() => new Map()).current` — so every PostCard render threw
+// "undefined is not iterable" and the whole timeline crashed to a white
+// surface. The draft map is the plain useState Map again (the detail
+// surface's shape) and a real PostCard render survives it.
+test("PORCH-086 regression: the timeline card renders — the draft map is a plain useState Map", async () => {
+  assert.doesNotMatch(social, /useState\(\(\) => new Map\(\)\)[^\n]*\.current/,
+    "no hook takes .current off the useState pair anywhere");
+  const { PostCard } = await surfaces();
+  const cardPost = { _id: "p1", origin: "https://hub", type: "text", body: "the ruled order post",
+    authorDid: "dA", authorName: "Ari", createdAt: ts(1), replySlice: [], replyTotal: 0 };
+  const html = renderToString(React.createElement(PostCard, { post: cardPost, data, actions: {}, navigate: null, onHide: null }));
+  assert.ok(html.includes("the ruled order post"), "the rendered card carries the post body");
+  assert.match(html, /Lift|data/, "the card renders its action surface (render past the old crash point)");
 });

@@ -711,7 +711,7 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2, ac
   </>;
 }
 
-function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState }) {
+export function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState }) {
   const [localHidden, setLocalHidden] = useState(false);
   // Card-level reply (PORCH-038 ac-1): the affordance opens an inline
   // composer riding the same mention handling as the detail composer; the
@@ -722,7 +722,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   // frame, and each target holds its own draft so a displaced draft is
   // never silently lost while the member re-points the composer.
   const [composerFor, setComposerFor] = useState(null); // null | 'post' | comment id
-  const [drafts, setDrafts] = useState(() => new Map()).current;
+  const [drafts] = useState(() => new Map());
   const openComposer = (target) => setComposerFor(target);
   const holdDraft = (target, text) => {
     if (text) drafts.set(target, text); else drafts.delete(target);
