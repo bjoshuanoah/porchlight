@@ -109,6 +109,15 @@ test("realtime: reconnect catch-up — deltas replay from the cursor inside the 
   const member = await fx.admit({ networkId: "net_family", did: "did_m", device: memberDevice });
   await fx.realtime.subscribe({ token: member.accessToken, networkId: "net_family", channel: { id: "ch_live", emit: () => {}, close: () => {} } });
 
+  // PORCH-088: the replay window serves only events whose post is live in
+  // the store (a removed post never replays) — these tests' envelopes
+  // reference real post rows, like every production publish does.
+  const postRow = (postId, extra = {}) => ({
+    _id: postId, originNetworkId: "net_family", authorId: "did_m", type: "text", groupId: null, mediaRefs: [], createdAt: new Date().toISOString(), ...extra,
+  });
+  await fx.store.collection("posts").insertOne(postRow("p1"));
+  await fx.store.collection("posts").insertOne(postRow("p2"));
+
   const first = await fx.realtime.published({ networkId: "net_family", type: "post.created", postId: "p1", content: { body: "first" } });
   const baseline = first.seq;
   const baselineRead = await fx.realtime.catchUp({ accessToken: member.accessToken, since: null });
@@ -212,6 +221,11 @@ test("realtime: gated group-post events never reach a non-member's room or catch
   // A private group and a public group on the same origin.
   const secretGroup = await fx.groups.create({ networkId: "net_family", name: "Picnic", members: ["did_in"], createdBy: "did_in" });
   const publicGroup = await fx.groups.create({ networkId: "net_family", name: "Harbor", members: ["did_in"], createdBy: "did_in", visibility: "public" });
+  // PORCH-088: the replay window serves only events whose post is live in
+  // the store — the tests' envelopes reference real post rows.
+  const postRow = (postId) => ({ _id: postId, originNetworkId: "net_family", authorId: "did_in", type: "text", groupId: null, mediaRefs: [], createdAt: new Date().toISOString() });
+  await fx.store.collection("posts").insertOne(postRow("p_private"));
+  await fx.store.collection("posts").insertOne(postRow("p_public"));
 
   const insiderSeen = [];
   const outsiderSeen = [];
@@ -256,6 +270,11 @@ test("realtime: joining a public group turns its delivery on from that catch-up 
   const member = await fx.admit({ networkId: "net_family", did: "did_m", device: device("dev_m") });
   await fx.admit({ networkId: "net_family", did: "did_o", device: device("dev_o") }); // the group's manager
   const publicGroup = await fx.groups.create({ networkId: "net_family", name: "Harbor", members: ["did_o"], createdBy: "did_o", visibility: "public" });
+  // PORCH-088: the replay window serves only events whose post is live in
+  // the store — the tests' envelopes reference real post rows.
+  const postRow = (postId) => ({ _id: postId, originNetworkId: "net_family", authorId: "did_o", type: "text", groupId: null, mediaRefs: [], createdAt: new Date().toISOString() });
+  await fx.store.collection("posts").insertOne(postRow("p_dock"));
+  await fx.store.collection("posts").insertOne(postRow("p_next"));
 
   const seen = [];
   await fx.realtime.subscribe({ token: member.accessToken, networkId: "net_family", channel: { id: "ch_m", emit: (envelope) => seen.push(envelope), close: () => {} } });

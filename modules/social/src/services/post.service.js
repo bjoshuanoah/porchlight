@@ -1,5 +1,5 @@
 import { socialModels } from "../models.js";
-import { canSeeGroup, postDeliversToViewer } from "./group.service.js";
+import { canSeeGroup, postDeliversToViewer, isGroupManager } from "./group.service.js";
 
 /** Plain-language content failures for member clients. */
 export const POST_MESSAGES = {
@@ -202,6 +202,10 @@ export class PostService {
         targetDids: Array.isArray(group?.members) ? group.members : [],
         postId: post._id,
         actorDid: session.did,
+        // PORCH-088: the group target rides the trigger so the send
+        // pipeline resolves each recipient's per-group preference at send
+        // time (the persisted settings row, never cached).
+        groupId: post.groupId,
         excerpt: post.caption ?? post.body ?? null,
       });
     }
@@ -303,6 +307,70 @@ export class PostService {
   }
 
   /**
+   * Owner (managing-member) post removal (PORCH-088 ac-4, Oct 15 2026
+   * rulings): the group's creator — or the network owner, who rides as
+   * superuser — removes a post FROM THEIR GROUP as a moderation act, not a
+   * member-content-retention case. The write is device-signed; the signed
+   * payload shape is { kind: "group_post_remove", postId, groupId,
+   * networkId }. The removal executes the origin deletion cascade over the
+   * same transactional sweep the author's own delete rides (comments,
+   * reactions, votes, notifications, derived artifacts, quota ledger, link
+   * previews) PLUS the post's media (asset rows + content-addressed bytes
+   * + ledger rows — the media dies with the post). The post document and
+   * every derived artifact go, so the post leaves feed, ranked, group
+   * timeline, search, event streams and catch-up, and notification
+   * back-references immediately (hard delete, no tombstone, no undelete).
+   * Other members' content is untouched by construction: the cascade keys
+   * only to this post. One audit record lands (group_post_remove).
+   *
+   * @param {{ accessToken: string, postId: string, signature: string }} args
+   */
+  async removePost({ accessToken, postId, signature } = {}) {
+    const session = await this.#requireSession(accessToken);
+    const post = await this.posts.findOne({ _id: postId });
+    if (!post || post.originNetworkId !== session.networkId) {
+      throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
+    }
+    if (!post.groupId) {
+      throw typedError("E_GROUP_POST_ONLY", "Only a post in a group can be removed from that group.");
+    }
+    const group = await this.groups.findOne({ _id: post.groupId });
+    if (!group || group.networkId !== session.networkId) {
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    // The managing-member authority check runs IN THE WRITE PATH (TS 17):
+    // the group's creator, or the network owner on their own network. A
+    // non-authoritative caller is refused plainly with zero mutation.
+    const actorMembership = session.did ? await this.membership.activeMembership({ networkId: session.networkId, did: session.did }) : null;
+    if (!isGroupManager(group, session.did, actorMembership)) {
+      throw typedError(
+        "E_GROUP_NOT_CREATOR",
+        "Only the group's creator or the network owner can remove a group post.",
+      );
+    }
+    await this.verifyWrite({
+      networkId: session.networkId,
+      did: session.did,
+      deviceId: session.deviceId,
+      payload: { kind: "group_post_remove", postId: post._id, groupId: post.groupId, networkId: post.originNetworkId },
+      signature,
+    });
+    // The cascade of record first (all-or-nothing over the collection
+    // boundary); the media store side follows (asset rows, blob bytes,
+    // quota ledger rows keyed to this post's media refs alone).
+    const cascade = await this.cascadePost(post, { actorDid: session.did, action: "group_post_remove" });
+    const media = this.media
+      ? await this.media.deletePostMedia({ networkId: post.originNetworkId, mediaIds: [...(post.mediaRefs ?? []), post._id] })
+      : null;
+    return {
+      removed: true,
+      postId: post._id,
+      cascadeRows: cascade.cascadeRows,
+      mediaRemoved: media?.assetRowsRemoved ?? 0,
+    };
+  }
+
+  /**
    * Member-level deletion (ac-5 tail): sweeps ALL of the member's authored
    * content at this origin — every authored post (full cascade), plus every
    * comment, reaction, and vote they authored on other posts. Transactional
@@ -400,7 +468,7 @@ export class PostService {
    * ledger rows for the post's media (keyed by post id or media ref id).
    * Any failing step rolls every deletion back.
    */
-  async cascadePost(post, { actorDid = null } = {}) {
+  async cascadePost(post, { actorDid = null, action = "post_delete" } = {}) {
     const networkId = post.originNetworkId;
     const comments = await this.comments.find({ postId: post._id });
     const reactions = await this.reactions.find({ postId: post._id });
@@ -429,7 +497,7 @@ export class PostService {
     ];
     await this.runTransactional(snapshot);
     await this.previews?.releaseBlobs(previewCascade.blobKeys);
-    await this.audit("post_delete", {
+    await this.audit(action, {
       networkId,
       did: actorDid ?? post.authorId,
       detail: { postId: post._id, comments: comments.length, reactions: reactions.length, votes: votes.length },

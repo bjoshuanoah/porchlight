@@ -183,6 +183,22 @@ export function createSocialRouter(controllers) {
   router.post("/groups/:groupId/join", groups.join);
   router.post("/groups/:groupId/members/remove", groups.removeMember);
   router.post("/groups/:groupId/unblock", groups.unblock);
+  // Group settings (PORCH-088, Oct 15 2026 rulings): the menu's server
+  // surface — the managing member's (or the network owner's) presentation
+  // writes and the moderation act, every write in the write path's
+  // authority gate; the group face's rendition serving rides the media
+  // pipeline's content-addressed blob store, long-lived cache.
+  router.post(
+    "/groups/:groupId/avatar",
+    // The 6 MB transport belt tightens the byte route; the member-avatar
+    // treatment is the cap's enforcement point and refuses over-cap
+    // uploads with its named plain language BEFORE anything is stored.
+    express.raw({ type: (req) => typeof req?.headers?.["content-type"] === "string" && req.headers["content-type"].startsWith("image/"), limit: "6mb" }),
+    groups.setAvatar,
+  );
+  router.patch("/groups/:groupId/color", groups.setColor);
+  router.delete("/groups/:groupId/posts/:postId", groups.removePost);
+  router.get("/groups/:groupId/avatar/:kind", groups.serveAvatarRung);
 
   return router;
 }

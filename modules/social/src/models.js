@@ -185,6 +185,23 @@ export const socialModels = {
       blockedMemberIds: { type: "array", items: { type: "string" } },
       /** private (invite-only, invisible to non-members everywhere) | public (discoverable, viewable, self-joinable). */
       visibility: { type: "string", enum: ["private", "public"] },
+      /**
+       * Group presentation (PORCH-088, Oct 15 2026 rulings): `color` is the
+       * palette-validated accent token — presentation data ONLY, never a
+       * ranking or delivery input; null (unset) is the neutral default.
+       * Rows predating the field carry null.
+       */
+      color: { type: ["string", "null"] },
+      /**
+       * The group's avatar (PORCH-088): the member-avatar ingest treatment
+       * (deterministic square crop then compression — the identity plane's
+       * treated rungs, wired through the hub assembly), stored on the group
+       * as the treated square rung ladder ONLY (no rectangular original is
+       * ever retained; the uploaded bytes are treatment input). Replacing
+       * the set retires the prior rungs whole (replace, never accumulate).
+       * Written only by the group service; null is the no-avatar state.
+       */
+      avatar: { type: ["object", "null"] },
       createdAt: { type: "string" },
     },
   },
@@ -542,6 +559,16 @@ export const socialModels = {
       },
       /** Per-network mutes: origin network ids the member pushed a stop to. */
       mutes: { type: "array", items: { type: "string" } },
+      /**
+       * Per-group notification preference (PORCH-088, Brian Oct 15 2026):
+       * one preference per identity per group, keyed by group id, boolean
+       * map — true = ON, false = OFF. UNSET RESOLVES ON (Brian's "on by
+       * default for now"), for groups predating this ship and new groups
+       * alike; the member's first OFF act writes their entry, no backfill
+       * write ever exists. Read AT SEND TIME, never cached. Entries for
+       * groups the member no longer holds are refused on PUT.
+       */
+      groups: { type: "object", additionalProperties: { type: "boolean" } },
       updatedAt: { type: "string" },
     },
   },

@@ -885,6 +885,35 @@ export class MediaService {
     return { assetRowsRemoved: rows.length, bytesFreed, openUploads: chunkBlobsDeleted };
   }
 
+  /**
+   * The post-scoped media removal (PORCH-088 ac-4): the store side of the
+   * owner's post removal — the removed post's asset rows (its original
+   * media refs and every rendition derived from them), their
+   * content-addressed blob bytes, and their quota ledger rows leave the
+   * archive with the post document. Store-side only: the caller owns the
+   * authority gate, the cascade's transactionality, and the audit record.
+   */
+  async deletePostMedia({ networkId, mediaIds } = {}) {
+    const wanted = new Set((mediaIds ?? []).map(String));
+    if (!wanted.size) return { assetRowsRemoved: 0, bytesFreed: 0 };
+    const owned = (await this.assets.find({ networkId: String(networkId) })).filter((row) => wanted.has(row._id));
+    const renditionRows = [];
+    for (const original of owned.filter((row) => row.kind === "original")) {
+      renditionRows.push(...(await this.assets.find({ networkId: original.networkId, originalId: original._id, kind: "rendition" })));
+    }
+    const rows = [...owned, ...renditionRows].filter(
+      (row, index, all) => all.findIndex((other) => other._id === row._id) === index,
+    );
+    let bytesFreed = 0;
+    for (const row of rows) {
+      await this.assets.deleteOne({ _id: row._id });
+      await this.blobs.delete(row.blobKey);
+      await this.quota.removeArtifact(row._id);
+      bytesFreed += row.bytes ?? 0;
+    }
+    return { assetRowsRemoved: rows.length, bytesFreed };
+  }
+
   /* Internals */
 
   /**

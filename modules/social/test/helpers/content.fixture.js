@@ -99,7 +99,9 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
   });
   const notifications = new NotificationService({ notifications: collections.notifications, membership, push, groups: collections.groups });
   const plane = createMemoryEventPlane();
-  realtime = new RealtimeService({ membership, plane, groups: collections.groups });
+  // PORCH-088: the fixture mirrors the module assembly — the replay
+  // window's post-existence gate rides the same posts collection.
+  realtime = new RealtimeService({ membership, plane, groups: collections.groups, posts: collections.posts });
   const posts = new PostService({
     posts: collections.posts,
     comments: collections.comments,

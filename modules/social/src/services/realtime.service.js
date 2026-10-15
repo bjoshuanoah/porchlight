@@ -173,8 +173,13 @@ export class RealtimeService {
    * @param {number} [deps.replayHours]
    *   The bounded replay window the client contract names (24h);
    *   documented config value (`realtime.replayHours`, packages/shared).
+   * @param {import("@porchlight/shared").CollectionLike} [deps.posts]
+   *   PORCH-088: the posts collection — the REST catch-up filters any
+   *   envelope whose referenced post is gone (hard delete leaves the
+   *   replay window's surface immediately, no tombstone). Null (unwired
+   *   fixture assemblies) keeps the shipped verbatim replay.
    */
-  constructor({ membership, plane, groups = null, replayHours = 24 }) {
+  constructor({ membership, plane, groups = null, posts = null, replayHours = 24 }) {
     this.membership = membership;
     this.plane = plane;
     // PORCH-068: the group collection behind the group-post event gate —
@@ -183,6 +188,8 @@ export class RealtimeService {
     // Fail-closed when the wiring is absent: gated envelopes stay in the
     // plane window but deliver (and replay) to nobody.
     this.groups = groups;
+    // PORCH-088: the post-existence gate behind the catch-up replay filter.
+    this.posts = posts;
     this.replayHours = replayHours;
     /** channelId → { id, networkId, membershipId, did, emit, close } — the live rooms. */
     this.channels = new Map();
@@ -326,8 +333,16 @@ export class RealtimeService {
     // The group-delivery gate applies to the replay window too (PORCH-068
     // ac-2, refined): a gated envelope replays only to a member of its
     // group — the same predicate the live delivery applies.
+    // PORCH-088: removal leaves the event streams and catch-up immediately
+    // (hard delete, no tombstone): an envelope whose referenced post no
+    // longer exists replays to nobody — the removed post never surfaces in
+    // a returning device's delta.
     const visible = [];
     for (const event of stale || pastWindow ? [] : events) {
+      if (this.posts && event?.postId) {
+        const post = await this.posts.findOne({ _id: event.postId });
+        if (!post) continue;
+      }
       if (await this.#eventReaches(event, did)) visible.push(event);
     }
     return {
