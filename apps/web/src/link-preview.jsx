@@ -13,7 +13,7 @@
 // provider from the member browser); it renders only after a member tap.
 
 import React, { useState } from "react";
-import { Box, Chip, IconButton, Stack, Typography } from "@mui/material";
+import { Box, Chip, Stack, Typography } from "@mui/material";
 import { renditionSrc, renditionSrcset } from "./media-rung.js";
 import { linkSegments } from "./link-preview.js";
 
@@ -67,21 +67,37 @@ export function LinkPreviewBlock({ preview, origin, compact = false }) {
   if (preview.kind === "embed") {
     if (!preview.embedUrl) return null;
     if (!playing) {
+      // PORCH-086: the facade is ONE interactive surface — the whole card
+      // is the play control. The old layout left the tap-to-play act on a
+      // tiny icon button: a tap on the facade body landed on a dead layer
+      // and the embed only revealed on a second tap (the reported
+      // double-tap defect; Apple Music exposed it hardest). First paint
+      // stays the same compact facade (no autoplay anywhere); the member's
+      // first intentional tap — anywhere on the card — swaps in the
+      // provider iframe (the ruled tap-to-play act).
       return (
-        <Stack
-          direction="row"
-          spacing={1.5}
-          alignItems="center"
-          justifyContent="space-between"
+        <Box
+          component="button"
+          type="button"
+          onClick={() => setPlaying(true)}
+          aria-label={`Play ${PROVIDER_LABELS[preview.provider] ?? "the shared"} link`}
           sx={{
             mt: 1,
             maxWidth: "68ch",
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 1.5,
             px: 1.25,
             py: 0.75,
             border: 1,
             borderRadius: 2,
             borderColor: "divider",
             bgcolor: "background.default",
+            cursor: "pointer",
+            textAlign: "left",
+            "&:hover": { bgcolor: "action.hover" },
           }}
         >
           <Stack spacing={0} sx={{ minWidth: 0 }}>
@@ -92,10 +108,10 @@ export function LinkPreviewBlock({ preview, origin, compact = false }) {
               Tap to play
             </Typography>
           </Stack>
-          <IconButton aria-label={`Play ${PROVIDER_LABELS[preview.provider] ?? "the shared"} link`} onClick={() => setPlaying(true)} sx={{ flexShrink: 0 }}>
+          <Box component="span" aria-hidden sx={{ fontSize: 20, lineHeight: 1, color: "text.primary", flexShrink: 0 }}>
             ▶
-          </IconButton>
-        </Stack>
+          </Box>
+        </Box>
       );
     }
     return (
