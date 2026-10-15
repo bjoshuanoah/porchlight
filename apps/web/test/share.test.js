@@ -6,7 +6,12 @@
 // comment content, or media bytes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { photoCountOf, shareAuthorName, postShareText, postDeepLink, sharePost } from "../src/share.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 const ME = "did:porch:me";
 const SIS = "did:porch:sis";
@@ -135,4 +140,36 @@ test("ac-4: the share payload carries no post body, no comments, no media bytes"
 		copy: async (link) => { copyPayloads.push(link); return true; },
 	});
 	assert.deepEqual(copyPayloads, ["https://family.example/posts/p1"]);
+});
+// The Oct 15, 2026 feedback (Brian): the share belongs in BOTH ··· menus —
+// the timeline card's and the detail card's — and when the native dialog is
+// unavailable the click must visibly confirm. The SPA has no DOM harness, so
+// these pins read the shipped card source and walk the exact menu contract.
+const socialSource = await readFile(join(here, "..", "src", "social.jsx"), "utf8");
+
+test("ac-1: the Share entry renders in both ··· menus — timeline card and detail card — through one handler", () => {
+	const shareItem = socialSource.match(/^ +<MenuItem onClick=\{runShare\}>Share</m);
+	assert.ok(shareItem, "the card menu renders Share via the shared runShare handler");
+	// One handler, both surfaces: the runShare closure calls sharePost once,
+	// and the menu's Share line carries no `detail`/`!detail` gate.
+	assert.ok(/\bconst runShare = \(\) => \{/.test(socialSource), "one shared handler closes over the card");
+	const runShareBody = socialSource.slice(
+		socialSource.indexOf("const runShare = () => {"),
+		socialSource.indexOf("</MenuItem>", socialSource.indexOf("Share</MenuItem>")),
+	);
+	const shareCalls = (runShareBody.match(/sharePost\(/g) ?? []).length;
+	assert.equal(shareCalls, 1, "both menus ride the same single sharePost path");
+	assert.ok(/base: typeof window !== 'undefined' \? window\.location\.origin : ''/.test(runShareBody),
+		"the handler passes the hub origin for the canonical deep link");
+	assert.ok(!/<MenuItem onClick=\{runShare\}>Share<\/MenuItem>\}/.test(socialSource.replace(shareItem[0], "")),
+		"no second, differently-gated Share menu item exists");
+});
+
+test("ac-1: the copy fallback confirms where the member is looking — Snackbar, not only the card foot", () => {
+	// The menu was the member's last touchpoint; the confirmation renders as
+	// an immediately visible Snackbar regardless of scroll position.
+	assert.ok(/<Snackbar open=\{Boolean\(shareSnackbar \|\| shareError\)\}/.test(socialSource),
+		"the share outcome rides an in-view Snackbar");
+	assert.ok(/setShareSnackbar\('Link copied\.'\)/.test(socialSource),
+		"a successful copy confirms 'Link copied.' at the touchpoint");
 });

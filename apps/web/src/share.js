@@ -1,8 +1,10 @@
 /**
- * Share a post (PORCH-078). From the post detail surface (PORCH-041), the
- * share entry opens the browser's native share dialog (navigator.share on
- * iOS Safari and the installed app) pre-filled with the post's canonical
- * deep link, and copies the link where navigator.share is unsupported.
+ * Share a post (PORCH-078). From the post surfaces' ··· overflow menus —
+ * both the timeline card and the post detail card (Brian, Oct 15, 2026) —
+ * the share entry opens the browser's native share dialog (navigator.share
+ * on iOS Safari and the installed app) pre-filled with the post's canonical
+ * deep link, and copies the link where navigator.share is unsupported
+ * (with an immediate in-view confirmation the surface renders).
  *
  * The share payload is deliberately skeletal: the share text derives ONLY
  * from the author display name, the post's photo count, and Brian's fixed

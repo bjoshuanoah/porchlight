@@ -2,7 +2,7 @@ import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState, us
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
-  ListItemText, Menu, MenuItem, Paper, Popover, Select, Stack, TextField, Tooltip, Typography,
+  ListItemText, Menu, MenuItem, Paper, Popover, Select, Snackbar, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import {
   AddReactionOutlined, ArrowDownwardOutlined, ArrowUpwardOutlined, ChevronLeft, ChevronRight,
@@ -701,6 +701,10 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   // copy-fallback outcome inline — the native dialog reports itself.
   const [shareNote, setShareNote] = useState('');
   const [shareError, setShareError] = useState('');
+  // The fallback outcome's immediate, in-view report (PORCH-078): the menu
+  // item's copy confirmation rides a Snackbar — visible wherever the member
+  // is on the page, never only at the card's foot below the fold.
+  const [shareSnackbar, setShareSnackbar] = useState('');
   const sliceIdentity = post
     ? `${identityOf(post)}:${Array.isArray(post.replySlice) ? post.replySlice.map((reply) => reply._id).join('|') : ''}:${Number.isFinite(post.replyTotal) ? post.replyTotal : ''}`
     : '';
@@ -718,6 +722,32 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
   }, [sliceIdentity]);
   if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
   const openPost = () => navigate?.(`/posts/${encodeURIComponent(identityOf(post))}`);
+  // Share (PORCH-078): one handler serves both ··· menus — the timeline card
+  // and the detail card. The native dialog (navigator.share) carries the
+  // post's canonical deep link (the existing post detail route; the share
+  // text carries author and photo count only); the copy fallback reports its
+  // outcome with an immediate, in-view Snackbar — the menu was the member's
+  // last touchpoint, so the confirmation must be visible where they are
+  // looking, not only at the card's foot below the fold.
+  const runShare = () => {
+    setMenuAnchor(null);
+    setShareNote('');
+    setShareError('');
+    sharePost({
+      post,
+      ownDid: data.identity ? String(data.identity.id) : null,
+      data,
+      base: typeof window !== 'undefined' ? window.location.origin : '',
+    }).then((result) => {
+      if (result.mode === 'copy') {
+        if (result.copied) { setShareNote('Link copied.'); setShareSnackbar('Link copied.'); }
+        else {
+          setShareError('Your browser does not offer sharing or copying here yet. Open the post and copy its link from the address bar.');
+          setShareSnackbar('Your browser does not offer sharing or copying here yet.');
+        }
+      }
+    }).catch(() => { setShareError('The share did not go through. Try again.'); setShareSnackbar('The share did not go through. Try again.'); });
+  };
   // Card-level optimistic reply (PORCH-046 ac-2): the row renders in the
   // slice immediately; a confirmed write joins the acknowledged list (it
   // keeps rendering until a read counts it); a failure rolls back cleanly.
@@ -791,25 +821,7 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
             onClick={(event) => setMenuAnchor(event.currentTarget)}><MoreHorizOutlined /></IconButton>
           <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
             {!detail && <MenuItem onClick={() => { setMenuAnchor(null); openPost(); }}>Open conversation</MenuItem>}
-            {/* Share (PORCH-078): the deep link rides the existing post
-                detail route; the share text carries author and photo count
-                only — never the post's body, comments, or media bytes. */}
-            {detail && <MenuItem onClick={() => {
-              setMenuAnchor(null);
-              setShareNote('');
-              setShareError('');
-              sharePost({
-                post,
-                ownDid: data.identity ? String(data.identity.id) : null,
-                data,
-                base: typeof window !== 'undefined' ? window.location.origin : '',
-              }).then((result) => {
-                if (result.mode === 'copy') {
-                  if (result.copied) setShareNote('Link copied.');
-                  else setShareError('Your browser does not offer sharing or copying here yet. Open the post and copy its link from the address bar.');
-                }
-              }).catch(() => setShareError('The share did not go through. Try again.'));
-            }}>Share</MenuItem>}
+            <MenuItem onClick={runShare}>Share</MenuItem>
             <MenuItem disabled={operation.busy} onClick={() => {
               setMenuAnchor(null);
               operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); });
@@ -854,6 +866,11 @@ function PostCard({ post, data, actions, navigate, detail = false, onHide, react
         onReply={submitOptimistic} navigate={navigate} />}
       {shareNote && <Typography color="text.secondary" role="status" sx={{ mt: 1 }}>{shareNote}</Typography>}
       {shareError && <Alert severity="warning" sx={{ mt: 1 }}>{shareError}</Alert>}
+      {/* The fallback outcome's in-view confirmation (PORCH-078): the same
+          strings the card foot reports, surfaced where the member is. */}
+      <Snackbar open={Boolean(shareSnackbar || shareError)} autoHideDuration={8000}
+        onClose={() => { setShareSnackbar(''); }}
+        message={shareSnackbar || (shareError ? 'The share did not go through. Try again.' : '')} />
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
     </CardContent>
   </Card>;
