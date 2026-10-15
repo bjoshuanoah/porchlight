@@ -118,6 +118,21 @@ test("PORCH-060 ac-2: the read-back normalizes to the hub's own shape, never gue
   assert.deepEqual(normalizeSettings({ events: "junk" }), { enabled: false, events: {}, mutes: [] });
 });
 
+// PORCH-087 ac-1: the mute row's toggle convention — switch ON = receiving,
+// OFF = quiet. The checked state is the persisted mute flag's INVERSE, so the
+// rendered switch position never sits opposite its supporting line's meaning
+// (Brian, Oct 15: ON showed the quiet copy and OFF the as-usual copy).
+test("PORCH-087 ac-1: the mute row switch renders ON for receiving and OFF for quiet", async () => {
+  const card = await src("src/notifications.jsx");
+  // The switch state carries the receiving meaning; the mute write is its inverse.
+  assert.match(card, /checked=\{!settings\.mutes\?\.includes\(row\.networkId\)\}/);
+  assert.match(card, /withMute\(settings, networkId, !receiving\)/);
+  // The supporting line still reads from the mute flag: muted → quiet, receiving → as usual.
+  assert.match(card, /"Quiet: this network's notifications are paused\." : "This network's moments reach you as usual\."/);
+  // The toggle position and the line can never disagree: both key off the same flag.
+  assert.match(card, /The toggled value is the receiving state \(PORCH-087\)/);
+});
+
 test("PORCH-060 ac-2: persistence rides the hub's member routes with optimistic updates and rollback on failure", async () => {
   const main = await src("src/main.jsx");
   // GET + PUT through the open identity's connection (per-identity writes).
