@@ -175,6 +175,22 @@ test("PORCH-051 ac-4: the iOS guidance card instructs Share then Add to Home Scr
   assert.match(install, /if \(!kind\) return null;/);
 });
 
+// PORCH-080 ac-1/ac-2: the instruction cards illustrate the outcome — the
+// app icon that will sit on the home screen — with the same PORCH-032 asset
+// in both variants, never the share glyph. The share glyph survives only
+// inline in the iOS step copy (the mechanism, "tap the Share icon").
+test("PORCH-080 ac-1/ac-2: both install variants illustrate the outcome with the same app icon asset", async () => {
+  const install = await src("src/install.jsx");
+  const outcomeIcons = install.match(/<Box component="img" src="\/apple-touch-icon\.png" alt="The Porchlight app icon"/g) ?? [];
+  assert.equal(outcomeIcons.length, 2, "android and iOS variants illustrate the outcome icon");
+  // The share glyph renders only inline inside the Share-step copy, never
+  // as an outcome illustration: exactly one JSX usage remains (the import
+  // accounts for the other).
+  const shareUsages = install.match(/<IosShareOutlined /g) ?? [];
+  assert.equal(shareUsages.length, 1);
+  assert.match(install, /role="img" aria-label="Share"/);
+});
+
 // ac-5: the shell consumes the safe-area insets in the header and the
 // bottom tab bar so the geometry survives the home indicator.
 test("PORCH-051 ac-5: the shell consumes safe-area insets and the cover viewport in the document", async () => {

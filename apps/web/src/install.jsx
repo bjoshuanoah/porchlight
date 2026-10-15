@@ -7,7 +7,12 @@ import React from "react";
 import { Box, Button, IconButton, Paper, Stack, Typography } from "@mui/material";
 import CloseOutlined from "@mui/icons-material/CloseOutlined";
 import IosShareOutlined from "@mui/icons-material/IosShareOutlined";
-import { LampMark } from "./brand.jsx";
+
+// PORCH-080: both install variants illustrate the outcome — the app icon
+// that will land on the home screen — with the same PORCH-032 asset, never
+// the share glyph. The share glyph survives only inline in the iOS step
+// copy, where it names the mechanism ("tap the Share icon").
+const outcomeIconSx = { width: 38, height: 38, flexShrink: 0 };
 
 const cardSx = {
   position: "fixed",
@@ -33,7 +38,7 @@ export function InstallCta({ kind, onInstall, onDismiss }) {
     return (
       <Paper elevation={0} role="region" aria-label="Install Porchlight" sx={cardSx}>
         <Stack direction="row" alignItems="center" spacing={2}>
-          <LampMark size={38} />
+          <Box component="img" src="/apple-touch-icon.png" alt="The Porchlight app icon" sx={outcomeIconSx} />
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography sx={{ fontWeight: 650, color: "text.primary" }}>Add Porchlight to your home screen</Typography>
             <Typography variant="body2" sx={{ color: "text.secondary" }}>Open this place like an app — full screen, straight from the home screen.</Typography>
@@ -47,7 +52,7 @@ export function InstallCta({ kind, onInstall, onDismiss }) {
   return (
     <Paper elevation={0} role="region" aria-label="Install Porchlight" sx={cardSx}>
       <Stack direction="row" alignItems="center" spacing={1.5}>
-        <IosShareOutlined sx={{ fontSize: 32, color: "var(--porch-amber)" }} />
+        <Box component="img" src="/apple-touch-icon.png" alt="The Porchlight app icon" sx={outcomeIconSx} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography sx={{ fontWeight: 650, color: "text.primary" }}>Install Porchlight on this device</Typography>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
