@@ -100,6 +100,20 @@ shortcut:
   part of the owner console's data fan-out) or ran `porchlight update`.
 - **Already-latest is a version statement.** No install, no restart, no side
   effects; the console renders the same statement.
+- **Release notes on the surfaces (PORCH-077, Brian Oct 14, 2026).** Both
+  surfaces show the pending release's notes read verbatim from the release's
+  own published content: the GitHub release body for the target version on
+  the canonical repo (`bjoshuanoah/porchlight`, the signed-release anchor),
+  falling back to that version's CHANGELOG section in the published package
+  (the release bundle stages the repo `CHANGELOG.md` into the tarball), then
+  a plain named-unavailable line — never generated, never summarized, and
+  npm stays the version source of record. The chain lives once in the shared
+  service (`status()`); notes resolve only when a newer release is actually
+  shown (an already-latest read fetches nothing beyond the registry version)
+  inside the same owner-initiated window, are fetched hub-side only and
+  served from the hub origin, size-capped (~10 KB, oversized bodies truncated
+  under the cap), and never gate or alter the apply path — notes unavailable
+  still applies cleanly.
 - **Failed apply keeps the prior release serving.** A registry failure or an
   install failure exits before the restart is ever scheduled; the hub never
   leaves its request loop, and every failure names its state in plain

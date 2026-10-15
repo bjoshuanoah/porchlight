@@ -6,7 +6,9 @@
  * Card model for the update surface. The console shows the current release,
  * the newer release when one exists, and never fetches or applies anything
  * on its own — rendering follows exactly what the owner-initiated check
- * reported (release: { current, latest, updateAvailable, note? }).
+ * said (release: { current, latest, updateAvailable, note?, notes? }): the
+ * pending release's notes (PORCH-077) render verbatim on the newer-release
+ * card, fetched hub-side only inside the same owner-initiated read.
  */
 export function updateCardModel(release) {
   if (!release || release.current == null && release.latest == null) {
@@ -33,6 +35,9 @@ export function updateCardModel(release) {
     state: "newer",
     lines: [`Current release: v${current}`, `Newer release available: v${release.latest}.`],
     applyTo: release.latest,
+    // PORCH-077: the pending release's notes ride the same owner-initiated
+    // check — verbatim published content or the named-unavailable line.
+    notes: release.notes ?? null,
   };
 }
 

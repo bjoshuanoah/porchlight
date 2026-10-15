@@ -5,7 +5,9 @@
 // back healthy after the supervised restart. Nothing runs on a timer and the
 // hub is never touched when the owner does not run this command. Already-
 // latest is a version statement only; a failed apply changes nothing and the
-// prior release keeps serving.
+// prior release keeps serving. When a newer release is pending, the command
+// prints its release notes (PORCH-077 — the same shared source chain the
+// console's Updates card reads) before any apply; notes never gate the apply.
 import { join } from "node:path";
 import { readJson } from "./state.mjs";
 import { loadHomeConfig, hubJson, hubUrl } from "./httpx.mjs";
@@ -72,6 +74,24 @@ export async function run(args = {}, impl = {}) {
   if (!release.updateAvailable) {
     write(`porchlight v${release.current} is the latest release — nothing to do.\n`);
     return;
+  }
+
+  // Release notes (PORCH-077): the same shared source chain the console's
+  // Updates card reads, printed before any apply. Notes never gate or alter
+  // the apply path — an unavailable chain still applies cleanly.
+  const notes = release.notes;
+  if (notes?.text) {
+    if (notes.source === "unavailable") {
+      write(`${notes.text}\n`);
+    } else {
+      const source =
+        notes.source === "github-release"
+          ? "GitHub release"
+          : "the published package's changelog";
+      write(`what v${release.latest} changes (verbatim from the ${source}):\n`);
+      write(`${notes.text}\n`);
+    }
+    write("\n");
   }
 
   write(`current release: v${release.current}\n`);

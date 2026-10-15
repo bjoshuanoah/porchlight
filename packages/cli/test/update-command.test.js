@@ -78,6 +78,62 @@ test("ac-2: a newer release is applied through the shared path and completion is
   assert.equal(process.exitCode ?? 0, 0);
 });
 
+test("porch-077 ac-2: the CLI prints the pending release's notes before any apply — verbatim from the shared chain", async (t) => {
+  t.after(() => { process.exitCode = undefined; });
+  const dir = await tempHome(t);
+  const notesText = "Carries PORCH-077: release notes on the update surfaces (Brian, Oct 14, 2026).";
+  const h = harness({
+    statusBody: {
+      release: {
+        current: "1.2.3",
+        latest: "2.0.0",
+        updateAvailable: true,
+        notes: { source: "github-release", text: notesText },
+      },
+    },
+    applyBody: { status: "applied", release: { from: "1.2.3", to: "2.0.0" } },
+  });
+  await import("../src/update.mjs").then(({ run }) => run({ home: dir }, h.impl));
+  // The notes print BEFORE the apply call and verbatim — never a summary.
+  assert.deepEqual(h.calls.lines, [
+    `what v2.0.0 changes (verbatim from the GitHub release):\n`,
+    `${notesText}\n`,
+    "\n",
+    "current release: v1.2.3\n",
+    "latest release:  v2.0.0 (npm registry)\n",
+    "applying the update through the hub's update service...\n",
+    "update installed — the hub is restarting (v1.2.3 → v2.0.0)...\n",
+    "porchlight updated: v1.2.3 → v2.0.0 — the hub is serving again at http://127.0.0.1:8710\n",
+  ]);
+  assert.equal(h.calls.apply, 1);
+  assert.equal(process.exitCode ?? 0, 0);
+});
+
+test("porch-077 ac-3: an unavailable notes chain prints the named-unavailable line and still applies cleanly", async (t) => {
+  t.after(() => { process.exitCode = undefined; });
+  const dir = await tempHome(t);
+  const unavailableLine =
+    "Release notes for v2.0.0 are unavailable — the GitHub release body and the published package's CHANGELOG section both could not be read. Notes are always the release's own published content and are never generated.";
+  const h = harness({
+    statusBody: {
+      release: {
+        current: "1.2.3",
+        latest: "2.0.0",
+        updateAvailable: true,
+        notes: { source: "unavailable", text: unavailableLine },
+      },
+    },
+    applyBody: { status: "applied", release: { from: "1.2.3", to: "2.0.0" } },
+  });
+  await import("../src/update.mjs").then(({ run }) => run({ home: dir }, h.impl));
+  const joined = h.calls.lines.join("");
+  assert.match(joined, new RegExp(unavailableLine.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  // Notes never gate the apply: unavailable notes, applied anyway.
+  assert.equal(h.calls.apply, 1);
+  assert.match(joined, /porchlight updated: v1\.2\.3 → v2\.0\.0/);
+  assert.equal(process.exitCode ?? 0, 0);
+});
+
 test("ac-2: the CLI reports the running version and an unreachable registry in plain language", async (t) => {
   t.after(() => { process.exitCode = undefined; });
   const dir = await tempHome(t);

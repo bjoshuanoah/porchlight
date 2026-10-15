@@ -342,12 +342,15 @@ function treeSize(dir) {
   return total;
 }
 
-// ---- README / LICENSE staging ----------------------------------------------
+// ---- README / LICENSE / CHANGELOG staging -----------------------------------
 // The registry page renders the tarball's README (PORCH-071 ac-3): stage the
 // repo README.md and LICENSE under the package directory so npm's own
-// packing carries them. Pre-existing copies are restored after the pack —
-// the repo copies are the record, the staged copies ride the tarball only.
-for (const file of ["README.md", "LICENSE"]) {
+// packing carries them. PORCH-077 adds CHANGELOG.md: the update surfaces'
+// notes source chain falls back to that version's CHANGELOG section in the
+// published package, so every cut's change log rides the tarball its cut
+// produces. Pre-existing copies are restored after the pack — the repo
+// copies are the record, the staged copies ride the tarball only.
+for (const file of ["README.md", "LICENSE", "CHANGELOG.md"]) {
   const repoFile = join(repoRoot, file);
   const packageFile = join(cli, file);
   if (existsSync(packageFile)) {
@@ -446,12 +449,12 @@ if (symlinks.length > 0) {
 }
 
 const packageFiles = new Set(tarNames.map((name) => name.replace(/^package\//, "")));
-const expectPresent = ["README.md", "LICENSE", "bin/porchlight.mjs", "package.json", "src/"];
+const expectPresent = ["README.md", "LICENSE", "CHANGELOG.md", "bin/porchlight.mjs", "package.json", "src/"];
 for (const expected of expectPresent) {
   const hit = expected.endsWith("/") ? [...packageFiles].some((name) => name.startsWith(expected)) : packageFiles.has(expected);
   if (!hit) tarballFailure(`packed tarball misses ${expected} — the registry manifest would not carry it`);
 }
-process.stdout.write("tarball surface gate: README.md, LICENSE, bin/, package.json, src/ all present\n");
+process.stdout.write("tarball surface gate: README.md, LICENSE, CHANGELOG.md, bin/, package.json, src/ all present\n");
 
 const packedTops = new Set(
   [...packageFiles]
