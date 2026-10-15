@@ -213,6 +213,23 @@ export class PostService {
     return { post: (await this.memberViews([post], session.networkId))[0], did: session.did };
   }
 
+  /**
+   * The post's original set of record (PORCH-083): the mediaRefs in stored
+   * payload order, resolved for a viewer over the same member-read gates
+   * the post read carries — origin containment and private-group visibility
+   * (a non-member's read of a post it cannot see reads the same way):
+   * simply does not exist here. The bulk zip consumes the ids directly,
+   * without the view hydration (no member views, no mediaMeta on this read).
+   */
+  async setMediaIds({ accessToken, postId } = {}) {
+    const session = await this.#requireSession(accessToken);
+    const post = await this.posts.findOne({ _id: postId });
+    if (!post || post.originNetworkId !== session.networkId || !(await this.#visibleTo(post, session.did))) {
+      throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
+    }
+    return { postId, networkId: session.networkId, did: session.did, deviceId: session.deviceId, mediaIds: [...(post.mediaRefs ?? [])] };
+  }
+
   /** List the origin network's posts, newest first (base timeline read), with
    *  group posts the viewer does not hold membership in removed (PORCH-068
    *  ac-2, refined: delivery is membership-gated for both visibilities). */

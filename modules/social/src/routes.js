@@ -16,11 +16,12 @@ import express, { Router } from "express";
    *   media: import("./controllers/media.controller.js").MediaController,
    *   albums: import("./controllers/album.controller.js").AlbumController,
    *   og: import("./controllers/og.controller.js").OgController,
+   *   originals: import("./controllers/bulk-original.controller.js").BulkOriginalController,
    * }} controllers
  */
 export function createSocialRouter(controllers) {
   const router = Router();
-  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums, groups, push, og } = controllers;
+  const { bootstrap, content, feed, membership, console: ownerConsole, media, albums, groups, push, og, originals } = controllers;
 
   // Bootstrap-era network + invite surface (PORCH-003 contract; unchanged).
   router.get("/network", bootstrap.get);
@@ -55,6 +56,9 @@ export function createSocialRouter(controllers) {
   router.delete("/posts/:postId/reactions", content.unreact);
   router.post("/posts/:postId/votes", content.vote);
   router.delete("/posts/:postId", content.deletePost);
+  // Bulk original download (PORCH-083): the post's photo set as one
+  // streaming zip on the audited original path.
+  router.get("/posts/:postId/media/originals.zip", originals.post);
   router.delete("/me/content", content.sweepMemberContent);
   router.get("/notifications", content.inbox);
   // Real-time catch-up (PORCH-047): the returning device's REST fallback —
@@ -110,6 +114,9 @@ export function createSocialRouter(controllers) {
   router.get("/albums/:name/media", albums.mediaList);
   router.get("/albums/:name/media/:mediaId/renditions/:kind", albums.serveRendition);
   router.get("/albums/:name/media/:mediaId/original", albums.serveOriginal);
+  // Bulk original download (PORCH-083): the album's media set as one
+  // streaming zip, album containment and visibility riding the album surface.
+  router.get("/albums/:name/media/originals.zip", originals.album);
 
   // Device notifications (PORCH-059): Web Push transport — the subscription
   // route serves the VAPID public key, registration binds identity-scoped

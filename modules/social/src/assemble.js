@@ -16,6 +16,7 @@ import { MediaService } from "./services/media.service.js";
 import { LinkPreviewService } from "./services/link-preview.service.js";
 import { ExportService } from "./services/export.service.js";
 import { AlbumService } from "./services/album.service.js";
+import { BulkOriginalService } from "./services/bulk-original.service.js";
 import { MemberAdminService } from "./services/member-admin.service.js";
 import { createMemoryMediaStore, createRelocatableMediaStore, nodeDiskProbe } from "./services/media.store.js";
 import { MediaVolumeService } from "./services/media.volume.js";
@@ -27,6 +28,7 @@ import { ConsoleController } from "./controllers/console.controller.js";
 import { GroupsController } from "./controllers/groups.controller.js";
 import { MediaController } from "./controllers/media.controller.js";
 import { AlbumController } from "./controllers/album.controller.js";
+import { BulkOriginalController } from "./controllers/bulk-original.controller.js";
 import { PushController } from "./controllers/push.controller.js";
 import { OgController } from "./controllers/og.controller.js";
 import { OgService } from "./services/og.service.js";
@@ -351,6 +353,19 @@ export function assembleSocialModule(store, options = {}) {
     audit,
     groups,
   });
+  // Bulk original download (PORCH-083): the set-scoped convenience zip on
+  // the audited original path — album and multi-image post sets stream as
+  // one archive of original bytes (export's no-staging streaming pattern;
+  // distinct from the signed archive export, which stays untouched).
+  const bulkOriginalService = new BulkOriginalService({
+    membership: membershipService,
+    albums: albumService,
+    posts: postService,
+    assets: mediaAssets,
+    blobs,
+    volume: volumeService,
+    audit,
+  });
   // Member administration (PORCH-053): the owner-only permanent deletion —
   // the typed-confirmation gate plus the sovereignty purge (content sweep,
   // media store cascade) over the same membership revocation path.
@@ -398,6 +413,7 @@ export function assembleSocialModule(store, options = {}) {
     }),
     media: new MediaController({ media: mediaService, export: exportService }),
     albums: new AlbumController({ albums: albumService }),
+    originals: new BulkOriginalController({ originals: bulkOriginalService }),
     push: new PushController({ push: pushService }),
     og: new OgController(ogService, options.log ?? null),
     groups: new GroupsController({
@@ -430,6 +446,7 @@ export function assembleSocialModule(store, options = {}) {
     linkPreviewService,
     exportService,
     albumService,
+    bulkOriginalService,
     memberAdminService,
     ogService,
     controllers,
