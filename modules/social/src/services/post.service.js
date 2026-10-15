@@ -108,7 +108,7 @@ export class PostService {
    *   Link previews (PORCH-052) — compose-time attach validation, view
    *   hydration, and the deletion cascade for ingested og:image artifacts.
    */
-  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime, previews, push }) {
+  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime, previews, push, feed }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -122,6 +122,7 @@ export class PostService {
     this.push = push ?? null;
     this.previews = previews ?? null;
     this.realtime = realtime ?? null;
+    this.feed = feed ?? null;
     this.audit = audit ?? (async () => {});
     this.models = socialModels;
   }
@@ -158,6 +159,17 @@ export class PostService {
     // commit lands — post.created, content-only payload (postView), to the
     // origin room only. The attach-time preview metadata rides content
     // only (no engagement data exists on a preview record).
+    // PORCH-081 client parity: the envelope carries the SAME decorated view
+    // the timeline read carries — attribution (PORCH-034), the group chip,
+    // the latest-four conversation slice, mediaMeta geometry stamps
+    // (PORCH-044), and the attach-time preview — so the arriving post
+    // renders as-given and its card never needs a follow-up read (the
+    // per-card loader path never fires on arrival). No count-bearing field
+    // rides any of it (the privacy assert still holds); feed-less test
+    // wiring falls back to the plain member view.
+    const [eventView] = this.feed
+      ? await this.feed.eventViews([post], networkId)
+      : await this.memberViews([post], networkId);
     await this.realtime?.published({
       networkId,
       type: "post.created",
@@ -166,7 +178,7 @@ export class PostService {
       // layer can hold a private-group post's event out of a non-member's
       // room and catch-up (the envelope is content-only metadata).
       groupId: post.groupId ?? null,
-      content: { ...postView(post), preview: this.previewPayload(preview) },
+      content: { ...eventView, preview: this.previewPayload(preview) ?? eventView?.preview ?? null },
     });
     // PORCH-059: group posts fan out to the group's own members through the
     // push send pipeline (subset-of-network membership holds); the

@@ -191,6 +191,18 @@ export class FeedService {
   }
 
   /**
+   * One arrival's timeline-shaped view (PORCH-081): the EXACT decoration
+   * the base timeline read rides — attribution (PORCH-034), the group chip,
+   * the latest-four conversation slice, mediaMeta geometry stamps
+   * (PORCH-044), and the link preview. Used by post.created envelopes so
+   * the arriving post renders as-given and its card never needs a
+   * follow-up read (the feed read's per-card loader path never fires).
+   */
+  async eventViews(postRows, networkId) {
+    return this.#decorate((postRows ?? []).map((post) => postView(post)), networkId);
+  }
+
+  /**
    * Attribution (PORCH-034): every member post view carries the author's
    * family-facing name, resolved at READ time against the origin's active
    * membership — never a frozen copy on the post document. A DID that holds

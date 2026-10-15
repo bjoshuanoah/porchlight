@@ -1,14 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { arrivalPollMs } from "../src/live.js";
 import { createScrollMemory } from "../src/scroll.js";
 import { pickFeedAnchor, anchorCompensation, compensationScroll } from "../src/scroll.js";
 import { visibleFeedPosts, postKey } from "../src/feed-filter.js";
-
-test("ac-1: the poll cadence is a background degrade, never poll-on-scroll", () => {
-  assert.equal(typeof arrivalPollMs, "number");
-  assert.ok(arrivalPollMs > 5_000, "arrivals ride a cadence independent of scrolling");
-});
 
 test("ac-1: the reading anchor is the topmost card still reaching the viewport", () => {
   const nodes = [

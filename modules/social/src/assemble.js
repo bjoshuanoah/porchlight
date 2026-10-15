@@ -285,6 +285,18 @@ export function assembleSocialModule(store, options = {}) {
       maxImageBytes: options.previews?.maxImageBytes,
     },
   );
+  const rankingService = new RankingService({ config: options.rankingConfig ? normalizeRankingConfig(options.rankingConfig) : undefined });
+  const feedService = new FeedService({
+    posts,
+    derivedData,
+    groups,
+    membership: membershipService,
+    ranking: rankingService,
+    media: mediaService,
+    comments,
+    reactions,
+    previews: linkPreviewService,
+  });
   const postService = new PostService({
     posts,
     comments,
@@ -300,6 +312,10 @@ export function assembleSocialModule(store, options = {}) {
     realtime: realtimeService,
     previews: linkPreviewService,
     push: pushService,
+    // PORCH-081: the feed's timeline-shaped decoration for post.created
+    // envelopes (the arriving card renders exactly what a timeline read
+    // row renders — no follow-up read).
+    feed: feedService,
   });
   const interactionService = new InteractionService({
     posts,
@@ -313,18 +329,6 @@ export function assembleSocialModule(store, options = {}) {
     previews: linkPreviewService,
     push: pushService,
     groups,
-  });
-  const rankingService = new RankingService({ config: options.rankingConfig ? normalizeRankingConfig(options.rankingConfig) : undefined });
-  const feedService = new FeedService({
-    posts,
-    derivedData,
-    groups,
-    membership: membershipService,
-    ranking: rankingService,
-    media: mediaService,
-    comments,
-    reactions,
-    previews: linkPreviewService,
   });
   const exportService = new ExportService({
     posts,
