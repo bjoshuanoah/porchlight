@@ -222,3 +222,30 @@ test("a deployment without the update service wired reports 501, plainly", async
     close();
   }
 });
+test("porch-077 ac-1: the update check carries the pending release's notes verbatim for the card", async () => {
+  const notes = { source: "github-release", text: "Carries PORCH-077: release notes on the update surfaces." };
+  const fx = await surfaceFixture({
+    status: { current: "1.0.0", latest: "2.0.0", updateAvailable: true, notes },
+  });
+  const { base, close } = await serve(fx.mod);
+  try {
+    const response = await fetch(`${base}/console/update`, {
+      headers: { authorization: `Bearer ${fx.owner.accessToken}` },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.release.updateAvailable, true);
+    assert.deepEqual(body.release.notes, notes); // notes ride the same check response, hub-origin served
+    assert.equal(fx.update.calls.status, 1); // resolved for THIS owner view, not on a timer
+    // The apply action stays untouched by notes: same service, no notes input.
+    const apply = await fetch(`${base}/console/update`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${fx.owner.accessToken}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(apply.status, 200);
+    assert.equal(fx.update.calls.apply, 1);
+  } finally {
+    close();
+  }
+});

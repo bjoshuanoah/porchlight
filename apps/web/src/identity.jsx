@@ -1440,6 +1440,10 @@ export function OwnerConsole({ data, actions, navigate }) {
             {card.lines.map((line, index) => <Typography key={index}>{line}</Typography>)}
             {card.note && <Typography color="text.secondary" sx={{ mt: 1 }}>{card.note}</Typography>}
             {card.state === 'newer' && <Box sx={{ mt: 2 }}>
+              {card.notes && <Box data-testid="release-notes" sx={{ mb: 2 }}>
+                {card.notes.source !== 'unavailable' && <Typography variant="subtitle2" gutterBottom>What v{card.applyTo} changes</Typography>}
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...(card.notes.source === 'unavailable' ? { color: 'text.secondary' } : {}) }}>{card.notes.text}</Typography>
+              </Box>}
               <Button variant="contained" disabled={updating || typeof actions?.applyUpdate !== 'function'} onClick={applyNewRelease}>Update now</Button>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>One owner action: the hub installs the release through npm and restarts itself, serving at the same address.</Typography>
             </Box>}

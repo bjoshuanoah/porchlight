@@ -11,6 +11,27 @@ test("the card reflects an available newer release — current and latest, one o
   assert.equal(card.state, "newer");
   assert.deepEqual(card.lines, ["Current release: v1.2.3", "Newer release available: v2.0.0."]);
   assert.equal(card.applyTo, "2.0.0");
+  assert.equal(card.notes, null); // no notes yet — the card renders exactly what the check reported
+});
+
+test("porch-077 ac-1: the card carries the pending release's notes verbatim", () => {
+  const notes = { source: "github-release", text: "Carries PORCH-077: release notes on the update surfaces." };
+  const card = updateCardModel({ current: "1.2.3", latest: "2.0.0", updateAvailable: true, notes });
+  assert.equal(card.state, "newer");
+  assert.equal(card.notes, notes);
+  assert.equal(card.notes.text, "Carries PORCH-077: release notes on the update surfaces.");
+});
+
+test("porch-077 ac-3: the card renders the named-unavailable notes line — never a generated summary", () => {
+  const notes = {
+    source: "unavailable",
+    text: "Release notes for v2.0.0 are unavailable — the GitHub release body and the published package's CHANGELOG section both could not be read. Notes are always the release's own published content and are never generated.",
+  };
+  const card = updateCardModel({ current: "1.2.3", latest: "2.0.0", updateAvailable: true, notes });
+  assert.equal(card.state, "newer");
+  assert.equal(card.notes.source, "unavailable");
+  assert.match(card.notes.text, /are unavailable/);
+  assert.match(card.notes.text, /never generated/);
 });
 
 test("the card states already-latest as a version statement only", () => {
