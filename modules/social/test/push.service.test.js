@@ -112,7 +112,7 @@ test("ac-1: registration persists an identity-scoped, per-device subscription re
     endpoint: "https://push.example.com/endpoint-1",
     keys: { p256dh: "B_key1", auth: "B_auth1" },
   });
-  assert.ok(result.subscription._id.startsWith("psb_"));
+  assert.equal(result.subscription._id, "https://push.example.com/endpoint-1", "the _id IS the endpoint — the replace-never-duplicate arbiter under concurrent registrations");
   const [stored] = await subs.find({});
   assert.equal(stored.identityId, BOB, "the subscription binds to the identity the session speaks for");
   assert.equal(stored.endpoint, "https://push.example.com/endpoint-1");
@@ -149,6 +149,25 @@ test("ac-1: re-registering the SAME endpoint on one identity stays one row with 
   assert.equal(stored.length, 1);
   assert.equal(stored[0].createdAt, first.subscription.createdAt, "the identity's original registration time carries");
   assert.equal(stored[0].keys.p256dh, "B_k2", "fresh keys replace");
+});
+
+test("ac-1: duplicate endpoint rows (the Oct 15 live-hub race defect) collapse to one row on the next registration", async () => {
+  const { mod, tokens, subs } = await pushFixture();
+  await mod.pushService.updateSettings({ accessToken: tokens.bob, enabled: true });
+  // The live noah.hub shape: two psb_-era rows for ONE endpoint, 1ms apart,
+  // because two concurrent same-endpoint registrations both ran the old
+  // find-then-insert (the enable flow's registration racing the mount-time
+  // quiet re-subscribe).
+  const legacyCreated = "2026-10-15T18:26:32.683Z";
+  for (const _id of ["psb_a", "psb_b"]) {
+    await subs.insertOne({ _id, identityId: BOB, endpoint: "https://push.example.com/e", keys: { p256dh: "B_k", auth: "B_a" }, deviceId: "dev_bob", createdAt: legacyCreated, lastSeen: legacyCreated });
+  }
+  await mod.pushService.registerSubscription({ accessToken: tokens.bob, endpoint: "https://push.example.com/e", keys: { p256dh: "B_k2", auth: "B_a2" } });
+  const stored = await subs.find({});
+  assert.equal(stored.length, 1, "legacy duplicate endpoint rows leave with the replace");
+  assert.equal(stored[0]._id, "https://push.example.com/e");
+  assert.equal(stored[0].createdAt, legacyCreated, "the identity's original registration time carries across the migration");
+  assert.equal(stored[0].keys.p256dh, "B_k2");
 });
 
 test("ac-1: a shared tablet endpoint re-bound to another member replaces the binding", async () => {
