@@ -732,6 +732,77 @@ test("ac-4: delivery outcomes land only in the local structured log — a sender
   assert.ok(logLines.every((line) => line.includes('"kind":"push"')), "every delivery outcome rides the push log kind");
 });
 
+test("ac-4: every silent skip class lands a local structured line — the trail's no-send discriminator", async () => {
+  const sender = senderOf(201);
+  const logLines = [];
+  const { mod, devs, tokens } = await pushFixture({ sender, log: (line) => logLines.push(line) });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const react = (emoji) =>
+    mod.interactionService.react({
+      accessToken: tokens.bob,
+      payload: { postId: post._id, emoji },
+      signature: devs.bob.signPayload({ postId: post._id, emoji }),
+    });
+  const skippedAs = (reason) => {
+    const line = logLines.find(
+      (l) => l.includes("push.send.skipped") && l.includes(`"reason":"${reason}"`) && l.includes(`"identityId":"${ALICE}"`),
+    );
+    assert.ok(line, `the ${reason} skip lands in the local structured log`);
+    return line;
+  };
+  // No settings row (the fresh default) — the master switch skips first.
+  await react("⭐");
+  assert.equal(sender.sends.length, 0);
+  await skippedAs("switch_off");
+  // Enabled, but the identity holds zero subscription rows (the Oct 15
+  // compound state: cards read on, nothing was ever registered).
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true });
+  await react("🌟");
+  assert.equal(sender.sends.length, 0);
+  await skippedAs("no_subscription");
+  // Subscribe, then toggle the event type off.
+  await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint: "https://push.example.com/alice", keys: { p256dh: "B_alice", auth: "A_alice" } });
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { reaction: false } });
+  await react("✨");
+  assert.equal(sender.sends.length, 0);
+  await skippedAs("event_disabled");
+  // Toggle back on, mute the origin network.
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { reaction: true }, mutes: [FAMILY] });
+  await react("💗");
+  assert.equal(sender.sends.length, 0);
+  await skippedAs("network_muted");
+  // Unmute: the same enabled pair delivers.
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { reaction: true }, mutes: [] });
+  await react("💫");
+  assert.equal(sender.sends.length, 1);
+  assert.ok(logLines.some((line) => line.includes("push.send.ok")));
+});
+
+test("ac-4: a hub boot without an injected log sink still lands push lines on the hub log (deployed-hub shape)", async () => {
+  const sender = senderOf(201);
+  // The deployed entrypoint wires no log sink: the outcome must survive as
+  // the auth-failure capture's console fallback (stdout → logs/hub.log),
+  // never dropped.
+  const { mod, devs, tokens } = await pushFixture({ sender });
+  await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const written = [];
+  const original = console.log;
+  console.log = (line) => written.push(line);
+  try {
+    await mod.interactionService.react({
+      accessToken: tokens.bob,
+      payload: { postId: post._id, emoji: "❤️" },
+      signature: devs.bob.signPayload({ postId: post._id, emoji: "❤️" }),
+    });
+  } finally {
+    console.log = original;
+  }
+  assert.equal(sender.sends.length, 1);
+  assert.ok(written.some((line) => line.includes("push.send.ok")), "the delivery outcome lands with no sink wired");
+  assert.ok(written.some((line) => line.includes('"kind":"push"')), "the fallback line carries the push kind");
+});
+
 /* ---- ac-5: iOS gate honored, no workaround; the route serves the key ------ */
 
 test("ac-5: the subscription route serves the VAPID public key; registration needs no capability gate", async () => {

@@ -355,6 +355,10 @@ export class PushService {
         const settings = (await this.settings.findOne({ identityId: did })) ?? PushService.defaultSettings(did);
         if (settings.enabled !== true) {
           skipped += 1;
+          // Log-only observable skip: the enabled=false row (no row, fresh
+          // row, or off row) is invisible state otherwise — the card can
+          // read on elsewhere without this line, delivery is diagnosable.
+          this.#log({ event: "push.send.skipped", reason: "switch_off", networkId, type, identityId: did });
           continue;
         }
         // Live membership at send time — never a stored permission. A
@@ -368,16 +372,24 @@ export class PushService {
         }
         if (settings.mutes?.includes(networkId)) {
           skipped += 1;
+          this.#log({ event: "push.send.skipped", reason: "network_muted", networkId, type, identityId: did });
           continue;
         }
         if (settings.events?.[type] !== true) {
           skipped += 1;
+          this.#log({ event: "push.send.skipped", reason: "event_disabled", networkId, type, identityId: did });
           continue;
         }
         const plaintext = pushPlaintext({ type, postId, commentId, authorName, networkName, excerpt });
         const subs = await this.subscriptions.find({ identityId: did });
         if (!subs.length) {
           skipped += 1;
+          // The compound silent state behind the Oct 15 live finding: an
+          // enabled=true row with zero subscription rows (registration
+          // never landed, or an earlier off-write/404/410 cleared the
+          // rows). Without this line the hub logs nothing on any trigger —
+          // the exact "cards on, no push lines" symptom. Log-only.
+          this.#log({ event: "push.send.skipped", reason: "no_subscription", networkId, type, identityId: did });
           continue;
         }
         for (const subscription of subs) {
@@ -498,8 +510,14 @@ export class PushService {
 
   #log(entry) {
     // Local structured logs (zero external telemetry): the hub's shared
-    // sink — console.log by default, piped to logs/hub.log by the supervisor.
-    this.log?.(JSON.stringify({ at: new Date().toISOString(), kind: "push", ...entry }));
+    // sink — console.log by default, piped to logs/hub.log by the
+    // supervisor. A boot that never injected a sink (the deployed hub)
+    // follows the auth-failure capture's convention: the line lands on
+    // stdout, never dropped. The push log is the delivery discriminator —
+    // it must exist on every hub, wired or not.
+    const line = JSON.stringify({ at: new Date().toISOString(), kind: "push", ...entry });
+    if (this.log) this.log(line);
+    else console.log(line);
   }
 }
 
