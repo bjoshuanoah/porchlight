@@ -7,7 +7,16 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "**/coverage/**"],
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/coverage/**",
+      // Ephemeral test workspace: apps/web's brand-lockup test builds and
+      // removes it mid-run; turbo runs lint and test concurrently, and an
+      // eslint traversal inside its brief lifetime fails with a scandir
+      // ENOENT race (CI flake observed on clean runners).
+      "apps/web/test/.tmp-lockup/**",
+    ],
   },
   js.configs.recommended,
   tseslint.configs.recommended,
