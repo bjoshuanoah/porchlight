@@ -49,6 +49,13 @@ declare module "@porchlight/identity" {
     options?: { hubUrl?: () => string | null; ledger?: { record: (step: string, detail?: { detail?: string; inviteId?: string }) => Promise<void>; hubUrl?: () => string | null }; adoptionEnabled?: boolean; /** PORCH-019: auth-failure capture sink. */ log?: ((line: string) => void) | null; /** PORCH-059: the device-notifications observer (social push wiring). */ onDeviceLinkMinted?: (event: { did: string; grantId: string }) => unknown; /** PORCH-065: the consumed-grant observer (address re-point trigger; awaits the returned promise). */ onDeviceLinkConsumed?: (event: { grantId: string; did: string; purpose: string | null; serveOrigin: string | null }) => unknown; /** PORCH-070: the member avatar plane (byte store + serving verifier; null blobs refuses plainly). */ avatar?: { blobs: { put: (key: string, bytes: Buffer) => Promise<unknown>; get: (key: string) => Promise<Buffer | null>; has: (key: string) => Promise<boolean>; delete: (key: string) => Promise<boolean> } | null; verifyMemberToken?: (token: string | null) => Promise<{ did: string } | null> } },
   ): IdentityModule;
   export function createWellKnownRouter(wellKnownController: unknown): import("express").Router;
+  /** PORCH-070/088: the member-avatar ingest treatment of record (the
+   *  identity plane's public entry) — wired into the social module's
+   *  group-avatar write path. */
+  export function treatAvatar(
+    bytes: Buffer,
+    contentType: string,
+  ): Promise<Array<{ kind: string; width: number; height: number; contentType: string; bytes: Buffer }>>;
   export class TrustService {
     /** Receiving-network verification: pinned issuer, fixed EdDSA, fail-closed kid set. */
     verifyMemberToken(
@@ -131,6 +138,14 @@ declare module "@porchlight/social" {
       mintOwnerDeviceLink?: (did: string) => Promise<{ grantId: string; token: string; expiresAt: string }>;
       /** PORCH-070: the member-purge cascade step — identity-side avatar retirement (late-bind). */
       purgeAvatar?: (did: string) => Promise<{ removed: number }>;
+      /** PORCH-088: the group-avatar write path — the identity plane's
+       *  member-avatar ingest treatment, wired from the public entry. */
+      groupAvatar?: {
+        treatImage?: (
+          bytes: Buffer,
+          contentType: string,
+        ) => Promise<Array<{ kind: string; width: number; height: number; contentType: string; bytes: Buffer }>>;
+      };
       /** PORCH-019: auth-failure capture sink. */
       log?: ((line: string) => void) | null;
       media?: {

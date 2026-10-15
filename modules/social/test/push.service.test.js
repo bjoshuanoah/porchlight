@@ -884,10 +884,12 @@ test("ac-5: the settings routes read and update the hub-enforced member controls
     const freshBody = await fresh.json();
     // PORCH-063 ac-1: the fresh identity's unset row resolves the opt-in
     // default — enabled=false, never the pre-PORCH-063 born-on default.
+    // PORCH-088: the row carries the groups member (empty; unset resolves ON).
     assert.deepEqual(freshBody.settings, {
       enabled: false,
       events: { reply: true, reaction: true, mention: true, groupPost: false, joined: true, deviceLink: true },
       mutes: [],
+      groups: {},
     });
     const updated = await fetch(`${base}/push/settings`, {
       method: "PUT",
@@ -970,7 +972,7 @@ test("ac-2: settings written through the PUT route gate real trigger writes — 
 
     // GET over the wire reads back the same persisted row the sends gated on.
     const read = await (await fetch(`${base}/push/settings`, { headers: { authorization: `Bearer ${tokens.alice}` } })).json();
-    assert.deepEqual(read.settings, { enabled: true, events: { ...DEFAULT_EVENT_SWITCHES, reaction: false }, mutes: [] });
+    assert.deepEqual(read.settings, { enabled: true, events: { ...DEFAULT_EVENT_SWITCHES, reaction: false }, mutes: [], groups: {} });
   } finally {
     close();
   }

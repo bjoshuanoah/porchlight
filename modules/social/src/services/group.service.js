@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { socialModels } from "../models.js";
 import { typedError } from "./post.service.js";
 
@@ -40,6 +41,20 @@ export function groupVisibleRows(rows, did) {
 }
 
 /**
+ * The group-settings OPEN predicate (PORCH-088): the member-plane
+ * visibility rule carries, plus the network owner — the superuser must be
+ * able to open the group's settings surface to exercise their authority
+ * on it (the shipped management-read contract already names the owner as
+ * the party that may manage every container: the console list skips the
+ * member gate). The plain-member visibility law (PORCH-068) is untouched;
+ * this predicate is read-path only and never widens delivery.
+ */
+export function canOpenGroupSettings(group, viewerDid, viewerMembership = null) {
+  if (canSeeGroup(group, viewerDid)) return true;
+  return Boolean(viewerMembership && viewerMembership.role === "owner");
+}
+
+/**
  * The FEED-DELIVERY predicate (Brian Oct 14, verbatim: "A public group
  * should also never show up on any non-member timeline unless they go to
  * the group and join the group"): a group post reaches a member's own
@@ -78,17 +93,92 @@ export function blockedMembersOf(group) {
   return Array.isArray(group?.blockedMemberIds) ? group.blockedMemberIds.filter((did) => typeof did === "string" && did) : [];
 }
 
+/**
+ * The ruled accent palette (PORCH-088, group color): the color is a
+ * palette-validated token — presentation data only, never a ranking or
+ * delivery input. Values are the warm hub-family accents tuned to the UI
+ * design tokens [Assumed: palette values, confirm at build]; `null`
+ * (unset / reset) is the neutral default every surface renders.
+ */
+export const GROUP_COLOR_PALETTE = Object.freeze([
+  "#D88A24", // amber — the hub primary
+  "#C4674B", // terracotta
+  "#C9A227", // gold
+  "#7E8F6E", // sage
+  "#4E8F86", // teal
+  "#5B7FA6", // blue
+  "#8E6E95", // plum
+  "#B0578D", // rose
+]);
+export const GROUP_NEUTRAL_COLOR = null;
+
+/** The color write's validator: a palette token, or null (the neutral reset). */
+export function validGroupColor(color) {
+  if (color === null) return true;
+  return typeof color === "string" && GROUP_COLOR_PALETTE.includes(color);
+}
+
+/**
+ * Management authority's predicate (PORCH-088, TS 17): the group's managing
+ * member — the creator (`createdBy`) — or the network owner, who rides as
+ * superuser on every mutation (the shipped ownership machinery). Module-level
+ * so the post-removal path (post.service) authorizes against the same rule
+ * without a second copy that could drift.
+ */
+export function isGroupManager(group, actorDid, actorMembership = null) {
+  if (!group) return false;
+  if (group.createdBy && group.createdBy === actorDid) return true;
+  return Boolean(actorMembership && actorMembership.role === "owner");
+}
+
+/** The group avatar's client-serving metas: per-rung square stamps, no byte internals. */
+export function groupAvatarMetas(avatar) {
+  if (!avatar || !Array.isArray(avatar.renditions) || avatar.renditions.length === 0) return null;
+  const metas = {};
+  for (const rung of avatar.renditions) {
+    metas[rung.kind] = {
+      kind: rung.kind,
+      width: rung.width,
+      height: rung.height,
+      contentType: rung.contentType,
+      sha256: rung.sha256,
+    };
+  }
+  return metas;
+}
+
 export class GroupService {
   /**
    * @param {object} deps
    * @param {import("@porchlight/shared").CollectionLike} groups
    * @param {import("@porchlight/shared").CollectionLike} memberships
    * @param {import("./membership.service.js").MembershipService} [membership]
+   * @param {{ put: (key: string, bytes: Buffer) => Promise<unknown>,
+   *           get: (key: string) => Promise<Buffer|null>,
+   *           has: (key: string) => Promise<boolean>,
+   *           delete: (key: string) => Promise<boolean> } | null} [blobs]
+   *   PORCH-088: the media pipeline's content-addressed blob store (the
+   *   hub assembly passes the same store the media and avatar planes use —
+   *   group avatar bytes share the media root). Null → the avatar write
+   *   and its serving refuse plainly (never a silent no-op).
+   * @param {(bytes: Buffer, contentType: string) => Promise<Array<{kind:string,width:number,height:number,contentType:string,bytes:Buffer}>>} [treatImage]
+   *   PORCH-088: the identity plane's member-avatar ingest treatment
+   *   (deterministic square crop then compression), wired by the hub
+   *   assembly — social imports no identity source, CI-enforced. Null →
+   *   the avatar write refuses plainly.
+   * @param {import("./push.service.js").PushService} [push=null]
+   *   PORCH-088: the per-group notification preference resolves at read
+   *   time through the push service (the persisted row read-at-send/read-
+   *   at-read contract — never cached). Absent → the detail read serves
+   *   the unset default (ON).
    */
-  constructor({ groups, memberships, membership = null }) {
+  constructor({ groups, memberships, membership = null, blobs = null, treatImage = null, push = null }) {
     this.groups = groups;
     this.memberships = memberships;
     this.membership = membership;
+    this.blobs = blobs;
+    this.treatImage = treatImage;
+    this.push = push;
     this.models = socialModels;
   }
 
@@ -191,6 +281,11 @@ export class GroupService {
       ...group,
       visibility: groupVisibility(group),
       isMember: Boolean(viewerDid) && Array.isArray(group.members) && group.members.includes(viewerDid),
+      // PORCH-088 presentation rides the index rows too (square rung
+      // stamps, palette accent): the chips and headers render from these
+      // without a second fetch. Presentation data only.
+      avatar: groupAvatarMetas(group.avatar),
+      color: group.color ?? GROUP_NEUTRAL_COLOR,
     }));
   }
 
@@ -200,22 +295,49 @@ export class GroupService {
    *  detail — its timeline and member list — renders only for group members
    *  (PORCH-068 ac-2); a non-member is refused exactly as if the group did
    *  not exist. `viewerDid` null (the owner console's management read) skips
-   *  the member gate. */
+   *  the member gate.
+   *  PORCH-088 menu contract (ac-7): the same one fetch also serves the
+   *  settings menu's data — presentation (the avatar rendition set's square
+   *  geometry stamps, the palette color), the VIEWER's resolved per-group
+   *  notification state, and the authority flags (managing member / network
+   *  owner) so the client renders only the entries the role can exercise.
+   *  Authority stays server-enforced on every write; the flags only shape
+   *  what the client shows. */
   async get({ networkId, groupId, viewerDid = null } = {}) {
     const group = await this.groups.findOne({ _id: groupId });
     if (!group || group.networkId !== String(networkId)) {
       throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
     }
-    if (viewerDid !== null && !canSeeGroup(group, viewerDid)) {
-      // Concealing refusal: a private group a member does not belong to is
-      // not a member-plane fact — unknown-shaped, like any foreign group.
-      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    const viewerMembership = viewerDid ? await this.#activeMembership(group.networkId, viewerDid) : null;
+    if (viewerDid !== null) {
+      // PORCH-088: the network owner may open a group they hold no
+      // membership in (their superuser authority needs its read); a plain
+      // member still faces the concealing refusal — a private group they
+      // do not belong to is unknown-shaped, like any foreign group.
+      if (!canOpenGroupSettings(group, viewerDid, viewerMembership)) {
+        throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+      }
     }
     const named = await this.#named(group);
+    // The menu contract's flags + presentation resolved here (service layer):
+    // a DID with no active membership resolves no owner flag.
+    const notifications = viewerDid && this.push
+      ? await this.push.resolveGroupPreference({ did: viewerDid, groupId: group._id })
+      : true;
     return {
       ...named,
       visibility: groupVisibility(group),
       isMember: Boolean(viewerDid) && Array.isArray(group.members) && group.members.includes(viewerDid),
+      // PORCH-088 presentation: square rung stamps only — byte internals
+      // (blob keys) never serve. The color rides as stored; null renders
+      // neutral (presentation data only, never a ranking or delivery input).
+      avatar: groupAvatarMetas(group.avatar),
+      color: group.color ?? GROUP_NEUTRAL_COLOR,
+      notifications: { perGroup: notifications },
+      // The two distinct flags the menu renders: the group's managing
+      // member is its creator; the network owner is the superuser role.
+      isManagingMember: Boolean(viewerDid && group.createdBy === viewerDid),
+      isNetworkOwner: Boolean(viewerMembership && viewerMembership.role === "owner"),
     };
   }
 
@@ -353,6 +475,159 @@ export class GroupService {
     const blockedMemberIds = blockedMembersOf(group).filter((member) => member !== did);
     await this.groups.updateOne({ _id: group._id }, { $set: { blockedMemberIds } });
     return this.get({ networkId: group.networkId, groupId, viewerDid: actorDid });
+  }
+
+  #assertAvatarPlane() {
+    if (!this.blobs || !this.treatImage) {
+      throw typedError(
+        "E_GROUP_AVATAR_UNAVAILABLE",
+        "The hub's media storage isn't available, so group photos can't be stored right now.",
+      );
+    }
+  }
+
+  /** Retire a rung set's blobs; `keep` holds any concurrent set's keys. */
+  async #retireGroupRungs(renditions, keep = new Set()) {
+    if (!this.blobs || !Array.isArray(renditions)) return;
+    for (const rung of renditions) {
+      if (rung?.blobKey && !keep.has(rung.blobKey)) await this.blobs.delete(rung.blobKey);
+    }
+  }
+
+  /**
+   * Set the group's avatar (PORCH-088 ac-2, managing-member authority): the
+   * identity plane's member-avatar ingest treatment rides byte-for-byte —
+   * deterministic square crop THEN compression, square geometry stamps on
+   * every rung, the uploaded rectangular bytes are treatment input only
+   * (no rectangular original is ever retained). The prior committed set
+   * retires whole on replace (never accumulated; replaced renditions become
+   * unreachable content, never a cache-poison risk). Serving is the group's
+   * own rendition surface: hub origin only, content-addressed, long-lived
+   * cache. Refusals (unsupported type, too large, undecodable) are the
+   * treatment's plain-language states with zero mutation.
+   *
+   * @param {{ groupId: string, networkId: string, actorDid: string, actorDeviceId: string|null, bytes: Buffer, contentType: string, payload: object, signature: string }} args
+   */
+  async setAvatar({ groupId, networkId, actorDid, actorDeviceId = null, bytes, contentType, payload, signature } = {}) {
+    const group = await this.groups.findOne({ _id: groupId });
+    if (!group || group.networkId !== String(networkId)) {
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    await this.#assertManager(group, actorDid, "presentation");
+    // The device-signed write convention: the declaration rides the signed
+    // payload verify against the origin enrollment before anything mutates
+    // (the member-avatar route's declaration shape, scoped "group-avatar").
+    if (!payload || typeof payload !== "object" || payload.action !== "set" || payload.scope !== "group-avatar") {
+      throw typedError("E_GROUP_AVATAR_DECLARATION_INVALID", "The group photo declaration doesn't match this request. Try again.");
+    }
+    await this.membership.verifyMemberWrite({
+      networkId: String(networkId),
+      did: actorDid,
+      deviceId: actorDeviceId,
+      payload,
+      signature,
+    });
+    this.#assertAvatarPlane();
+    const buffer = Buffer.isBuffer(bytes) && bytes.length > 0 ? bytes : null;
+    if (!buffer) {
+      throw typedError("E_GROUP_AVATAR_REQUIRED", "Choose a photo for the group first.");
+    }
+    if (!Number.isInteger(payload.size) || payload.size !== buffer.length) {
+      throw typedError("E_GROUP_AVATAR_DECLARATION_INVALID", "The photo bytes don't match the declaration. Choose the file again.");
+    }
+    if (payload.sha256 !== createHash("sha256").update(buffer).digest("hex")) {
+      throw typedError("E_GROUP_AVATAR_SHA_MISMATCH", "The photo didn't arrive intact — its fingerprint doesn't match. Nothing was stored.");
+    }
+    // The treatment owns the plain-language refusals (unsupported type, over
+    // cap, undecodable) and throws BEFORE anything is stored: zero mutation.
+    const treated = await this.treatImage(buffer, contentType);
+    const stored = [];
+    for (const rung of treated) {
+      const sha256 = createHash("sha256").update(rung.bytes).digest("hex");
+      await this.blobs.put(sha256, rung.bytes);
+      stored.push({ kind: rung.kind, width: rung.width, height: rung.height, contentType: rung.contentType, sha256, blobKey: sha256 });
+    }
+    const prior = Array.isArray(group.avatar?.renditions) ? group.avatar.renditions : [];
+    await this.groups.updateOne(
+      { _id: group._id },
+      { $set: { avatar: { renditions: stored, updatedAt: new Date().toISOString() } } },
+    );
+    await this.#retireGroupRungs(prior, new Set(stored.map((rung) => rung.blobKey)));
+    const updated = await this.groups.findOne({ _id: group._id });
+    return this.#named({ ...updated, avatar: groupAvatarMetas(updated.avatar) });
+  }
+
+  /**
+   * Set the group's color (PORCH-088 ac-3, managing-member authority): a
+   * palette-validated accent token; `null` resets to the neutral default.
+   * color is presentation data only — group chips stay color-independent
+   * server-side, and nothing in the ranking or delivery reads it.
+   *
+   * The write is device-signed (the hub's device-signed JSON-body write
+   * convention): payload { scope: "group-avatar", action: "color", color },
+   * signature verified against the origin enrollment before any mutation.
+   */
+  async setColor({ groupId, networkId, actorDid, actorDeviceId = null, color, payload, signature } = {}) {
+    const group = await this.groups.findOne({ _id: groupId });
+    if (!group || group.networkId !== String(networkId)) {
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    if (!validGroupColor(color)) {
+      throw typedError("E_GROUP_COLOR_INVALID", "That color isn't one of the group's palette colors. Pick one from the palette.");
+    }
+    await this.#assertManager(group, actorDid, "presentation");
+    if (!payload || typeof payload !== "object" || payload.action !== "color" || payload.scope !== "group-avatar" || payload.color !== color) {
+      throw typedError("E_GROUP_AVATAR_DECLARATION_INVALID", "The color change's signed declaration doesn't match this request. Try again.");
+    }
+    await this.membership.verifyMemberWrite({
+      networkId: String(networkId),
+      did: actorDid,
+      deviceId: actorDeviceId,
+      payload,
+      signature,
+    });
+    await this.groups.updateOne({ _id: group._id }, { $set: { color: color ?? null } });
+    const updated = await this.groups.findOne({ _id: group._id });
+    return this.#named({ ...updated, color: updated.color ?? GROUP_NEUTRAL_COLOR, avatar: groupAvatarMetas(updated.avatar) });
+  }
+
+  /**
+   * Serving (PORCH-088 ac-2): one committed rung, content-addressed and
+   * immutable — hub origin only (the group's rendition surface reads the
+   * shared blob store; member browsers never fetch a third-party surface).
+   * The view gate is the group's own visibility rule: a private group's
+   * presentation is invisible to non-members (the concealing refusal).
+   *
+   * @param {{ groupId: string, networkId: string, viewerDid: string, kind: string, version: string|null }} args
+   */
+  async serveAvatarRung({ groupId, networkId, viewerDid, kind, version } = {}) {
+    const group = await this.groups.findOne({ _id: groupId });
+    if (!group || group.networkId !== String(networkId)) {
+      throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+    }
+    if (viewerDid && !canSeeGroup(group, viewerDid)) {
+      // PORCH-088: the network owner may read the group's presentation
+      // (their superuser authority needs its face); a plain member still
+      // faces concealment — an invisible group's avatar is not a
+      // member-plane fact (unknown-shaped).
+      const viewerMembership = await this.#activeMembership(group.networkId, viewerDid);
+      if (!canOpenGroupSettings(group, viewerDid, viewerMembership)) {
+        throw typedError("E_GROUP_UNKNOWN", "That group doesn't exist in this network.");
+      }
+    }
+    this.#assertAvatarPlane();
+    if (!groupAvatarMetas(group.avatar)) {
+      throw typedError("E_GROUP_AVATAR_NOT_FOUND", "This group doesn't have a photo yet.");
+    }
+    const rung = (group.avatar.renditions ?? []).find((some) => some.kind === kind);
+    if (!rung || (version != null && version !== rung.sha256)) {
+      throw typedError("E_GROUP_AVATAR_NOT_FOUND", "This group doesn't have a photo yet.");
+    }
+    const bytes = await this.blobs.get(rung.blobKey);
+    if (bytes === null || !bytes.length) {
+      throw typedError("E_BLOB_MISSING", "This group photo's stored copy is missing. Ask the group's creator to set it again.");
+    }
+    return { bytes, kind: rung.kind, width: rung.width, height: rung.height, contentType: rung.contentType, sha256: rung.sha256 };
   }
 }
 

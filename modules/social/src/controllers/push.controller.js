@@ -44,6 +44,10 @@ export class PushController {
         enabled: body.enabled,
         events: body.events,
         mutes: body.mutes,
+        // PORCH-088: the per-group notification preference entries the
+        // settings PUT carries (full-row-replace rules; unset rides the
+        // persisted entries unchanged).
+        groupPreferences: body.groups ?? null,
       }),
     );
   };
@@ -75,6 +79,9 @@ export class PushController {
       E_PUSH_SETTINGS_INVALID: 400,
       E_PUSH_NOT_ENABLED: 400,
       E_PUSH_MUTE_NOT_MEMBER: 403,
+      // PORCH-088: a per-group preference for a group the member no longer
+      // holds is refused with the plain-language reason.
+      E_PUSH_GROUP_NOT_MEMBER: 403,
     };
     const status = statusByCode[error?.code] ?? 500;
     if (status === 500) {

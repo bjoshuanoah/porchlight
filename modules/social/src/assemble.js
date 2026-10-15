@@ -107,6 +107,21 @@ import { createSocialRouter } from "./routes.js";
  *       Injected send transport (tests run a local capture server or a
  *       stub); defaults to the web-push Push API client (aes128gcm).
  *   },
+ *   groupAvatar?: {
+ *     PORCH-088: the group-avatar write path — the identity plane's
+ *     member-avatar ingest treatment (deterministic square crop then
+ *     compression, geometry stamps, no rectangular original retained)
+ *     over the media pipeline's content-addressed blob store. Both wired
+ *     by apps/server from the identity module's public entry; social
+ *     imports no identity source, CI-enforced. Absent → the group avatar
+ *     write and serving refuse plainly (never a silent no-op).
+ *     blobs?: { put, get, has, delete } | null,
+ *       The content-addressed blob store (the media pipeline's store).
+ *     treatImage?: (bytes: Buffer, contentType: string) =>
+ *       Promise<Array<{ kind, width, height, contentType, bytes }>> | null,
+ *       The member-avatar ingest treatment (identity plane's function of
+ *       record, avatar.treatment).
+ *   },
  * }} [options]
  */
 export function assembleSocialModule(store, options = {}) {
@@ -178,7 +193,6 @@ export function assembleSocialModule(store, options = {}) {
     audit,
   });
   const quotaService = new QuotaService({ artifacts, networks, audit });
-  const groupService = new GroupService({ groups, memberships, membership: membershipService });
   // Device notifications (PORCH-059): the Web Push send pipeline. The
   // VAPID material is injected by the hub runtime (generated at first run
   // by the runtime setup, held in hub server state — never committed);
@@ -191,6 +205,9 @@ export function assembleSocialModule(store, options = {}) {
     memberships,
     networks,
     membership: membershipService,
+    // PORCH-088: the per-group preference PUT validates every entry
+    // against the member's LIVE group membership.
+    groups,
     vapid: options.push?.vapid ?? null,
     sender: options.push?.sender ?? null,
     log: options.log ?? null,
@@ -210,6 +227,8 @@ export function assembleSocialModule(store, options = {}) {
     // roster at delivery/replay time (member-added events reach new
     // members from their add onward).
     groups,
+    // PORCH-088: hard-deleted posts leave the replay window immediately.
+    posts,
     replayHours: options.realtime?.replayHours ?? 24,
   });
   // Media pipeline (PORCH-008): the blob store is content-addressed —
@@ -225,6 +244,25 @@ export function assembleSocialModule(store, options = {}) {
   const blobs = relocatable
     ? createRelocatableMediaStore(mediaConfig.mediaRoot)
     : (mediaConfig.store ?? createMemoryMediaStore());
+  // Group containers (PORCH-030) + the group settings' write paths
+  // (PORCH-088): the group-avatar bytes share the media pipeline's
+  // content-addressed blob store (the same media root), and the identity
+  // plane's member-avatar ingest treatment arrives through the hub
+  // assembly's injected callback (social imports no identity source,
+  // CI-enforced; absent wiring refuses plainly, never a silent no-op).
+  // The menu contract's resolved per-group notification state reads the
+  // persisted settings row at read time through the push service's
+  // adapter — late-bound (the push service assembles just below).
+  const groupService = new GroupService({
+    groups,
+    memberships,
+    membership: membershipService,
+    blobs: options.groupAvatar?.blobs ?? blobs,
+    treatImage: options.groupAvatar?.treatImage ?? null,
+    push: {
+      resolveGroupPreference: ({ did, groupId }) => pushService.resolveGroupPreference({ did, groupId }),
+    },
+  });
   const volumeService = new MediaVolumeService(
     { markers: mediaVolumeMarkers, uploads: mediaUploads, blobs },
     {
@@ -420,6 +458,9 @@ export function assembleSocialModule(store, options = {}) {
       groups: groupService,
       membership: membershipService,
       audit: auditService,
+      // PORCH-088: the owner post-removal's service — the moderation write
+      // lives where the deletion cascade lives (the post service).
+      postsService: postService,
       log: options.log ?? null,
     }),
   };

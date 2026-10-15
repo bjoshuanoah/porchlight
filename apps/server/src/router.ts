@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createSystemRouter } from "./routes/system.routes.js";
 import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
-import { assembleIdentityModule } from "@porchlight/identity";
+import { assembleIdentityModule, treatAvatar } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
 import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
@@ -298,6 +298,14 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       // account record.
       purgeAvatar: identityModule
         ? (did: string) => identityModule.avatarService.retireFor(did)
+        : undefined,
+      // PORCH-088: the group-avatar write rides the identity plane's
+      // member-avatar ingest treatment (the same deterministic square crop
+      // then compression, geometry stamps, no rectangular original
+      // retained) — the media pipeline's blob store binds below through
+      // the media root.
+      groupAvatar: identityModule
+        ? { treatImage: (bytes: Buffer, contentType: string) => treatAvatar(bytes, contentType) }
         : undefined,
       media: {
         // PORCH-054: the media root is runtime configuration — the config
