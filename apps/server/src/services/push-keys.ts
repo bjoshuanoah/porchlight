@@ -79,6 +79,18 @@ function persist(file: string, material: VapidMaterial): void {
 }
 
 /**
+ * The push log is the delivery discriminator; a boot that never injected a
+ * sink (the deployed hub, apps/server/index.ts) follows the auth-failure
+ * capture's convention (PR #111's precedent): the line lands on stdout —
+ * the supervisor pipes hub stdout into <home>/logs/hub.log — never dropped.
+ */
+function pushLog(sink: ((line: string) => void) | undefined, entry: object): void {
+  const line = JSON.stringify({ at: new Date().toISOString(), kind: "push", ...entry });
+  if (sink) sink(line);
+  else console.log(line);
+}
+
+/**
  * Load the stored VAPID material, or generate and persist it at first run.
  * Idempotent: every boot after the first reuses the same keypair — the
  * SUBJECT, though, re-derives from the hub's current origin each boot and
@@ -112,22 +124,14 @@ export function loadVapidKeys(
           // Never drops the keypair — subscriptions ride it untouched.
           const healed = { ...material, subject: derived };
           persist(file, healed);
-          log?.(
-            JSON.stringify({
-              kind: "push",
-              event: "vapid.subject.migrated",
-              at: new Date().toISOString(),
-              from: material.subject,
-              to: derived,
-            }),
-          );
+          pushLog(log, { event: "vapid.subject.migrated", from: material.subject, to: derived });
           return healed;
         }
         return material;
       }
-      log?.(JSON.stringify({ kind: "push", event: "vapid.keys.invalid", at: new Date().toISOString() }));
+      pushLog(log, { event: "vapid.keys.invalid" });
     } catch {
-      log?.(JSON.stringify({ kind: "push", event: "vapid.keys.corrupt", at: new Date().toISOString() }));
+      pushLog(log, { event: "vapid.keys.corrupt" });
     }
   }
   const created = webpush.generateVAPIDKeys();
@@ -137,6 +141,6 @@ export function loadVapidKeys(
     createdAt: new Date().toISOString(),
   };
   persist(file, material);
-  log?.(JSON.stringify({ kind: "push", event: "vapid.keys.generated", at: material.createdAt }));
+  pushLog(log, { event: "vapid.keys.generated", at: material.createdAt });
   return material;
 }
