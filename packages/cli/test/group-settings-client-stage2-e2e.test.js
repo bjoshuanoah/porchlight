@@ -147,7 +147,6 @@ test("group settings menu, deployed-hub stage 2: the route family the client cal
 
     // Owner bootstrap + network (the production way).
     const ownerPair = generateKeyPairSync("ed25519");
-    const ownerPrivJwk = ownerPair.privateKey.export({ format: "jwk" });
     const created = await runStep("bootstrap account", (async () => {
       const res = await fetch(`${base}/api/identity/bootstrap/account`, {
         method: "POST",
