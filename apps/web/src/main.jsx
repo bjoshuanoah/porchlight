@@ -18,7 +18,7 @@ import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage, signDevicePayload } from "./device.js";
 import { sha256Hex } from "./device-crypto.js";
 import { resolveStoredNames } from "./name-heal.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview } from "./member-actions.js";
 import { firstUrlIn } from "./link-preview.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { applyEvent, readEventCursor, saveEventCursor, catchUpSince } from "./live.js";
@@ -1032,6 +1032,21 @@ function App() {
       const link = document.createElement("a");
       link.href = url;
       link.download = "porchlight-archive.zip";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return blob;
+    },
+    // Bulk original download (PORCH-082 end-card): one zip of the viewed
+    // set's full-resolution originals via the bulk-original archive route,
+    // composed at the post's own origin network. The browser download is
+    // the destination (the desktop saves the zip; mobile saves per its
+    // platform path) — no viewer-side byte handling anywhere.
+    bulkOriginals: async (post) => {
+      const blob = await bulkPostOriginals(connectionForPost(post), post);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `porchlight-originals-${post._id || post.id}.zip`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       return blob;

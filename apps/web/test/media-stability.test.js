@@ -89,14 +89,15 @@ test("PORCH-049 ac-3 + Brian's Oct 10 turn: no panel before the first tap, then 
   assert.match(social, /webkitEnterFullscreen/);
 });
 
-test("PORCH-049 turn: sharing is built in — the share sheet carries the original, clipboard then Get original fall back", () => {
-  // The share sheet takes the full-quality original bytes when the
-  // platform can share files; the image clipboard is the fallback; the
-  // last resort names Get original (the button it sits beside).
-  assert.match(social, /navigator\.canShare\(\{ files: \[file\] \}\)/);
-  assert.match(social, /await navigator\.share\(\{ files: \[file\]/);
-  assert.match(social, /new ClipboardItem\(\{ \[blob\.type\]: blob \}\)/);
-  assert.match(social, />Share<\/Button>/);
+test("PORCH-049 turn: media sharing rides the ··· menus after the PORCH-082 retirement", async () => {
+  // The per-image "download original and share" row is retired (PORCH-082):
+  // no per-media Share or Get original button renders on any media surface,
+  // and share stays reachable through the ··· overflow menus (PORCH-078).
+  // The share sheet's file naming still maps content types (the viewer's
+  // overlay download names its file the same way).
+  const overlay = await readFile(join(webRoot, "src/photo-viewer.jsx"), "utf8");
+  assert.doesNotMatch(social, />Share<\/Button>/);
+  assert.match(overlay, /aria-label="Media overlay"/);
   // The share file is named from its content type (stable, extensionless
   // blobs never reach the sheet).
   assert.equal(mediaFileName("abc123", { type: "video/mp4" }), "abc123.mp4");

@@ -262,6 +262,14 @@ export const cssVars = Object.fromEntries(
   CSS_VAR_NAMES.map(([key, name]) => [key, `var(--porch-${name})`]),
 );
 
+// Token-derived alpha (the PORCH-042 token contract's sanctioned escape):
+// the translucent steps of a token value (glass-chip scrims) compose here in
+// the machinery layer so no screen file carries a literal color.
+export function tokenAlpha(hex, alpha) {
+  const value = String(hex).replace("#", "");
+  return `rgba(${parseInt(value.slice(0, 2), 16)}, ${parseInt(value.slice(2, 4), 16)}, ${parseInt(value.slice(4, 6), 16)}, ${alpha})`;
+}
+
 function flatten(tokens) {
   return { ...tokens, textPrimary: tokens.text.primary, textSecondary: tokens.text.secondary, textMuted: tokens.text.muted, textInverse: tokens.text.inverse };
 }

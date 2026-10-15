@@ -7,8 +7,9 @@ import {
 import {
   AddReactionOutlined, ArrowDownwardOutlined, ArrowUpwardOutlined, ChevronLeft, ChevronRight,
   FullscreenOutlined, MoreHorizOutlined, PauseOutlined, PlayArrowOutlined, ReplayOutlined,
-  ReplyOutlined, ShareOutlined, VolumeOffOutlined, VolumeUpOutlined,
+  ReplyOutlined, VolumeOffOutlined, VolumeUpOutlined,
 } from '@mui/icons-material';
+import { MediaOverlay, PhotoViewer } from './photo-viewer.jsx';
 import { cssVars } from './theme.js';
 import { adaptiveTrackHeight, carouselIndex, photoFirst } from './photo-first.js';
 import {
@@ -72,13 +73,21 @@ function useOperation() {
   return { busy, error, setError, run };
 }
 
-function MediaItem({ id, post, actions, detail = false, slide = false }) {
+// MediaItem (PORCH-043/044/045 media treatment + PORCH-082): one media
+// element with its reserved frame. `index`/`onExpand` wire the overlay's
+// expand control to the photo viewer (the expanding slide's position opens
+// the viewer mid-sequence). The overlay reveals on hover (pointer devices)
+// or tap (touch: photos toggle it, video reveals it alongside the open
+// playback panel) and fades with the media chrome (140–220ms easing).
+function MediaItem({ id, post, actions, detail = false, slide = false, index = 0, onExpand = null }) {
   // Rendition delivery (PORCH-044): the hydrated payload carries the
   // rendition set of record (mediaMeta, service-side); once the auth-
   // relaying rendition worker is live, media renders straight from
   // content-addressed rendition URLs — img srcset/sizes pick the rung,
   // video renders its poster + playable rendition, and the browser cache
-  // answers repeats. "Get original" stays the only path to archive bytes.
+  // answers repeats. The archive path is now the overlay's "↓ Original"
+  // control (PORCH-082) and the viewer's original fetch on zoom — never a
+  // text utility under the media.
   const meta = post?.mediaMeta?.[id] ?? null;
   const direct = Boolean(meta && actions?.mediaTransport);
   const [resource, setResource] = useState(null);
@@ -213,6 +222,14 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [playing, setPlaying] = useState(true);
   const videoRef = useRef(null);
+  // ac-1 reveal: hover on pointer devices drives it (the CSS-hover path on
+  // the media bounds); on touch, a photo tap toggles it and a video's
+  // playback-panel tap reveals it. Touch-only detection keeps a desktop
+  // click from toggling the chrome its hover already shows.
+  const [overlayShown, setOverlayShown] = useState(false);
+  // Touch-only detection without a mode read: a fine-pointer click never
+  // toggles the chrome its hover already shows.
+  const tapTogglesOverlay = typeof navigator === 'object' && navigator.maxTouchPoints > 0;
   const togglePlayback = (element) => {
     if (!element) return;
     if (element.paused) {
@@ -223,6 +240,7 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
   const tapVideo = (event) => {
     if (!panelOpen) {
       setPanelOpen(true);
+      setOverlayShown(true);
       event.currentTarget.muted = false;
       setSoundOn(true);
       return;
@@ -261,25 +279,12 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
     else if (typeof element.webkitEnterFullscreen === 'function') element.webkitEnterFullscreen();
   };
   const watchPlayback = (event) => setPlaying(event.type === 'play');
-  // Sharing on media (Brian, 10/10: "sharing should be built in"): the
-  // share sheet carries the full-quality original bytes — the archival
-  // record — when the platform takes files; the image clipboard is the
-  // fallback; Get original stays the last resort. Member-initiated and
-  // member-targeted: nothing leaves the perimeter on its own (zero
-  // phone-home is the server contract; the share target is whatever the
-  // member picks in the sheet).
-  const shareMedia = () => operation.run(async () => {
-    const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
-    if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
-    const file = new File([blob], mediaFileName(id, blob), { type: blob.type || 'application/octet-stream' });
-    if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: post.caption || undefined });
-    } else if (post.type === 'photo' && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-    } else {
-      throw new Error('Your browser cannot share from here yet — Get original keeps the file.');
-    }
-  });
+  // Sharing on media (Brian, 10/10: "sharing should be built in") rides the
+  // ··· overflow menu's Share entry (PORCH-078) since the PORCH-082
+  // retirement: the per-image download-and-share text link is gone, and the
+  // media top-right overlay carries exactly original download and expand
+  // (PORCH-082 build contract; the ··· menus keep Share).
+
   // Rendition elements remount once for the boot-window retry: key=attempt
   // re-issues the same content-addressed request after the window settles.
   const directImg = post.type === 'photo' && direct;
@@ -310,15 +315,20 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
     const timer = setTimeout(() => { setLoadError(''); setAttempt((n) => n + 1); }, 1200);
     return () => clearTimeout(timer);
   }, [loadError, directImg, directVideo]);
-  return <Box>
+  return <Box
+    onMouseEnter={() => setOverlayShown(true)}
+    onMouseLeave={() => setOverlayShown(false)}
+    sx={{ position: post.type === 'photo' || post.type === 'video' ? 'relative' : undefined }}>
     {directImg && <Box key={`img-${attempt}`} component="img"
       src={renditionSrc(meta, origin) ?? playableVideoUrl(meta, origin)}
       srcSet={renditionSrcset(meta, origin) || undefined}
       sizes={detail ? detailImageSizes(meta) : timelineImageSizes()}
       alt={post.caption || 'Shared photo'} loading="lazy" decoding="async"
+      onClick={(event) => { if (tapTogglesOverlay) setOverlayShown((shown) => !shown); event.stopPropagation(); }}
       onError={() => setLoadError('Your hub did not return the media.')}
       sx={{ ...mediaSx, ...fitSx }} />}
     {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
+      onClick={(event) => { if (tapTogglesOverlay) setOverlayShown((shown) => !shown); event.stopPropagation(); }}
       sx={{ ...mediaSx, ...fitSx }} />}
     {directVideo && <Box key={`vid-${attempt}`} sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
       <Box component="video" src={videoPlayable} poster={videoPoster}
@@ -343,21 +353,21 @@ function MediaItem({ id, post, actions, detail = false, slide = false }) {
       ? <Box role="status" aria-label="Loading media" sx={{ ...mediaSx, ...fitSx }} />
       : !resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" sx={slideRailSx} />}
     {loadError && <Alert severity="error" sx={slideRailSx}>{loadError}</Alert>}
-    <Stack direction="row" spacing={1} sx={{ ...(slide ? slideRailSx : {}), mt: 1 }} aria-label="Media actions">
-      <Button size="small" disabled={operation.busy} onClick={() => operation.run(async () => {
-        const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
-        if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = `${id}`;
-        anchor.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      })} sx={{ px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Get original</Button>
-      <Button size="small" disabled={operation.busy} onClick={shareMedia} startIcon={<ShareOutlined />}
-        sx={{ px: 0, fontSize: 14, fontWeight: 600, justifyContent: 'flex-start' }}>Share</Button>
-    </Stack>
     {operation.error && <Alert severity="error" sx={slideRailSx}>{operation.error}</Alert>}
+    {(post.type === 'photo' || post.type === 'video') && (directImg || directVideo || resource)
+      ? <MediaOverlay shown={overlayShown} downloadBusy={operation.busy}
+        onDownload={() => operation.run(async () => {
+          const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
+          if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = mediaFileName(id, blob);
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        })}
+        onExpand={post.type === 'photo' && onExpand ? () => onExpand(index) : undefined} />
+      : null}
   </Box>;
 }
 
@@ -488,7 +498,10 @@ function CarouselArrows({ atStart, atEnd, onPrev, onNext }) {
 // boundary) and the slide position is presentation-only state: reactions,
 // votes, and replies stay bound to the post in PostCard and this component
 // calls no interaction action (ac-5).
-function MediaCarousel({ ids, post, actions, detail = false }) {
+// PORCH-082: the per-slide overlay's expand control opens the full-screen
+// viewer at that slide's position — the expanding slide owns the entry
+// index, so the viewer opens exactly where the member is looking.
+function MediaCarousel({ ids, post, actions, detail = false, onExpand = null }) {
   const trackRef = useRef(null);
   const [position, setPosition] = useState(0);
   const count = ids.length;
@@ -508,7 +521,7 @@ function MediaCarousel({ ids, post, actions, detail = false }) {
       }} style={adaptiveHeight != null ? { height: adaptiveHeight } : undefined} sx={carouselTrackSx}>
         {ids.map((id, index) => (
           <Box key={`${id}-${index}`} aria-roledescription="slide" aria-label={`Image ${index + 1} of ${count}`} sx={carouselSlideSx}>
-            <MediaItem id={id} post={post} actions={actions} detail={detail} slide />
+            <MediaItem id={id} post={post} actions={actions} detail={detail} slide index={index} onExpand={onExpand} />
           </Box>
         ))}
       </Box>
@@ -558,23 +571,37 @@ function ComposerPreviewCarousel({ files }) {
   </Box>;
 }
 
+// PORCH-082: the post's photo set is the viewer's sequence of record (the
+// mediaRefs order); the viewer mounts from here so the carousel's and the
+// detail card's overlays share one expand entry point. The viewer is an
+// overlay, so closing it returns to the surface exactly as the member left
+// it: the carousel keeps its scroll position and the page its scroll
+// (nothing under the overlay moves).
 function Media({ post, actions, detail = false }) {
   const media = Array.isArray(post?.mediaRefs) ? post.mediaRefs : [];
   const ids = media.map((entry) => typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id).filter(Boolean);
+  const [viewerIndex, setViewerIndex] = useState(null);
+  const photoView = post.type === 'photo' && ids.length > 0 && viewerIndex != null;
+  const onExpand = post.type === 'photo' && ids.length > 0
+    ? (index) => setViewerIndex(Math.min(Math.max(index, 0), ids.length - 1))
+    : null;
   if (!ids.length) return null;
   // PORCH-045: multi-image posts render as a single swipeable carousel on
   // every breakpoint (Brian, Oct 14, 2026) — the Oct 9 grid treatments and
   // the +3 overlay are superseded and render nowhere. Video stays out of
   // the carousel until asked for, so every other shape keeps the plain
   // multi-item stack.
-  if (ids.length > 1 && post.type === 'photo') {
-    return <MediaCarousel ids={ids} post={post} actions={actions} detail={detail} />;
-  }
-  return <Stack spacing={0} sx={{ mt: detail ? 2 : photoFirst.spacing.captionMedia / 8 }}>
-    {ids.map((id, index) => (
-      <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} detail={detail} />
-    ))}
-  </Stack>;
+  const surface = ids.length > 1 && post.type === 'photo'
+    ? <MediaCarousel ids={ids} post={post} actions={actions} detail={detail} onExpand={onExpand} />
+    : <Stack spacing={0} sx={{ mt: detail ? 2 : photoFirst.spacing.captionMedia / 8 }}>
+      {ids.map((id, index) => (
+        <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} detail={detail} index={index} onExpand={onExpand} />
+      ))}
+    </Stack>;
+  return <>
+    {surface}
+    {photoView && <PhotoViewer post={post} ids={ids} actions={actions} startIndex={viewerIndex} onClose={() => setViewerIndex(null)} />}
+  </>;
 }
 
 // Reaction bar (PORCH-036): a visual emoji picker opens from the small
