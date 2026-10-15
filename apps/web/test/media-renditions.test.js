@@ -152,12 +152,16 @@ test("PORCH-044 ac-3: originals resolve with no-store from the client action", a
 
 test("PORCH-044 ac-1/ac-2: member surfaces render the ladder, originals stay explicit", async () => {
   const social = await src("src/social.jsx");
+  const viewer = await src("src/photo-viewer.jsx");
   // Direct images carry the ladder + sizes; the video element renders its
-  // poster and playable rendition; the explicit original remains "Get original".
+  // poster and playable rendition. The per-image "Get original" text link is
+  // retired (PORCH-082): the overlay's "↓ Original" is the explicit archive
+  // action now.
   assert.match(social, /srcSet=\{renditionSrcset\(meta, origin\)/);
   assert.match(social, /sizes=\{detail \? detailImageSizes\(meta\) : timelineImageSizes\(\)\}/);
   assert.match(social, /component="video" src=\{videoPlayable\} poster=\{videoPoster\}/);
-  assert.match(social, />Get original<\/Button>/);
+  assert.match(viewer, />↓ Original<\/Button>/);
+  assert.doesNotMatch(social, />Get original<\/Button>/);
   // No surface fetches original bytes for rendering anymore — the original
   // rides only the explicit download action and the pre-PORCH-044 legacy
   // payload fallback.
