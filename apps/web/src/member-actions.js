@@ -61,6 +61,82 @@ export async function publishVote(connection, post, value) {
   });
 }
 
+// Group settings menu (PORCH-089): the client half of the group settings
+// workstream's write vocabulary. The routes and their server-side gates
+// merged with PORCH-088 on the main line; these builders exist as exports so the
+// wire shapes the app's writes carry are pinned by tests and re-verified
+// against a deployed hub by the stage-2 checklist (the Oct 12 contract) —
+// the signed bytes here are the exact bytes the menu's actions deliver.
+
+/** The group avatar's signed declaration: the member-avatar route's header
+ * declaration shape, scoped "group-avatar" (the group avatar route's
+ * contract — x-porchlight-avatar-payload / x-porchlight-signature). */
+export function groupAvatarDeclaration({ size, sha256: sha, contentType }) {
+  return { scope: "group-avatar", action: "set", size, sha256: sha, contentType };
+}
+
+/** The group color write's signed payload: a palette token, or null (the
+ * neutral reset) — the server refuses off-palette colors in plain language. */
+export function groupColorPayload(color) {
+  return { scope: "group-avatar", action: "color", color: color ?? null };
+}
+
+/** The owner post-removal's signed payload (server half: post.service's
+ * removePost rebuilds it from the path's post before verifying, so the
+ * client must carry the very same values: kind + postId + groupId +
+ * networkId, the origin network's id). */
+export function groupPostRemovePayload(post) {
+  return {
+    kind: "group_post_remove",
+    postId: post?._id || post?.id,
+    groupId: post?.groupId,
+    networkId: post?.originNetworkId ?? post?.networkId ?? null,
+  };
+}
+
+export async function setGroupAvatar(connection, groupId, file) {
+  const member = device(connection);
+  if (!file) throw new Error("Choose a photo to set.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!bytes.byteLength) {
+    const empty = new Error("That file is empty. Choose an image.");
+    empty.code = "E_AVATAR_UNDECODABLE";
+    throw empty;
+  }
+  const contentType = file.type || "application/octet-stream";
+  const payload = groupAvatarDeclaration({ size: bytes.byteLength, sha256: await sha256(bytes), contentType });
+  const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
+  return request(member, `social/groups/${encodeURIComponent(groupId)}/avatar`, {
+    method: "POST",
+    body: bytes,
+    headers: {
+      "content-type": contentType,
+      "x-porchlight-avatar-payload": JSON.stringify(payload),
+      "x-porchlight-signature": signature,
+    },
+  });
+}
+
+export async function setGroupColor(connection, groupId, color = null) {
+  const member = device(connection);
+  const payload = groupColorPayload(color);
+  const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
+  return request(member, `social/groups/${encodeURIComponent(groupId)}/color`, {
+    method: "PATCH",
+    body: JSON.stringify({ color, payload, signature }),
+  });
+}
+
+export async function removeGroupPost(connection, post) {
+  const member = device(connection);
+  const payload = groupPostRemovePayload(post);
+  const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
+  return request(member, `social/groups/${encodeURIComponent(payload.groupId)}/posts/${encodeURIComponent(payload.postId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ signature }),
+  });
+}
+
 function sha256(bytes) {
   return crypto.subtle.digest("SHA-256", bytes).then((hash) =>
     Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""));

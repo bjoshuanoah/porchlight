@@ -20,6 +20,11 @@ export default tseslint.config(
       // .lockup-stub.mjs" ENOENT on a clean runner) — ignored as well.
       "apps/web/test/.tmp-lockup/**",
       "apps/web/test/.lockup-stub.mjs",
+      // The bundled render sweeps build their module copy into .tmp<task>
+      // directories mid-run and remove them at the suite's end; turbo runs
+      // lint and test concurrently, and an eslint traversal inside that
+      // brief lifetime races the same way the lockup one did.
+      "apps/web/test/.tmp*/**",
     ],
   },
   js.configs.recommended,

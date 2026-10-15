@@ -2,11 +2,11 @@ import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState, us
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
-  ListItemText, Menu, MenuItem, Paper, Popover, Select, Snackbar, Stack, TextField, Tooltip, Typography,
+  ListItemText, Menu, MenuItem, Paper, Popover, Select, Snackbar, Stack, Switch, TextField, Tooltip, Typography,
 } from '@mui/material';
 import {
   AddReactionOutlined, ArrowDownwardOutlined, ArrowUpwardOutlined, ChevronLeft, ChevronRight,
-  FullscreenOutlined, MoreHorizOutlined, PauseOutlined, PlayArrowOutlined, ReplayOutlined,
+  FullscreenOutlined, MoreHorizOutlined, MoreVertOutlined, PauseOutlined, PlayArrowOutlined, ReplayOutlined,
   ReplyOutlined, VolumeOffOutlined, VolumeUpOutlined,
 } from '@mui/icons-material';
 import { MediaOverlay, PhotoViewer } from './photo-viewer.jsx';
@@ -21,10 +21,14 @@ import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 // PORCH-070: faces (post header, reply rows) ride the one avatar-face code
 // path — authorized rung fetch through the identity-keyed blob cache,
 // initials stay the metas-less fallback.
-import { AvatarFace } from './avatar-face.js';
+import { AvatarFace, useAvatarFaceUrl } from './avatar-face.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from './reactions.js';
 import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
+import {
+  groupMenuRows, groupToggleLine, resolvedGroupNotification,
+  GROUP_COLOR_ROWS, GROUP_NO_COLOR, GROUP_PRIVACY_ROWS, groupMemberRemoveCopy,
+} from './group-settings.js';
 import { dateOf, relativeTime } from './time.js';
 import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, visibleFeedPosts } from './feed-filter.js';
 import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, ruledOrder, pendingReply, conversationOf } from './slice.js';
@@ -711,7 +715,7 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2, ac
   </>;
 }
 
-export function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState }) {
+export function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState, groupMenu = null }) {
   const [localHidden, setLocalHidden] = useState(false);
   // Card-level reply (PORCH-038 ac-1): the affordance opens an inline
   // composer riding the same mention handling as the detail composer; the
@@ -735,6 +739,11 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
   const [localConversation, setLocalConversation] = useState(() => ({ pending: [], confirmed: [] }));
   const replyCountRef = useRef(0);
   const [menuAnchor, setMenuAnchor] = useState(null);
+  // Remove post (PORCH-089 ac-3): the owner's entry on a group post carries
+  // Remove — the group's managing member (or the network owner) — from the
+  // group surface's card or the detail card alike. The confirmation names
+  // the consequence; cancel mutates nothing.
+  const [removeOpen, setRemoveOpen] = useState(false);
   // Share (PORCH-078): the detail surface's share entry reports only the
   // copy-fallback outcome inline — the native dialog reports itself.
   const [shareNote, setShareNote] = useState('');
@@ -759,6 +768,11 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconcile rides the server slice signature
   }, [sliceIdentity]);
   if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
+  // Remove post (ac-3): the entry renders only on a group post whose group
+  // this viewer manages — the client predicate shapes the menu; the hub
+  // re-checks the authority on the write (refusal copies plain language).
+  const removesPostGroup = Boolean(post?.groupId)
+    && (data?.groups ?? []).some((item) => identityOf(item) === String(post.groupId) && canManageGroup(item, data));
   const openPost = () => navigate?.(`/posts/${encodeURIComponent(identityOf(post))}`);
   // Share (PORCH-078): one handler serves both ··· menus — the timeline card
   // and the detail card. The native dialog (navigator.share) carries the
@@ -854,7 +868,13 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
             </Stack>
           </Box>
         </Stack>
-        <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+          {/* The group settings menu (PORCH-089 ac-1) serves the group post's
+              detail view too: the detail card carries the same top-right
+              options control the group surface ships, beside the card's own
+              ··· — one open menu per surface (each is an anchored MUI Menu
+              whose backdrop closes the other in the same frame). */}
+          {groupMenu}
           <IconButton aria-label="Post options" aria-haspopup="menu" aria-expanded={Boolean(menuAnchor)}
             onClick={(event) => setMenuAnchor(event.currentTarget)}><MoreHorizOutlined /></IconButton>
           <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
@@ -864,6 +884,8 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
               setMenuAnchor(null);
               operation.run(() => invoke(actions, 'hide', post), () => { setLocalHidden(true); onHide?.(post); });
             }}>Hide</MenuItem>
+            {removesPostGroup && <MenuItem disabled={operation.busy} data-testid="remove-group-post"
+              onClick={() => { setMenuAnchor(null); setRemoveOpen(true); }}>Remove</MenuItem>}
           </Menu>
         </Box>
       </Stack>
@@ -914,6 +936,23 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
       {shareError && <Alert severity="warning" sx={{ mt: 1 }}>{shareError}</Alert>}
       {/* The fallback outcome's in-view confirmation (PORCH-078): the same
           strings the card foot reports, surfaced where the member is. */}
+    {/* The removal's in-place confirmation (PORCH-089 ac-3/ac-6): the named
+        consequence verbatim, cancel mutates nothing, confirm executes the
+        device-signed group post removal (the server's origin cascade). */}
+    <Dialog open={removeOpen} onClose={() => setRemoveOpen(false)} fullWidth maxWidth="xs">
+      <DialogTitle>Remove this post?</DialogTitle>
+      <DialogContent>
+        <Typography>This removes the post everywhere it appears — the group's timeline, the main feed that carries it, and its replies and reactions. It cannot be undone.</Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setRemoveOpen(false)}>Cancel</Button>
+        <Button color="error" variant="contained" disabled={operation.busy} data-testid="confirm-remove-group-post"
+          onClick={() => {
+            setRemoveOpen(false);
+            operation.run(() => invoke(actions, 'removeGroupPost', post), () => { setLocalHidden(true); onHide?.(post); });
+          }}>Remove post</Button>
+      </DialogActions>
+    </Dialog>
       <Snackbar open={Boolean(shareSnackbar || shareError)} autoHideDuration={8000}
         onClose={() => { setShareSnackbar(''); }}
         message={shareSnackbar || (shareError ? 'The share did not go through. Try again.' : '')} />
@@ -924,6 +963,340 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
 
 function Heading({ title, subtitle }) {
   return <Box sx={{ mb: 3 }}><Typography variant="h1" component="h1" fontWeight={650}>{title}</Typography>{subtitle && <Typography variant="body1" color="text.secondary">{subtitle}</Typography>}</Box>;
+}
+
+// Group settings menu (PORCH-089, Brian Oct 15 2026): the group's settings
+// consolidate behind the group header's top-right options control — an MUI
+// Menu anchored to an IconButton (MoreVert class). Item sets render from
+// the group detail read's authority flags (PORCH-088) and the viewer's
+// notification state: the managing member (or the network owner, the
+// superuser) sees the owner set — avatar, color, members, privacy — and
+// every member sees their subset (the members view view-only, plus the
+// per-group notifications row). Enforcement is server-side: the menu hides
+// entries the role cannot exercise and never pretends to enforce; every
+// write re-checks authority at the hub. One open menu per surface at a time
+// is MUI's own anchored-menu law (each open menu covers the surface with
+// its modal backdrop, so the click that opens another closes the open one
+// first); the timeline renders with the menu closed — the anchor row is the
+// only render cost, and the menu never gates the timeline render.
+
+// The group's identity block: the served face — avatar-or-fallback. The
+// fallback carries the group's color with its initial letter; a group with
+// neither renders neutral, exactly as before this block existed. Zero
+// reflow: the block is a fixed pixel square, and the avatar bytes arrive in
+// a frame already reserved (geometry stamps; the served rungs are square).
+function GroupAvatar({ group, actions = {}, origin, size = 56 }) {
+  const groupId = group?._id ?? group?.id;
+  const did = groupId ? `group:${groupId}` : '';
+  const url = useAvatarFaceUrl({
+    origin, did, metas: group?.avatar ?? null, kind: 'chooser',
+    load: actions?.loadGroupAvatarRendition,
+  });
+  const color = typeof group?.color === 'string' && group.color ? group.color : null;
+  return <Avatar src={url ?? undefined} alt={group?.name ? `${group.name}'s photo` : undefined}
+    sx={{ width: size, height: size, fontSize: Math.round(size * 0.4), flexShrink: 0,
+      bgcolor: url ? undefined : (color ?? undefined), color: url || !color ? undefined : 'var(--porch-amber-ink)' }}>
+    {(group?.name ?? '').trim().charAt(0).toUpperCase() || 'G'}
+  </Avatar>;
+}
+
+// The squared, compressed first look (ac-2): the group avatar route's set
+// write is also its commit, so the preview-before-commit is rendered
+// client-side — a center square crop at the chooser rung class, the same
+// treatment shape the hub applies before it stores. Browser-only by nature;
+// where document is absent (the render sweeps) no preview renders and the
+// pick flow still functions.
+async function squarePreview(file, size = 144) {
+  if (typeof document === 'undefined' || !file) return null;
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(Object.assign(new Error('That image could not be read. Choose another copy.'), { code: 'E_AVATAR_UNDECODABLE' }));
+      element.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    const side = Math.min(image.naturalWidth || image.width, image.naturalHeight || image.height);
+    if (!side) return null;
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    context.drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+    return canvas.toDataURL('image/jpeg', 0.82);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export function GroupSettingsMenu({ group, data = {}, actions = {}, onchanged }) {
+  const [anchor, setAnchor] = useState(null);
+  const [view, setView] = useState('main'); // main | avatar | color | members | privacy
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [removeMember, setRemoveMember] = useState(null); // the row pending its named-consequence confirm
+  const [privacyPending, setPrivacyPending] = useState(null); // the next state pending its confirm
+  const [adding, setAdding] = useState(false);
+  const [pendingFile, setPendingFile] = useState(null);
+  const [preview, setPreview] = useState(null); // { url } — the squared result before commit
+  const fileRef = useRef(null);
+  const groupId = group?._id ?? group?.id;
+  const menuRows = group ? groupMenuRows(group, data) : [];
+  const manage = Boolean(group) && menuRows.includes('photo');
+  const notified = resolvedGroupNotification(group);
+  const roster = groupMemberRows(group ?? {});
+  const blocked = blockedRows(group ?? {});
+  const visibility = groupVisibility(group ?? {});
+  const colorSet = typeof group?.color === 'string' && group.color ? group.color : null;
+
+  const close = () => { setAnchor(null); setView('main'); setError(''); setPendingFile(null); setPreview(null); };
+  const back = () => { setView('main'); setError(''); };
+  const write = async (key, ...args) => {
+    setBusy(true);
+    setError('');
+    try {
+      await invoke(actions, key, groupId, ...args);
+      onchanged?.();
+      close();
+    } catch (cause) { setError(messageOf(cause)); }
+    setBusy(false);
+  };
+  const setGroupNotify = async (on) => {
+    setBusy(true);
+    setError('');
+    try {
+      await invoke(actions, 'setGroupNotification', groupId, on);
+      onchanged?.();
+    } catch (cause) { setError(messageOf(cause)); }
+    setBusy(false);
+  };
+  const chooseFile = async (file) => {
+    setError('');
+    setPendingFile(file ?? null);
+    setPreview(null);
+    if (file) {
+      try { setPreview({ url: await squarePreview(file) }); }
+      catch (cause) { setError(messageOf(cause)); }
+    }
+  };
+
+  // The menu never renders without a group: nothing anchors mid-load, and
+  // the timeline always renders with the menu closed (the same menu is only
+  // ever an anchored layer over the surface).
+  if (!group) return null;
+  const entryLabels = { photo: 'Group photo', color: 'Color', members: 'Members', privacy: 'Group privacy' };
+  const views = { photo: 'avatar', color: 'color', members: 'members', privacy: 'privacy' };
+  // Menu children as one keyed array — MUI's Menu clones its direct
+  // children (fragments are refused, per MUI's own guidance), so each view
+  // builds its rows here.
+  const items = [];
+
+  if (view === 'main') {
+    for (const row of menuRows) {
+      if (row === 'notifications') continue;
+      items.push(
+        <MenuItem key={row} data-testid={`group-menu-${row}`}
+          onClick={() => { setError(''); setView(views[row]); }}>
+          <ListItemText primary={entryLabels[row]} />
+        </MenuItem>,
+      );
+    }
+    // The member's per-group notifications row (ac-4), PORCH-087's
+    // corrected pairing verbatim: ON = receiving, OFF = paused — the
+    // row's position never sits opposite its line, and unset resolves
+    // ON (the detail read's resolved state is the rendered state).
+    items.push(
+      <Box key="notifications" sx={{ px: 2, py: 1, mt: 0.5 }} data-testid="group-notification-row">
+        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ gap: 2 }}>
+          <Typography variant="body2">Group notifications
+            <Typography variant="caption" component="span" display="block" color="text.secondary">
+              {groupToggleLine(notified)}
+            </Typography>
+          </Typography>
+          <Switch checked={notified} disabled={busy} data-testid="group-notification-toggle"
+            slotProps={{ input: { 'aria-label': `${group?.name ?? 'This group'} notifications` } }}
+            onChange={(event) => void setGroupNotify(event.target.checked)} />
+        </Stack>
+      </Box>,
+    );
+  } else if (view === 'avatar' && manage) {
+    items.push(<MenuItem disabled key="title" aria-hidden><ListItemText primary="Group photo" /></MenuItem>);
+    items.push(
+      <Box key="pick" sx={{ px: 2, py: 1, display: 'flex', gap: 2, alignItems: 'center' }}>
+        {preview?.url
+          ? <Avatar src={preview.url} alt="The squared result from the hub" sx={{ width: 72, height: 72, flexShrink: 0 }} />
+          : <GroupAvatar group={group} actions={actions} origin={menuOriginOf(data)} size={72} />}
+        <Typography variant="body2" color="text.secondary" sx={{ minWidth: 0 }}>
+          {preview?.url
+            ? 'A first look at the squared photo. The hub stores this same result when you use it.'
+            : 'The group\'s photo shows in its header everywhere the family sees this group.'}
+        </Typography>
+      </Box>,
+    );
+    items.push(
+      <Box key="actions" sx={{ px: 2, pb: 1, display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'flex-start' }}>
+        {preview?.url
+          ? <Stack spacing={1} sx={{ alignItems: 'flex-start' }}>
+              <Button variant="contained" size="small" disabled={busy || !pendingFile} data-testid="group-avatar-commit"
+                onClick={() => void write('setGroupAvatar', pendingFile)}>Use this photo</Button>
+              <Button size="small" disabled={busy} onClick={() => fileRef.current?.click()}>Try another</Button>
+              <Button size="small" disabled={busy} onClick={back}>Cancel</Button>
+            </Stack>
+          : <Stack spacing={1} sx={{ alignItems: 'flex-start' }}>
+              <Button variant="contained" size="small" disabled={busy} data-testid="group-avatar-pick"
+                onClick={() => fileRef.current?.click()}>Choose a photo</Button>
+              <Button size="small" disabled={busy} onClick={back}>Cancel</Button>
+            </Stack>}
+      </Box>,
+    );
+    items.push(
+      <input hidden key="file" ref={fileRef} type="file" accept="image/*" data-testid="group-avatar-input"
+        onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void chooseFile(file); }} />,
+    );
+  } else if (view === 'color' && manage) {
+    items.push(<MenuItem disabled key="title" aria-hidden><ListItemText primary="Color" /></MenuItem>);
+    for (const row of GROUP_COLOR_ROWS) {
+      items.push(
+        <MenuItem key={row.value ?? 'neutral'} data-testid={`group-color-${row.name.toLowerCase()}`}
+          disabled={busy} selected={group?.color === row.value}
+          onClick={() => void write('setGroupColor', row.value)}>
+          <Box component="span" aria-hidden sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: row.value, mr: 1.5, flexShrink: 0 }} />
+          <ListItemText primary={row.name} secondary={group?.color === row.value ? 'Current' : undefined} />
+        </MenuItem>,
+      );
+    }
+    items.push(<Divider key="divider" />);
+    items.push(
+      <MenuItem key="nocolor" data-testid="group-color-nocolor" disabled={busy || !colorSet}
+        onClick={() => void write('setGroupColor', GROUP_NO_COLOR)}>
+        <ListItemText primary="No color" secondary={colorSet ? 'Returns this group to its neutral look.' : 'Neutral — this group already renders plain.'} />
+      </MenuItem>,
+    );
+    items.push(<MenuItem key="back" onClick={back}>Back</MenuItem>);
+  } else if (view === 'members') {
+    items.push(
+      // No count rides this row: member-count display is out of scope until
+      // Brian names it (the directive's scope boundary).
+      <MenuItem disabled key="title"><ListItemText primary="Members" /></MenuItem>);
+    items.push(
+      <Box key="roster" sx={{ maxHeight: 320, overflow: 'auto' }}>
+        {roster.map((member) => <Box key={member.did} sx={{ px: 2, py: 1 }} data-testid="group-member-row">
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ gap: 2 }}>
+            <Typography variant="body2" sx={{ minWidth: 0 }}>{member.did === data.identity?.id ? 'You' : member.name ?? member.did}</Typography>
+            {manage && member.did !== data.identity?.id && <Button size="small" disabled={busy}
+              data-testid="remove-group-member" onClick={() => setRemoveMember(member)}>Remove</Button>}
+          </Stack>
+        </Box>)}
+      </Box>,
+    );
+    // The blocked roster rides the view, off the group's face: removal
+    // entered the blocked set atomically (PORCH-068 lifecycle), the
+    // unblock lifts it, and the member then rejoins by the visibility's
+    // own path (self-serve on public, invite on private).
+    if (manage && blocked.length > 0) {
+      items.push(
+        <Box key="blocked" sx={{ px: 2, py: 1, minWidth: 220 }}>
+          <Typography variant="caption" color="text.secondary">Removed — they cannot rejoin unless re-invited, or until you unblock them.</Typography>
+          <List dense disablePadding>
+            {blocked.map((row) => <ListItemButton key={row.did} disableGutters>
+              <ListItemText primary={row.did === data.identity?.id ? 'You' : row.did} />
+              <Button size="small" disabled={busy} data-testid="unblock-group-member"
+                onClick={() => void write('unblockGroupMember', row.did)}>Unblock</Button>
+            </ListItemButton>)}
+          </List>
+        </Box>,
+      );
+    }
+    if (manage) {
+      items.push(<MenuItem key="add" data-testid="add-group-members" onClick={() => setAdding(true)}>Add members</MenuItem>);
+    }
+    items.push(<MenuItem key="back" onClick={back}>Back</MenuItem>);
+  } else if (view === 'privacy' && manage) {
+    items.push(<MenuItem disabled key="title" aria-hidden><ListItemText primary="Group privacy" secondary="Who can find and join this group" /></MenuItem>);
+    // The labeled states with their consequence lines, verbatim from
+    // the ruling; the current state renders marked. Choosing the other
+    // state confirms in place with the named consequence, then commits
+    // through the shipped visibility change path — cancel mutates
+    // nothing.
+    for (const row of GROUP_PRIVACY_ROWS) {
+      items.push(
+        <MenuItem key={row.value} data-testid={`group-privacy-${row.value}`}
+          disabled={busy || visibility === row.value} selected={visibility === row.value}
+          onClick={() => setPrivacyPending(row)}>
+          <ListItemText primary={row.label} secondary={row.line} />
+        </MenuItem>,
+      );
+    }
+    items.push(<MenuItem key="back" onClick={back}>Back</MenuItem>);
+  }
+  return <Box sx={{ flexShrink: 0 }}>
+    <IconButton aria-label="Group options" aria-haspopup="menu" aria-expanded={Boolean(anchor)}
+      data-testid="group-settings-menu"
+      onClick={(event) => setAnchor(event.currentTarget)}><MoreVertOutlined /></IconButton>
+    <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={close}
+      slotProps={{ paper: { sx: { maxHeight: 440, minWidth: 260 } } }}>
+      {items}
+      {error && <Box sx={{ px: 2, pb: 1 }}><Alert severity="error">{error}</Alert></Box>}
+    </Menu>
+
+    {/* Confirmations, in place, with the named consequence: cancel mutates
+        nothing; confirm executes the (server-authority-checked) write. */}
+    <Dialog open={Boolean(removeMember)} onClose={() => setRemoveMember(null)} fullWidth maxWidth="xs">
+      <DialogTitle>Remove {removeMember?.name ?? 'this member'} from {group?.name}?</DialogTitle>
+      <DialogContent>
+        <Typography>{groupMemberRemoveCopy(removeMember?.name, group)}</Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setRemoveMember(null)}>Cancel</Button>
+        <Button color="error" variant="contained" disabled={busy} data-testid="confirm-remove-group-member"
+          onClick={async () => {
+            const did = removeMember?.did;
+            setRemoveMember(null);
+            await write('removeGroupMember', did);
+          }}>Remove</Button>
+      </DialogActions>
+    </Dialog>
+    <Dialog open={Boolean(privacyPending)} onClose={() => setPrivacyPending(null)} fullWidth maxWidth="xs">
+      <DialogTitle>Make {group?.name} {privacyPending?.value}?</DialogTitle>
+      <DialogContent><Typography>{privacyPending?.line} You can change this back any time.</Typography></DialogContent>
+      <DialogActions>
+        <Button onClick={() => setPrivacyPending(null)}>Cancel</Button>
+        <Button variant="contained" disabled={busy} data-testid="confirm-group-privacy"
+          onClick={async () => {
+            const value = privacyPending?.value;
+            setPrivacyPending(null);
+            await write('updateGroupVisibility', value);
+          }}>Change</Button>
+      </DialogActions>
+    </Dialog>
+    {adding && <AddMembersDialog group={group} actions={actions}
+      onClose={() => setAdding(false)} onAdded={() => { setAdding(false); onchanged?.(); }} />}
+  </Box>;
+}
+
+function menuOriginOf(data = {}) {
+  try { return new URL(data?.server?.url || window.location.origin).origin; }
+  catch { return null; }
+}
+
+// The group page's header: the identity block (avatar-or-fallback, the
+// color as the accent beside the name) with the settings menu at the
+// top-right. Fixed pixel geometry — no reflow while bytes arrive.
+function GroupHeader({ group, data, actions, onchanged }) {
+  const color = typeof group?.color === 'string' && group.color ? group.color : null;
+  return <Box sx={{ mb: 3, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0 }}>
+      <GroupAvatar group={group} actions={actions} origin={menuOriginOf(data)} size={56} />
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="h1" component="h1" fontWeight={650} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+          {group.name}
+          {color && <Box component="span" aria-hidden sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />}
+        </Typography>
+        <Typography variant="body1" color="text.secondary">Spaces within your family network</Typography>
+      </Box>
+    </Box>
+    <GroupSettingsMenu group={group} data={data} actions={actions} onchanged={onchanged} />
+  </Box>;
 }
 
 // The hub decorates four roots and descendant counts. Full history is read
@@ -1191,7 +1564,9 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
     return result;
   };
   return <Box>
-    <Heading title={group?.name ?? 'Groups'} subtitle="Spaces within your family network" />
+    {selectedId && group && !loading && !loadError
+      ? <GroupHeader group={group} data={data} actions={actions} onchanged={() => setRevision((at) => at + 1)} />
+      : <Heading title={group?.name ?? 'Groups'} subtitle="Spaces within your family network" />}
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>Groups may be out of date while your family server is unreachable.</Alert>}
     {selectedId && <Button sx={{ mb: 2 }} onClick={() => navigate?.('/groups')}>All groups</Button>}
     {loading && <CircularProgress aria-label="Loading group" size={24} />}
@@ -1204,7 +1579,10 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
         <Typography color="text.secondary">Join to see {group.name}'s posts in your own feed.</Typography>
       </Stack>}
       {joinError && <Alert severity="error">{joinError}</Alert>}
-      <MembersCard group={group} data={data} actions={actions} onchanged={() => setRevision((at) => at + 1)} />
+      {/* PORCH-089 (the ruling): the roster lives as a second view inside
+          the settings menu — off the group's face. Management (add, remove,
+          unblock) rides the menu's Members view; plain members keep the
+          view-only roster there too. */}
       {/* PORCH-081 ac-4: the REST catch-up note rides every timeline surface. */}
       {data.behind && !data.offline && <Alert severity="warning">Some newer moments could not be replayed from the server, so this view may be missing recent activity. <Button size="small" sx={{ ml: 1 }} onClick={() => actions.refreshFeeds?.()}>Check again</Button></Alert>}
       <Feed posts={posts} data={data} actions={actions} navigate={navigate} empty={data.offline ? 'No saved posts from this group are available.' : 'No posts in this group yet.'} />
@@ -1217,74 +1595,11 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
   </Box>;
 }
 
-function MembersCard({ group, data, actions, onchanged }) {
-  const [adding, setAdding] = useState(false);
-  const [visibilityError, setVisibilityError] = useState('');
-  const [memberError, setMemberError] = useState('');
-  const [acting, setActing] = useState(false);
-  const manage = canManageGroup(group, data);
-  const roster = groupMemberRows(group);
-  const blocked = blockedRows(group);
-  // Visibility (PORCH-068 ac-1): the managing member flips the group
-  // between private (invite-only) and public (the network views it).
-  const flipVisibility = async () => {
-    const next = groupVisibility(group) === 'public' ? 'private' : 'public';
-    setVisibilityError('');
-    try { await invoke(actions, 'updateGroupVisibility', group._id ?? group.id, next); onchanged?.(); }
-    catch (cause) { setVisibilityError(messageOf(cause)); }
-  };
-  // Removal lifecycle (PORCH-068, Brian's Oct 14 rulings): the managing
-  // member's removal writes the blocked entry atomically; the unblock act
-  // lifts it. The member's own posts stay.
-  const actOnMember = async (action, did) => {
-    setMemberError('');
-    setActing(true);
-    try {
-      await invoke(actions, action, group._id ?? group.id, did);
-      onchanged?.();
-    } catch (cause) { setMemberError(messageOf(cause)); }
-    setActing(false);
-  };
-  return <Card variant="outlined"><CardContent>
-    <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-      <Typography variant="h6">Members</Typography>
-      {manage && <Button onClick={() => setAdding(true)} data-testid="add-group-members">Add members</Button>}
-    </Stack>
-    <Typography color="text.secondary" sx={{ mb: 1 }}>
-      {groupVisibility(group) === 'public' ? 'Public — every member of the network can view this group and its posts.' : 'Private — invite-only; only members see this group and its posts.'}
-      {manage ? (group.createdBy === data.identity?.id ? ' You created this group; you add its members.' : ' Only the group\'s creator (or the network owner) adds members.') : ''}
-    </Typography>
-    {manage && <Button size="small" sx={{ mb: 1 }} onClick={() => void flipVisibility()} data-testid="toggle-group-visibility">
-      {groupVisibility(group) === 'public' ? 'Make private' : 'Make public'}
-    </Button>}
-    {visibilityError && <Alert severity="error">{visibilityError}</Alert>}
-    <List dense disablePadding>
-      {roster.map((member) => <ListItemButton key={member.did} disableGutters
-        secondaryAction={manage && member.did !== data.identity?.id ? (
-          <Button size="small" disabled={acting} data-testid="remove-group-member" onClick={() => void actOnMember('removeGroupMember', member.did)}>
-            Remove
-          </Button>
-        ) : undefined}>
-        <ListItemText primary={member.name ?? (member.did === data.identity?.id ? 'You' : member.did)}
-          secondary={member.did === data.identity?.id && member.name ? 'You' : undefined} />
-      </ListItemButton>)}
-    </List>
-    {manage && memberError && <Alert severity="error">{memberError}</Alert>}
-    {manage && blocked.length > 0 && <Stack spacing={1} sx={{ mt: 2 }}>
-      <Typography color="text.secondary">Removed — they cannot re-join until you unblock them.</Typography>
-      <List dense disablePadding>
-        {blocked.map((row) => <ListItemButton key={row.did} disableGutters>
-          <ListItemText primary={row.did === data.identity?.id ? 'You' : row.did} />
-          <Button size="small" disabled={acting} data-testid="unblock-group-member" onClick={() => void actOnMember('unblockGroupMember', row.did)}>
-            Unblock
-          </Button>
-        </ListItemButton>)}
-      </List>
-    </Stack>}
-    {adding && <AddMembersDialog group={group} actions={actions} onClose={() => setAdding(false)}
-      onAdded={() => { setAdding(false); onchanged?.(); }} />}
-  </CardContent></Card>;
-}
+// PORCH-089: the on-face MembersCard is retired — the roster, per-member
+// Remove, the visibility control, and Add members all live as views inside
+// the group settings menu (GroupSettingsMenu), off the group's face. The
+// AddMembersDialog (below) is the shipped add flow the menu's Members view
+// rides unchanged.
 
 function CreateGroupDialog({ data, actions, onClose, onCreate }) {
   const [name, setName] = useState('');
@@ -1519,6 +1834,11 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   // own draft so switching targets never silently loses text mid-draft.
   const [composerFor, setComposerFor] = useState(null); // null | 'post' | comment id
   const [drafts] = useState(() => new Map());
+  // The group settings menu (PORCH-089 ac-1) serves the group post's detail
+  // view: the post's group detail read feeds the menu the authority flags
+  // and the resolved notification state; a groupless post renders no menu.
+  const [detailGroup, setDetailGroup] = useState(null);
+  const [groupRevision, setGroupRevision] = useState(0);
   const openComposer = (target) => setComposerFor(target);
   const holdDraft = (target, text) => { if (text) drafts.set(target, text); else drafts.delete(target); };
   const readDraft = (target) => drafts.get(target) ?? '';
@@ -1541,6 +1861,18 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   }, [selectedId, data.offline, actions.loadPost, actions.loadComments]);
   const saved = data.offline ? rows(data.posts).find((item) => identityOf(item) === String(selectedId)) : null;
   const post = thread?.id === selectedId ? thread.post : saved;
+  // The menu's detail read rides the loaded post's group (never a foreign
+  // surface's state); a menu write re-reads the group so the rendered rows
+  // and presentation agree with hub-served state.
+  useEffect(() => {
+    const groupId = post?.groupId;
+    if (!groupId || data.offline || typeof actions.loadGroupDetail !== 'function') { setDetailGroup(null); return undefined; }
+    let current = true;
+    Promise.resolve().then(() => actions.loadGroupDetail(groupId))
+      .then((result) => { if (current) setDetailGroup(result?.group ?? null); })
+      .catch(() => { if (current) setDetailGroup(null); });
+    return () => { current = false; };
+  }, [post?.groupId, data.offline, actions.loadGroupDetail, groupRevision]);
   const comments = thread?.id === selectedId ? thread.comments : [];
   const replies = comments.filter((reply) => (!reply.postId || reply.postId === identityOf(post)) && (!reply.networkId || !originOf(post) || String(reply.networkId) === String(originOf(post))));
   // The open target stays legible: the composer names the comment it answers.
@@ -1568,7 +1900,9 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
       alignItems: 'start',
       '@media (min-width: 1000px)': { gridTemplateColumns: 'minmax(0, 680fr) minmax(0, 420fr)' },
     }}>
-      <PostCard post={post} data={data} actions={actions} navigate={navigate} detail reactionState={reactionState} onHide={() => navigate?.('/timeline')} />
+      <PostCard post={post} data={data} actions={actions} navigate={navigate} detail reactionState={reactionState} onHide={() => navigate?.('/timeline')}
+        groupMenu={detailGroup ? <GroupSettingsMenu group={detailGroup} data={data} actions={actions}
+          onchanged={() => setGroupRevision((at) => at + 1)} /> : null} />
       <Box sx={{ minWidth: 0 }}>
         <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2, mb: 1 }}>
