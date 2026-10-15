@@ -1,8 +1,35 @@
-// Timeline cards show four latest root comments in reading order. Nested
-// responses stay collapsed until the member expands their parent in place.
+// Timeline cards show the top four roots of the ruled read order (PORCH-084:
+// threaded roots ahead, childless roots newest-first). Nested responses stay
+// collapsed until the member expands their parent in place.
 export const REPLY_SLICE_LIMIT = 4;
 
 const replyKey = (reply) => String(reply?._id ?? reply?.id ?? '');
+
+/** How many replies a root carries, from any decoration the row carries. */
+export function rootResponsesOf(row) {
+  if (Array.isArray(row?.replies)) return row.replies.length;
+  const count = Number(row?.responseCount);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
+const newestFirst = (a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0);
+
+/**
+ * PORCH-084 read order of record: root comments render newest-first with
+ * threaded roots (roots carrying replies) ahead of childless ones; replies
+ * render chronological inside each tree (repliesByParent). Every surface —
+ * served slice, detail column, freshly written and live-arriving rows —
+ * sorts through this one comparator, so the rendered order never disagrees
+ * with the served order between fetches.
+ */
+export function ruledOrder(roots, countOf = rootResponsesOf) {
+  return (roots ?? []).slice().sort((a, b) => {
+    const threadedA = countOf(a) > 0 ? 1 : 0;
+    const threadedB = countOf(b) > 0 ? 1 : 0;
+    if (threadedA !== threadedB) return threadedB - threadedA;
+    return newestFirst(a, b);
+  });
+}
 
 /** Server decoration tolerance: a payload without the preview stays a plain post. */
 export function conversationOf(post) {
@@ -11,13 +38,11 @@ export function conversationOf(post) {
   return { replies, total };
 }
 
-// An arriving root enters the window in place; the oldest visible root
-// moves into the more-comments count.
+// An arriving root merges in place: the window re-sorts through the ruled
+// order (PORCH-084) and the root falling past the top four moves into the
+// more-comments count.
 export function windowOf(replies) {
-  const sorted = (replies ?? [])
-    .slice()
-    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-  return sorted.slice(-REPLY_SLICE_LIMIT);
+  return ruledOrder(replies).slice(0, REPLY_SLICE_LIMIT);
 }
 
 function byIdMap(replies) {
