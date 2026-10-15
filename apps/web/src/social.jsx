@@ -1043,6 +1043,10 @@ export function Timeline({ data = {}, actions = {}, navigate }) {
   // chronological river is the feed.
   return <Box sx={{ maxWidth: 780 }}>
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Saved moments may be out of date; new activity is not available until you reconnect.</Alert>}
+    {/* PORCH-081 ac-4: the REST catch-up note — a replay older than the hub's retained event window names itself; the member's own resolve, never a returning poll cycle. */}
+    {data.behind && !data.offline && <Alert severity="warning" sx={{ mb: 2 }}>Some newer moments could not be replayed from the server while this device was away, so this view may be missing recent activity.
+      {actions.refreshFeeds ? <Button size="small" sx={{ ml: 1 }} onClick={() => actions.refreshFeeds()}>Check again</Button> : null}
+    </Alert>}
     {!data.offline && !posts.length ? <EmptyTimeline navigate={navigate} /> : <Feed posts={posts} data={data} actions={actions} navigate={navigate} hidden={hidden} onHide={onHide} empty={data.offline ? 'No saved moments are available.' : 'Nothing here yet. Start the conversation.'} />}
   </Box>;
 }
@@ -1115,6 +1119,8 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
       </Stack>}
       {joinError && <Alert severity="error">{joinError}</Alert>}
       <MembersCard group={group} data={data} actions={actions} onchanged={() => setRevision((at) => at + 1)} />
+      {/* PORCH-081 ac-4: the REST catch-up note rides every timeline surface. */}
+      {data.behind && !data.offline && <Alert severity="warning">Some newer moments could not be replayed from the server, so this view may be missing recent activity. <Button size="small" sx={{ ml: 1 }} onClick={() => actions.refreshFeeds?.()}>Check again</Button></Alert>}
       <Feed posts={posts} data={data} actions={actions} navigate={navigate} empty={data.offline ? 'No saved posts from this group are available.' : 'No posts in this group yet.'} />
     </Stack>}
     {!selectedId && <Stack spacing={2}>

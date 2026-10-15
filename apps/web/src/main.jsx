@@ -21,7 +21,8 @@ import { resolveStoredNames } from "./name-heal.js";
 import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview } from "./member-actions.js";
 import { firstUrlIn } from "./link-preview.js";
 import { waitUntilHubHealthy } from "./update.js";
-import { arrivalPollMs } from "./live.js";
+import { applyEvent, readEventCursor, saveEventCursor, catchUpSince } from "./live.js";
+import { openEventStream } from "./realtime.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
@@ -104,8 +105,16 @@ function App() {
   }, [displayMode]);
   const [connections, setConnections] = useState(initialConnections);
   const [posts, setPosts] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? cachedTimeline(stored, `${origin}:${localIdentities[0]}`) : []);
+  // The river's live mirror (PORCH-081): socket arrivals merge against this
+  // ref so an event never re-renders a view it does not touch — a no-op
+  // arrival (media.attached, a deduped replay) touches no state at all.
+  const postsRef = useRef(posts);
   const [hidden, setHidden] = useState(() => localIdentities.length === 1 ? hiddenPosts(stored, `${origin}:${localIdentities[0]}`) : new Set());
   const [offline, setOffline] = useState(false);
+  // PORCH-081 ac-4: a catch-up replay older than the hub's retained window
+  // reads `stale` server-side; the REST catch-up note is a rendered state,
+  // never a silent skip — and never a returning poll cycle.
+  const [behind, setBehind] = useState(false);
   // PORCH-050 ac-4: a genuinely dead credential (401 after recovery tried) is
   // NOT an unreachable hub — it names its own state and recovery route
   // instead of masquerading as an outage while the polls keep failing.
@@ -142,9 +151,10 @@ function App() {
   const signedOut = useRef(false);
   useEffect(() => {
     custody.setRenew((args) => renewRef.current?.(args));
-    // Recovered tokens must land in React state immediately: the next 15s
-    // poll presents the published token instead of 401ing into recovery
-    // again (the wake-after-throttle case with no storage event received).
+    // Recovered tokens must land in React state immediately: the next read
+    // or socket handshake (tokens ride the realtime auth callback, read at
+    // every handshake) presents the published one instead of 401ing into
+    // recovery again (the wake-after-throttle case, no storage event).
     custody.setOnAdopt((live) => {
       if (!signedOut.current) setConnections(live);
     });
@@ -273,7 +283,12 @@ function App() {
     setMembershipEnded(deadSession);
     membershipEndedRef.current = deadSession;
     if (!result.failures.length) {
+      // The one river replace (PORCH-081): full reads and hydrates ride
+      // replacePosts so the live mirror (postsRef) never diverges from
+      // state; socket arrivals merge against the mirror between reads.
+      postsRef.current = result.posts;
       setPosts(result.posts);
+      setBehind(false);
       saveTimeline(stored, `${origin}:${identity?.id}`, result.posts);
     } else if (noticeText && unreachable) setNotice(noticeText);
     if (before) {
@@ -357,41 +372,102 @@ function App() {
     window.addEventListener("online", online);
     return () => window.removeEventListener("online", online);
   }, [reload]);
-  // Live arrival (PORCH-046 ac-1): new posts land without a manual refresh.
-  // The hub carries no realtime event surface yet (the PORCH-047 companion),
-  // so this is the REST-refresh degrade: a background full read at a fixed
-  // cadence, only while the tab is visible and never on scroll, applied
-  // through applyFeeds so arriving content reflects in place and the
-  // reading place is compensated (no scroll-jack). Poll failures stay
-  // quiet — the next tick and the offline surfaces name the connection.
-  const arrivingRef = useRef(false);
-  useEffect(() => {
-    if (!identity?.id) return undefined;
-    const arrived = async () => {
-      if (document.hidden || document.visibilityState !== "visible" || arrivingRef.current) return;
-      // PORCH-050: while a dead credential names its recovery route, the
-      // arrival loop pauses — a poll that only re-renders the same 401s is
-      // console spam, never progress. A renewal that re-credentials clears
-      // the flag (renew/applyFeeds), and the loop resumes.
-      if (membershipEndedRef.current) return;
-      arrivingRef.current = true;
-      try {
-        const live = readConnections(stored, origin);
-        const liveConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
-        if (liveConnections.length) {
-          applyFeeds(await loadFeeds(liveConnections));
+  // Live consumption (PORCH-081 ac-1): the socket feed replaces the deleted
+  // fixed-interval degrade cadence. One app-scope subscription per live
+  // origin connection of the open identity — websocket-only transport with
+  // backoff reconnection, the current credential read at every handshake.
+  // Arrivals merge in place through the cached river (postsRef); the
+  // reading anchor compensates once post-paint (PORCH-046). Every
+  // successful (re)connect resolves the stored per-origin cursor's delta
+  // against the catch-up endpoint (ac-4) — no polling cycle exists on this
+  // path, and a no-op arrival re-renders nothing (ac-2).
+  const mergeArrival = useCallback((envelope, connection) => {
+    if (membershipEndedRef.current) return;
+    let eventUrl = null;
+    try { eventUrl = new URL(connection.url).origin; } catch { return; }
+    const context = { origin: eventUrl, network: connection.name || eventUrl, log: console };
+    const before = captureFeedAnchor();
+    const merged = applyEvent(postsRef.current, envelope, context);
+    if (merged === postsRef.current) return;
+    postsRef.current = merged;
+    setPosts(merged);
+    if (identity?.id) saveTimeline(stored, `${origin}:${identity.id}`, merged);
+    if (before) requestAnimationFrame(() => applyFeedCompensation(before, captureFeedAnchor()));
+  }, [identity]);
+  // Reconnect delta resolve (PORCH-081 ac-4): GET /api/social/events?since=
+  // with the stored per-origin cursor; the replayed envelopes apply through
+  // the same idempotent in-place merge, the returned cursor is stored, and
+  // a beyond-the-window replay renders the REST catch-up note (behind).
+  const catchUpOrigin = useCallback(async (eventUrl, identityId) => {
+    const live = readConnections(stored, origin);
+    const connection = live.find((item) => item.identity?.id === identityId
+      && new URL(item.url).origin === eventUrl && item.token);
+    if (!connection) return;
+    const before = captureFeedAnchor();
+    let changed = false;
+    try {
+      const result = await catchUpSince(request, connection, readEventCursor(stored, origin));
+      for (const envelope of result.events) {
+        const merged = applyEvent(postsRef.current, envelope, {
+          origin: eventUrl, network: connection.name || eventUrl, log: console,
+        });
+        if (merged !== postsRef.current) {
+          postsRef.current = merged;
+          changed = true;
         }
-      } catch { /* the next scheduled arrival rides again */ }
-      finally { arrivingRef.current = false; }
-    };
-    const timer = setInterval(() => void arrived(), arrivalPollMs);
-    const visible = () => { if (document.visibilityState === "visible") void arrived(); };
-    document.addEventListener("visibilitychange", visible);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", visible);
-    };
-  }, [identity, applyFeeds]);
+      }
+      if (changed) {
+        setPosts(postsRef.current);
+        saveTimeline(stored, `${origin}:${identityId}`, postsRef.current);
+      }
+      saveEventCursor(stored, origin, result.cursor);
+      setBehind(result.stale);
+      setOffline(false);
+    } catch {
+      // Named outage class: the delta could not be resolved; the alert
+      // surfaces stay visible until a successful (re)connect resolves it.
+      setOffline(true);
+    }
+    if (before) requestAnimationFrame(() => applyFeedCompensation(before, captureFeedAnchor()));
+  }, []);
+  const liveSig = identityConnections
+    .map((connection) => `${new URL(connection.url).origin}#${connection.networkId ?? ""}`)
+    .join("|");
+  useEffect(() => {
+    if (!identity?.id || membershipEnded || signedOut.current) return undefined;
+    const handles = identityConnections.map((connection) => {
+      const eventUrl = new URL(connection.url).origin;
+      return openEventStream({
+        url: eventUrl,
+        identityId: identity.id,
+        // The credential is read at every (re)handshake, never a closure:
+        // a renewed token presents itself, a dead one is refused upstream.
+        getAuth: () => {
+          const live = readConnections(stored, origin);
+          const match = live.find((item) => item.identity?.id === identity.id
+            && new URL(item.url).origin === eventUrl && item.token);
+          return match ? { networkId: match.networkId ?? null, token: match.token } : null;
+        },
+        onEvent: (envelope) => mergeArrival(envelope, connection),
+        onState: ({ connected }) => {
+          // The connection fact renders visibly (ac-4): a realtime outage
+          // shows the outage state and serves the cached river; a dead
+          // credential keeps its own honest state instead of masquerading
+          // as an outage (PORCH-050). Recovering: the catch-up resolve.
+          if (!connected) {
+            if (!membershipEndedRef.current) setOffline(true);
+            return;
+          }
+          setOffline(false);
+          // Every successful (re)connect re-resolves the stored cursor's
+          // delta (the first connect replays the bounded window once).
+          void catchUpOrigin(eventUrl, identity.id);
+        },
+      });
+    });
+    return () => handles.forEach((handle) => handle.close());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the subscriptions ride the identity's live connections, not the snapshot objects
+  }, [identity?.id, liveSig, membershipEnded, mergeArrival, catchUpOrigin]);
   // Media transport (PORCH-044): the rendition worker registers once at
   // boot; member surfaces render rendition URLs directly (srcset/sizes,
   // video poster/src) once it is live, and fall back to the authorized-
@@ -427,27 +503,30 @@ function App() {
   useEffect(() => {
     syncMediaTransport(Object.fromEntries(identityConnections.map((c) => [new URL(c.url).origin, c.token])));
   }, [mediaTokenSignature]);
-  useEffect(() => {
-    if (!active?.identityToken) return undefined;
-    const check = async () => {
-      // PORCH-050: a revoked registration or genuinely dead identity session
-      // cannot be fixed by polling — recovery runs through the owner-routed
-      // device link. Pause the 15s poll in that state instead of writing the
-      // same 401 into the console every tick; a successful renewal (fresh
-      // mint) or an identity switch clears the flag and the poll resumes.
-      if (identityEndedRef.current) return;
-      try {
-        const result = await request({ ...active, token: active.identityToken }, "identity/devices");
-        observeDevices(result.registrations || [], active);
-        setOwner((current) => ({ ...current, devices: result.registrations || [], availability: { ...current.availability, devices: true } }));
-      } catch (error) {
-        if (error?.status === 401) identityEndedRef.current = true;
-        setOwner((current) => ({ ...current, availability: { ...current.availability, devices: false } }));
-      }
-    };
-    const timer = setInterval(() => void check(), 15_000);
-    return () => clearInterval(timer);
+  // Devices load on demand (PORCH-081 ac-1): when the identity opens or its
+  // credential re-credentials after a renewal or a membership write — never
+  // a timed refetch of device state (the V1 event vocabulary is
+  // content-only; no identity event stream exists for this surface).
+  const checkDevices = useCallback(async () => {
+    if (!active?.identityToken || !active?.identity?.id) return;
+    // PORCH-050: a revoked registration or genuinely dead identity session
+    // cannot be fixed by a re-read — recovery runs through the owner-routed
+    // device link. A dead credential names its state instead of writing the
+    // same 401 every tick; a successful renewal (fresh mint) or an identity
+    // switch clears the flag and the next on-demand load resumes.
+    if (identityEndedRef.current) return;
+    try {
+      const result = await request({ ...active, token: active.identityToken }, "identity/devices");
+      observeDevices(result.registrations || [], active);
+      setOwner((current) => ({ ...current, devices: result.registrations || [], availability: { ...current.availability, devices: true } }));
+    } catch (error) {
+      if (error?.status === 401) identityEndedRef.current = true;
+      setOwner((current) => ({ ...current, availability: { ...current.availability, devices: false } }));
+    }
   }, [active, observeDevices]);
+  useEffect(() => {
+    void checkDevices();
+  }, [checkDevices]);
   // PORCH-070: the open identity's own account read feeds the Profile photo
   // block (hub rungs or the legacy profile photo). It rides the identity
   // plane's own credential and keys on the active identity — renewals and
@@ -513,7 +592,8 @@ function App() {
       return registration;
     }
     setIdentity(next.identity);
-    setPosts(cachedTimeline(stored, `${origin}:${registration.did}`));
+    postsRef.current = cachedTimeline(stored, `${origin}:${registration.did}`);
+    setPosts(postsRef.current);
     setHidden(hiddenPosts(stored, `${origin}:${registration.did}`));
     navigate("/timeline");
     if (!next.token) setNotice("This device is connected. Ask your family's owner to finish membership on this hub before moments appear.");
@@ -547,7 +627,8 @@ function App() {
       return admitted;
     }
     setIdentity(next.identity);
-    setPosts(cachedTimeline(stored, `${origin}:${did}`));
+    postsRef.current = cachedTimeline(stored, `${origin}:${did}`);
+    setPosts(postsRef.current);
     setHidden(hiddenPosts(stored, `${origin}:${did}`));
     return admitted;
   };
@@ -652,7 +733,8 @@ function App() {
       saveConnections(stored, origin, updated);
       setConnections(updated);
       setIdentity(updated.find((item) => item.identity?.id === id)?.identity ?? next.identity);
-      setPosts(cachedTimeline(stored, `${origin}:${id}`));
+      postsRef.current = cachedTimeline(stored, `${origin}:${id}`);
+      setPosts(postsRef.current);
       setHidden(hiddenPosts(stored, `${origin}:${id}`));
       navigate("/timeline");
     },
@@ -662,6 +744,7 @@ function App() {
       signedOut.current = true;
       markSignedOut(stored, origin);
       setIdentity(null);
+      postsRef.current = [];
       setPosts([]);
       setHidden(new Set());
       navigate("/who-is-here");
@@ -1088,6 +1171,9 @@ function App() {
     // rendition worker is live — surfaces then load rendition URLs directly
     // (srcset/sizes, video poster/src) and the browser cache answers repeats.
     mediaTransport,
+    // PORCH-081 ac-4: the catch-up note's resolve — one member-initiated
+    // refresh when the replay window was exceeded, never a poll cycle.
+    refreshFeeds: () => reload(),
   }), [hidden, connections, active, identity, navigate, reload, posts, network, mediaTransport]);
 
   const data = {
@@ -1101,6 +1187,10 @@ function App() {
     mediaRoot: owner.mediaRoot,
     reauth: owner.reauth,
     server: { name: active?.name || "Your family's Porchlight", url: active?.url || origin }, offline, membershipEnded,
+    // PORCH-081 ac-4: the REST catch-up note's state — a replay older than
+    // the hub's retained event window. Rendered, never silent; resolving
+    // rides the next catch-up or the member's own refresh action.
+    behind,
     // PORCH-060: the home-screen display-mode fact (capability-first
     // detection for the notification settings states; screen files never
     // matchMedia — the mode-branch guardrail carries).

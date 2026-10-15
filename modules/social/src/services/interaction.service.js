@@ -107,12 +107,12 @@ export class InteractionService {
       detail: { postId: payload.postId, commentId: comment._id },
     });
     // PORCH-047: reply.created to the origin room — content-only payload
-    // (the comment view; parentId rides it for nested replies). The
-    // attach-time preview metadata rides content only. No vote writes emit
+    // (the comment view; parentId rides it for nested replies). PORCH-081
+    // client parity: attribution and the attach-time preview ride the
+    // envelope exactly as they ride a REST slice row, so the arriving reply
+    // renders as-given without a follow-up read. No vote writes emit
     // events: votes modulate prominence internally only.
-    const commentContent = await this.previews
-      ? (await this.previews.withViews([InteractionService.commentView(comment)], networkId))[0]
-      : InteractionService.commentView(comment);
+    const commentContent = await this.#replyContent(comment, networkId);
     await this.realtime?.published({
       networkId,
       type: "reply.created",
@@ -123,7 +123,7 @@ export class InteractionService {
       groupId: session.post.groupId ?? null,
       content: commentContent,
     });
-    return { comment: (await this.#withAttribution([commentContent], networkId))[0] };
+    return { comment: commentContent };
   }
 
   /**
@@ -321,6 +321,19 @@ export class InteractionService {
    * identity-plane avatar meta passed through verbatim, never mutated here;
    * mention names stay name-only.
    */
+  /**
+   * The decorated reply view (attach-time previews + attribution) shared by
+   * the write response and the realtime envelope (PORCH-034, PORCH-052):
+   * the arriving reply (PORCH-081) renders as-given, exactly like a REST
+   * slice row. Content only — no count-bearing field rides it.
+   */
+  async #replyContent(comment, networkId) {
+    const withPreview = await this.previews
+      ? (await this.previews.withViews([InteractionService.commentView(comment)], networkId))[0]
+      : InteractionService.commentView(comment);
+    return (await this.#withAttribution([withPreview], networkId))[0];
+  }
+
   async #withAttribution(views, networkId) {
     const names = await this.membership.attributionNames({
       networkId,

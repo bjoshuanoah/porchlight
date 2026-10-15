@@ -390,6 +390,18 @@ async function createPost(setup: HubSetup, member: Member, body: string): Promis
   return (res.body.post as Json)._id as string;
 }
 
+/** A real signed reply write at the origin (interaction service). */
+async function createReply(setup: HubSetup, member: Member, postId: string, body: string): Promise<string> {
+  const payload = { postId, body, parentId: null, mentions: [], previewId: null };
+  const res = await call(setup.port, `/api/social/posts/${postId}/comments`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${member.token}` },
+    body: JSON.stringify({ payload, signature: signPayload(member.device, payload) }),
+  });
+  assert.equal(res.status, 200);
+  return (res.body.comment as Json)._id as string;
+}
+
 /** Real-time delivery races the event loop and the wire, not test time; a
  * short settle is the only honest negative-signal window here (documented
  * exception: no deterministic control over socket arrival). */
@@ -466,6 +478,30 @@ test("ac-1 isolation + ac-2 payload privacy over the wire: origin A's events rea
   assert.equal(((ownerC.events.at(-1) as Json)?.content as Json)?.emoji, "❤️");
   await settle();
   assert.equal(otherC.events.length, 0);
+});
+
+test("PORCH-081 client parity: the envelopes carry what a REST read carries — attribution on post.created and reply.created, no follow-up read needed", async (t) => {
+  const hub = realtimeTestHub();
+  t.after(hub.close);
+  const port = await hub.port;
+  const setup = await admitFounder(hub, port);
+  const a2 = await admitSecondMember(setup, "dev_a2", "Susan");
+  const reader = connectSocket(port, { networkId: setup.networkId, token: setup.owner.token });
+  await connectAll([reader], t);
+
+  const postId = await createPost(setup, a2, "Attributed arrival");
+  assert.equal(((await reader.waitEvents(1)) as Json).type, "post.created");
+  const postContent = ((reader.events.at(-1) as Json)?.content ?? {}) as Json;
+  assert.equal(typeof postContent.authorName, "string");
+  assert.ok((postContent.authorName as string).length > 0, "the arriving post carries the family-facing name (no count-bearing field: as-given only)");
+  assert.ok(!("deviceSignature" in postContent));
+
+  await createReply(setup, setup.owner, postId, "Reply arrives attributed");
+  assert.equal(((await reader.waitEvents(2)) as Json).type, "reply.created");
+  const replyContent = ((reader.events.at(-1) as Json)?.content ?? {}) as Json;
+  assert.equal(replyContent.body, "Reply arrives attributed");
+  assert.equal(typeof replyContent.authorName, "string");
+  assert.ok(replyContent.parentId === null, "the reply view rides parentId for the slice merge");
 });
 
 test("ac-4 enforcement over the wire: cross-origin subscribe refused, missing token refused, revocation closes the live subscription immediately", async (t) => {
