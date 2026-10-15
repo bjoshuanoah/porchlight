@@ -97,6 +97,27 @@ test("loadVapidKeys heals a stored non-DNS subject on boot — keypair and creat
   assert.equal(logs2.some((line) => line.includes("vapid.subject.migrated")), false, "a healed boot does not re-migrate");
 });
 
+test("the heal line lands on stdout when no sink is wired — the deployed-hub shape", (t) => {
+  const home = tempHome();
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const stale = webpush.generateVAPIDKeys();
+  mkdirSync(join(home, "state"), { recursive: true });
+  writeFileSync(join(home, "state", "vapid-keys.json"), JSON.stringify({ subject: "mailto:owner@porchlight.hub", ...stale, createdAt: "2026-10-12T15:37:08.209Z" }, null, 2), { mode: 0o600 });
+  const written: string[] = [];
+  const original = console.log;
+  console.log = (line: string) => written.push(line);
+  try {
+    // No log sink argument: the deployed boot's loadVapidKeys call shape.
+    loadVapidKeys(home, "https://noah-test-2.porch.love");
+  } finally {
+    console.log = original;
+  }
+  const migrated = written.find((line) => line.includes("vapid.subject.migrated"));
+  assert.ok(migrated, "the heal event survives with no sink wired (stdout → logs/hub.log)");
+  assert.ok(migrated.includes('"kind":"push"'), "the fallback line carries the push kind");
+  assert.ok(migrated.includes('"to":"mailto:owner@noah-test-2.porch.love"'));
+});
+
 test("the hub's subscription route serves the VAPID public key from runtime setup (ac-5)", async (t) => {
   const home = tempHome();
   t.after(() => rmSync(home, { recursive: true, force: true }));
