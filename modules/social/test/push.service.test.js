@@ -734,6 +734,29 @@ test("ac-4: transient failure takes one bounded retry then drop; a recovered ret
   assert.equal((await recoveringFx.subs.find({})).length, 1, "the subscription survives the recovered retry");
 });
 
+test("ac-4: a relay reject's status and reason ride the drop line — the delivery discriminator", async () => {
+  // Apple's relay class rejects with 403 and a JSON reason body
+  // ({"reason":"BadJwtToken"}): the drop line must carry both, or a live
+  // hub under test stays undiagnosable (Oct 15 finding).
+  const sender = async () => ({ statusCode: 403, body: '{"reason":"BadJwtToken"}' });
+  const logLines = [];
+  const { mod, devs, tokens } = await pushFixture({ sender, log: (line) => logLines.push(line) });
+  await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  await mod.interactionService.react({
+    accessToken: tokens.bob,
+    payload: { postId: post._id, emoji: "❤️" },
+    signature: devs.bob.signPayload({ postId: post._id, emoji: "❤️" }),
+  });
+  const dropped = logLines.find((line) => line.includes("push.send.dropped"));
+  assert.ok(dropped, "the drop lands in the local structured log");
+  assert.ok(dropped.includes('"statusCode":403'), "the drop line carries the relay status");
+  assert.ok(dropped.includes("BadJwtToken"), "the drop line carries the relay's own reason");
+  assert.ok(dropped.includes(`"identityId":"${ALICE}"`));
+  // The 403 class never expires the row: the deliverable machinery state
+  // (the bad-subject fix heals it) must survive for the next send.
+});
+
 test("ac-4: delivery outcomes land only in the local structured log — a sender crash never fans out", async () => {
   const crashy = async () => {
     throw new Error("tls hang");
