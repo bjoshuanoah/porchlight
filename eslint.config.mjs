@@ -14,8 +14,12 @@ export default tseslint.config(
       // Ephemeral test workspace: apps/web's brand-lockup test builds and
       // removes it mid-run; turbo runs lint and test concurrently, and an
       // eslint traversal inside its brief lifetime fails with a scandir
-      // ENOENT race (CI flake observed on clean runners).
+      // ENOENT race (CI flake observed on clean runners). The test's
+      // sibling code stub (.lockup-stub.mjs) rides the same brief lifetime
+      // and the same race (seen as an eslint "open /apps/web/test/
+      // .lockup-stub.mjs" ENOENT on a clean runner) — ignored as well.
       "apps/web/test/.tmp-lockup/**",
+      "apps/web/test/.lockup-stub.mjs",
     ],
   },
   js.configs.recommended,
