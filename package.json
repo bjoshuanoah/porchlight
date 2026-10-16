@@ -1,7 +1,7 @@
 {
   "name": "porchlight",
-  "version": "0.3.0",
-  "description": "Porchlight public monorepo \u2014 one codebase, two separable domains (identity, social).",
+  "version": "0.4.0",
+  "description": "Porchlight public monorepo — one codebase, two separable domains (identity, social).",
   "license": "MIT",
   "author": "Brian Noah",
   "engines": {
