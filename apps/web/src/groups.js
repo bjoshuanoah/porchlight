@@ -37,6 +37,20 @@ export function composableGroups(groups = [], did = null) {
 }
 
 /**
+ * The compose card's pre-set location (PORCH-096, Brian Oct 16 2026):
+ * opening from a group surface pre-populates that group; opening from the
+ * main timeline pre-populates the general timeline. The target is always
+ * visible and pre-set, never implicit — and a context target outside the
+ * author's reach (a group they do not belong to, a foreign network) falls
+ * back to the general timeline rather than pre-setting a target the
+ * option law does not offer.
+ */
+export function composePresetLocationId(target = null, composable = [], did = null) {
+  const ids = new Set(composableGroups(composable, did).map(idOf));
+  return target != null && ids.has(String(target)) ? String(target) : "";
+}
+
+/**
  * Self-serve join (PORCH-068 lifecycle ruling): a public group is joinable
  * by any member of the network with their own act — no approval flow —
  * unless a past removal's blocked entry stands; the manager lifts it.

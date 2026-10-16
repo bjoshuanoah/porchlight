@@ -131,6 +131,19 @@ function App() {
   const identityEndedRef = useRef(false);
   const [notice, setNotice] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
+  // PORCH-096 (Brian, Oct 16 2026, compose pre-population ruling): the
+  // compose card pre-populates its location control from context — the
+  // surface the member composes from pre-sets the target. A group page's
+  // surface carries that group (the AppBar/mobile compose and the group's
+  // own "+ New post" entry alike); everywhere else opens on the general
+  // timeline. The target is always visible and pre-set, never implicit.
+  const [composeTarget, setComposeTarget] = useState('');
+  // /groups/<id> is the one route where the open surface names a group.
+  const composeTargetOfRoute = (path) => {
+    const match = /^\/groups\/([^/?#]+)/.exec(path ?? '');
+    return match ? decodeURIComponent(match[1]) : '';
+  };
+  const openCompose = () => { setComposeTarget(composeTargetOfRoute(route)); setComposeOpen(true); };
   // PORCH-051: the Add to Home Screen machinery. The captured
   // beforeinstallprompt is stored, never discarded; the dismissal window and
   // the standalone launch check ride this origin's browser-local storage
@@ -216,7 +229,15 @@ function App() {
   }, []);
   const navigate = useCallback((path) => {
     const next = path.startsWith("/") ? path : `/${path}`;
-    if (next === "/compose") { setComposeOpen(true); return; }
+    if (next === "/compose") {
+      // PORCH-096: the compose entry captures the surface it was opened
+      // from — a group page pre-sets that group, anywhere else the general
+      // timeline. window.location.pathname is the surface at open time
+      // (the dialog itself never navigates).
+      setComposeTarget(composeTargetOfRoute(window.location.pathname));
+      setComposeOpen(true);
+      return;
+    }
     if (window.location.pathname !== next) scrollMemoryRef.current.note(window.location.pathname, window.scrollY);
     window.history.pushState({}, "", next);
     setRoute(next);
@@ -1502,7 +1523,7 @@ function App() {
         <Lockup onClick={() => navigate("/timeline")} size={30} sx={{ cursor: "pointer", flex: { xs: 1, lg: 0 }, minWidth: { lg: 180 } }} />
         <Stack direction="row" spacing={3} alignItems="center" sx={{ display: { xs: "none", lg: "flex" }, flex: 1, justifyContent: "center" }}>
           {primary.map((path, index) => index === 2
-            ? <IconButton key={path} aria-label="Compose" onClick={() => setComposeOpen(true)} sx={{ bgcolor: "secondary.main", color: "var(--porch-amber-ink)", boxShadow: "var(--porch-shadow-compose)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
+            ? <IconButton key={path} aria-label="Compose" onClick={openCompose} sx={{ bgcolor: "secondary.main", color: "var(--porch-amber-ink)", boxShadow: "var(--porch-shadow-compose)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
             : <Button key={path} onClick={() => navigate(path)} sx={{ color: route.startsWith(path) ? "primary.main" : "text.secondary" }}>{labels[index]}</Button>)}
         </Stack>
         {/* PORCH-076: the header user switcher rides the shell header's top
@@ -1521,14 +1542,14 @@ function App() {
       {page}
     </Container>
     {!frontDoor && <Paper elevation={0} sx={{ display: { xs: "block", lg: "none" }, position: "fixed", left: 0, bottom: 0, right: 0, zIndex: 10, borderTop: "1px solid", borderColor: "divider", pb: "env(safe-area-inset-bottom)" }}>
-      <BottomNavigation showLabels value={primary.findIndex((path) => route.startsWith(path))} onChange={(_event, value) => value === 2 ? setComposeOpen(true) : navigate(primary[value])} sx={{ minHeight: 68 }}>
+      <BottomNavigation showLabels value={primary.findIndex((path) => route.startsWith(path))} onChange={(_event, value) => value === 2 ? openCompose() : navigate(primary[value])} sx={{ minHeight: 68 }}>
         {primary.map((path, index) => <BottomNavigationAction key={path} label={labels[index]} icon={icons[index]}
           sx={{ ...(index === 2
             ? { "& .MuiSvgIcon-root": { bgcolor: "secondary.main", color: "var(--porch-amber-ink)", width: 52, height: 52, p: 1.5, borderRadius: "50%", transform: "translateY(-8px)", boxShadow: "var(--porch-shadow-compose)" } }
             : { minWidth: 44 }), ...(route.startsWith(path) ? { "&::before": { content: '""', position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", width: 24, height: 2, borderRadius: 1, bgcolor: "secondary.main" } } : {}) }} />)}
       </BottomNavigation>
     </Paper>}
-    <Compose open={composeOpen} onClose={() => setComposeOpen(false)} {...props} />
+    <Compose open={composeOpen} onClose={() => setComposeOpen(false)} target={composeTarget} {...props} />
     <Dialog open={newDevices.length > 0 && newDevices[0]?.did === identity?.id} onClose={() => setNewDevices((pending) => pending.slice(1))}>
       <DialogTitle>A new device was just connected</DialogTitle>
       <DialogContent><Typography>{newDevices[0]?.label || "A device"} was connected to your place in this family. If you do not recognize it, remove it now.</Typography></DialogContent>
