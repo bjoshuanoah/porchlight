@@ -3,8 +3,13 @@
 // through the SAME reflection routine, so a reaction added from a card shows
 // identically in the post detail and never creates a divergent surface.
 // Only the emoji actually present render; rows stay per-member (ownDid marks
-// the member's own row for the warm highlight exclusively) and no count is
-// ever derived — the rendering surface dedupes emoji values from the rows.
+// the member's own row for the warm highlight exclusively). PORCH-090
+// amends the render contract (Brian, Oct 15, 2026): the chip now carries the
+// PEOPLE count derived at render from the per-member rows (only where more
+// than one member holds the emoji) and the who-reacted reveal lists those
+// rows in the served order — the per-member one-row-per-emoji rule makes
+// the row count exactly the distinct-people count; nothing numeric is
+// stored or wire-served.
 
 // Loader tolerance: the hub returns a reaction row list; anything without an
 // emoji value never participates in rendering.
@@ -51,4 +56,121 @@ export function optimisticToggle(base, { emoji, ownDid, isOwn }) {
     isOwn: isOwn ? true : false,
     reaction: isOwn ? null : { _id: `local:${emoji}`, createdAt: new Date().toISOString() },
   });
+}
+
+// The chip model (PORCH-090): per emoji, the distinct-member reactor rows in
+// the served order (one row per member per emoji makes the row list exactly
+// the distinct-people list). Rows carry their derivation key: an unattributed
+// row (a live-arrived row the hub serves as member + emoji only) keys on its
+// row id, never on an index, so a merged row cannot double-count an unnamed
+// member whose row lands again attributed. The count is the people count,
+// derived at render only — it never attaches to a chip below one member and
+// never ships on any payload (PORCH-091's wire law).
+export function reactionChips(rows) {
+  const byEmoji = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row?.emoji) continue;
+    let chip = byEmoji.get(row.emoji);
+    if (!chip) { chip = { emoji: row.emoji, reactors: [], seen: new Set() }; byEmoji.set(row.emoji, chip); }
+    const did = String(row.memberDid ?? '');
+    const key = did || `row:${row._id ?? row.createdAt ?? row.emoji}`;
+    if (chip.seen.has(key)) continue;
+    chip.seen.add(key);
+    chip.reactors.push(row);
+  }
+  return [...byEmoji.values()];
+}
+
+// The who-reacted reveal gestures (PORCH-090): the timing half of the
+// hover/long-press/focus contract as one injectable-timer machine, so the
+// intent, long-press, grace, and suppress windows are unit-testable without
+// a browser.
+//   - Pointer: hover opens after the ~300ms intent delay; the pointer
+//     leaving the chip arms a short grace so chip→popover movement never
+//     closes it; the popover paper holds it open (a paper leave closes).
+//   - Touch: pressStart arms the ~500ms long-press; when it fires the
+//     reveal opens AND the release click is consumed (the pressEnd → click
+//     handoff), so the reveal never toggles; the suppression self-clears so
+//     the member's next tap is a plain toggle again.
+//   - Keyboard: focus opens through the same intent delay once the caller's
+//     recency gate rules out a tap/pointer focus; escape, blur, and the
+//     outside tap close. The focus ring itself stays theme-layer-only
+//     (PORCH-035).
+// No path here ever writes a reaction row — the toggle is the chip's click,
+// and only when click() says it is plain.
+export function revealMachine({
+  open,
+  close = () => {},
+  overPopover = () => false,
+  intentMs = 300,
+  pressMs = 500,
+  graceMs = 140,
+  settleMs = 500,
+  timers = { setTimeout, clearTimeout },
+} = {}) {
+  const state = { intent: null, press: null, grace: null, settle: null, suppress: false, anchor: null };
+  const clear = (slot) => {
+    if (state[slot]) { timers.clearTimeout(state[slot]); state[slot] = null; }
+  };
+  const silence = () => {
+    for (const slot of ['intent', 'press', 'grace', 'settle']) clear(slot);
+    state.suppress = false;
+  };
+  return {
+    // A plain tap; false only while a long-press release is being consumed.
+    click() {
+      if (state.suppress) {
+        state.suppress = false;
+        clear('settle');
+        return false;
+      }
+      return true;
+    },
+    hoverStart(emoji, anchor, event) {
+      if (event && event.pointerType && event.pointerType !== 'mouse') return;
+      if (state.grace) clear('grace');
+      if (state.intent || state.press) return;
+      state.anchor = anchor;
+      state.intent = timers.setTimeout(() => {
+        state.intent = null;
+        open({ emoji, anchor: state.anchor });
+      }, intentMs);
+    },
+    hoverLeave() {
+      clear('intent');
+      if (!state.anchor || state.grace) return;
+      state.grace = timers.setTimeout(() => {
+        state.grace = null;
+        if (!overPopover()) { state.anchor = null; silence(); close(); }
+      }, graceMs);
+    },
+    paperEnter() { clear('grace'); },
+    paperLeave() {
+      silence();
+      state.anchor = null;
+      close();
+    },
+    pressStart(emoji, anchor) {
+      if (state.grace) clear('grace');
+      if (state.press || state.intent) return;
+      state.anchor = anchor;
+      state.press = timers.setTimeout(() => {
+        state.press = null;
+        state.suppress = true;
+        open({ emoji, anchor });
+      }, pressMs);
+    },
+    pressEnd() {
+      if (state.press) { clear('press'); return false; }
+      if (state.suppress) {
+        state.settle = timers.setTimeout(() => {
+          state.settle = null;
+          state.suppress = false;
+        }, settleMs);
+        return true;
+      }
+      return true;
+    },
+    silence,
+  };
 }

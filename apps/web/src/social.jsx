@@ -2,7 +2,7 @@ import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState, us
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
-  ListItemText, Menu, MenuItem, Paper, Popover, Select, Snackbar, Stack, Switch, TextField, Tooltip, Typography,
+  ListItemText, Menu, MenuItem, Paper, Popover, Popper, Select, Snackbar, Stack, Switch, TextField, Tooltip, Typography,
 } from '@mui/material';
 import {
   AddReactionOutlined, ArrowDownwardOutlined, ArrowUpwardOutlined, ChevronLeft, ChevronRight,
@@ -23,7 +23,7 @@ import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 // initials stay the metas-less fallback.
 import { AvatarFace, useAvatarFaceUrl } from './avatar-face.js';
 import { LampMark } from './brand.jsx';
-import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle } from './reactions.js';
+import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle, reactionChips, revealMachine } from './reactions.js';
 import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
 import {
   groupMenuRows, groupToggleLine, resolvedGroupNotification,
@@ -608,16 +608,51 @@ function Media({ post, actions, detail = false }) {
   </>;
 }
 
+// The glance popover's one content view (PORCH-090): faces beside family
+// display names, the member's own row marked — the served reactor rows in
+// the server's order (never a client-guessed roster, never an inspection
+// panel, never an engagement surface: names, faces, nothing else). A row the
+// hub could not attribute yet (a live arrival served content-only) renders
+// the plain member fallback the directory renders, until the next attributed
+// read replaces it in place.
+export function ReactionReveal({ chip, ownDid, data, post, actions }) {
+  return <Stack role="list" aria-label={`Who reacted with ${chip.emoji}`} spacing={0.75} sx={{ minWidth: 150, maxWidth: 260 }}>
+    {chip.reactors.map((row) => {
+      const isOwn = Boolean(ownDid) && String(row.memberDid ?? '') === ownDid;
+      const name = isOwn
+        ? (data.identity?.name || 'You')
+        : (row.memberName ?? memberName(row.memberDid, data));
+      if (!(row.memberDid ?? row._id ?? name)) return null;
+      return <Stack key={String(row.memberDid ?? row._id ?? name)} role="listitem" direction="row" spacing={1} alignItems="center" data-testid="reaction-reveal-row">
+        <AvatarFace origin={post?.origin ?? originOf(post)} did={row.memberDid ?? null} metas={row.memberAvatar ?? null} kind="header"
+          load={actions?.loadAvatarRendition} sx={{ width: 24, height: 24, fontSize: 11 }}>
+          {(name || 'Member').trim().charAt(0).toUpperCase()}
+        </AvatarFace>
+        <Typography variant="caption" color="text.primary" fontWeight={isOwn ? 600 : 400} sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {name}{isOwn ? ' (you)' : ''}
+        </Typography>
+      </Stack>;
+    })}
+  </Stack>;
+}
+
 // Reaction bar (PORCH-036): a visual emoji picker opens from the small
 // add-reaction smile control — no step ever asks the member to type, paste,
-// or know an emoji string. Only the emoji actually present render, with no
-// counts and no who-reacted inspection surface; per-member rows identify
-// the member's own reaction for the warm highlight exclusively. Tapping an
-// emoji the member already reacted with clears it and tapping any other
-// adds it: change or clear, never an error (ac-2, ac-3). The row reflection
-// lives in the shared reactions module, so the timeline card and the post
-// detail reflect the same origin conversation through one routine (PORCH-038).
-function PresentReactions({ post, data, actions, reactionState, spacingY = 2, actionBar = null }) {
+// or know an emoji string. Only the emoji actually present render, as given;
+// per-member rows identify the member's own reaction for the warm highlight
+// exclusively. Tapping an emoji the member already reacted with clears it
+// and tapping any other adds it: change or clear, never an error (ac-2,
+// ac-3). The row reflection lives in the shared reactions module, so the
+// timeline card and the post detail reflect the same origin conversation
+// through one routine (PORCH-038). Amended PORCH-090 (Brian, Oct 15, 2026 —
+// this ruling supersedes the Oct 8 no-counts/no-inspection line for reaction
+// chips only): every rendered chip is now a live toggle (click joins,
+// clicking again leaves only the member's own row), the PEOPLE count derives
+// at render where more than one member holds the emoji, and hover
+// (desktop) / long-press (touch) reveals that emoji's reactors — the vote
+// surfaces carry nothing new and expander/media quantities stay separate
+// rules.
+export function PresentReactions({ post, data, actions, reactionState, spacingY = 2, actionBar = null }) {
   // Controlled mode (PORCH-041 ac-4): the detail card and the conversation
   // column reflect ONE origin conversation — when reactionState is provided
   // both bars render the PostDetail owner's rows and every toggle lands in
@@ -684,12 +719,86 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2, ac
       () => setRows(before),
     );
   };
-  const emojis = [...new Set((rows ?? []).map((row) => row.emoji))].map((emoji) => {
-    const ownEmoji = own.has(emoji);
-    return <Chip key={emoji} label={emoji} size="small" aria-pressed={ownEmoji}
-      aria-label={ownEmoji ? `Your reaction ${emoji}` : `Reaction ${emoji}`}
+  // Who-reacted reveal (PORCH-090): a rendered chip is a live toggle AND a
+  // glance reveal. ONE non-modal Popper per bar, anchored to the chip — a
+  // modal Popover's backdrop would force-exit the covered chip and fight
+  // the pointer (oscillation), so dismissal rides the machine's grace, the
+  // paper's own leave, Escape, and the outside pointerdown below. Rows never
+  // change through any reveal path: only chipClick toggles.
+  const [reveal, setReveal] = useState(null);
+  const paperRef = useRef(null);
+  const machineRef = useRef(null);
+  if (!machineRef.current) {
+    machineRef.current = revealMachine({
+      open: ({ emoji, anchor }) => setReveal({ emoji, anchor }),
+      close: () => setReveal(null),
+      overPopover: () => Boolean(paperRef.current?.matches(':hover')),
+    });
+  }
+  const machine = machineRef.current;
+  const closeReveal = () => { machine.silence(); setReveal(null); };
+  const chips = reactionChips(rows ?? []);
+  const revealChip = reveal ? chips.find((chip) => chip.emoji === reveal.emoji) ?? null : null;
+  // Focus-gate (PORCH-090, riding PORCH-035): no per-screen focus styling
+  // exists anywhere (the theme layer owns every ring), so keyboard-vs-pointer
+  // is decided by the pointer's recency — a chip focused by a tap or click
+  // (within the intent window) never opens the reveal; only focus with no
+  // fresh pointer (Tab) does. The toggle itself stays the click.
+  const lastPointerRef = useRef(0);
+  // The reveal lists rows; if the emoji's rows emptied (every reactor left),
+  // the chip is gone and the popover has nothing to answer.
+  useEffect(() => {
+    if (reveal && !revealChip) closeReveal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rides the open reveal's chip presence
+  }, [Boolean(reveal), revealChip]);
+  // Escape and the outside pointerdown close the glance reveal only — they
+  // never mutate the chip (a closed reveal leaves every row exactly as it
+  // was). Re-armed per open reveal; the chip and paper contain their taps.
+  useEffect(() => {
+    if (!reveal) return undefined;
+    const onEscape = (event) => { if (event.key === 'Escape') closeReveal(); };
+    const onOutside = (event) => {
+      if (reveal.anchor && reveal.anchor.contains(event.target)) return;
+      if (paperRef.current && paperRef.current.contains(event.target)) return;
+      closeReveal();
+    };
+    document.addEventListener('keydown', onEscape);
+    document.addEventListener('pointerdown', onOutside, true);
+    return () => {
+      document.removeEventListener('keydown', onEscape);
+      document.removeEventListener('pointerdown', onOutside, true);
+    };
+  }, [Boolean(reveal), reveal?.emoji, reveal?.anchor]);
+  // The machine's in-flight windows die with the bar (timers firing after
+  // unmount would touch state a member left behind).
+  useEffect(() => () => machine.silence(), [machine]);
+  const chipClick = (chip) => {
+    // A consumed long-press release (the machine says no) is the reveal
+    // never toggling (ac-3); anything else is the plain tap toggle (ac-1).
+    if (!machine.click()) return;
+    toggle(chip.emoji, own.has(chip.emoji));
+  };
+  const chipList = chips.map((chip) => {
+    const ownEmoji = own.has(chip.emoji);
+    const peopleCount = chip.reactors.length;
+    return <Chip key={chip.emoji} size="small" component="button" type="button"
+      label={<>{chip.emoji}{peopleCount > 1 && <Box component="span" sx={{ ml: 0.25, fontSize: 13, fontWeight: 600, lineHeight: 1, color: 'inherit' }}>{peopleCount}</Box>}</>}
+      aria-pressed={ownEmoji}
+      aria-label={peopleCount > 1 ? `Reaction ${chip.emoji}, ${peopleCount} people` : ownEmoji ? `Your reaction ${chip.emoji}` : `Reaction ${chip.emoji}`}
+      aria-haspopup="dialog"
+      onClick={() => chipClick(chip)}
+      onPointerEnter={(event) => machine.hoverStart(chip.emoji, event.currentTarget, event)}
+      onPointerLeave={(event) => { if (event.pointerType === 'mouse') machine.hoverLeave(); }}
+      onTouchStart={(event) => machine.pressStart(chip.emoji, event.currentTarget, event)}
+      onTouchEnd={() => machine.pressEnd()}
+      onTouchCancel={() => machine.pressEnd()}
+      onContextMenu={(event) => event.preventDefault()}
+      onPointerDown={() => { lastPointerRef.current = Date.now(); }}
+      onFocus={(event) => { if (Date.now() - lastPointerRef.current > 300) machine.hoverStart(chip.emoji, event.currentTarget, undefined); }}
+      onBlur={closeReveal}
       sx={{
-        minHeight: 40, minWidth: 40, fontSize: 20,
+        minHeight: 40, minWidth: 40, fontSize: 20, cursor: 'pointer',
+        userSelect: 'none', WebkitTouchCallout: 'none',
         ...(ownEmoji ? { bgcolor: 'porchlight.amberSoft', border: '1px solid', borderColor: 'porchlight.amber', color: 'text.primary' } : {}),
       }} />;
   });
@@ -698,7 +807,7 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2, ac
       sx={{ mt: spacingY, ...(actionBar ? { justifyContent: 'flex-start', gap: '8px' } : {}) }}
       aria-label={actionBar ? 'Post actions' : 'Reactions from your family'}>
       {actionBar}
-      {!actionBar && emojis}
+      {!actionBar && chipList}
       <Tooltip title="React"><span><IconButton aria-label={actionBar ? 'React' : 'Add a reaction'}
         aria-haspopup="dialog" disabled={operation.busy || Boolean(data?.offline)}
         onClick={(event) => setAnchor(event.currentTarget)}
@@ -706,11 +815,20 @@ function PresentReactions({ post, data, actions, reactionState, spacingY = 2, ac
         <AddReactionOutlined fontSize="small" />
       </IconButton></span></Tooltip>
     </Stack>
-    {actionBar && emojis.length > 0 && <Stack direction="row" spacing={1} flexWrap="wrap"
-      aria-label="Reactions from your family" sx={{ mt: photoFirst.spacing.actionsReactions / 8 }}>{emojis}</Stack>}
+    {actionBar && chipList.length > 0 && <Stack direction="row" spacing={1} flexWrap="wrap"
+      aria-label="Reactions from your family" sx={{ mt: photoFirst.spacing.actionsReactions / 8 }}>{chipList}</Stack>}
     {anchor && <Suspense fallback={<CircularProgress size={20} />}>
       <EmojiPicker open anchorEl={anchor} onClose={() => setAnchor(null)} own={own} onToggle={toggle} busy={operation.busy} />
     </Suspense>}
+    {reveal && revealChip && <Popper open placement="bottom" anchorEl={reveal.anchor}
+      modifiers={[{ name: 'offset', options: { offset: [0, 6] } }]} sx={{ zIndex: 1300 }}>
+      <Paper elevation={0} ref={paperRef}
+        onPointerEnter={() => machine.paperEnter()}
+        onPointerLeave={(event) => { if (event.pointerType === 'mouse') closeReveal(); }}
+        sx={{ p: 1, px: 1.25, borderRadius: '12px', border: `1px solid ${cssVars.border}`, boxShadow: cssVars.shadowModal, cursor: 'default' }}>
+        <ReactionReveal chip={revealChip} ownDid={ownDid} data={data} post={post} actions={actions} />
+      </Paper>
+    </Popper>}
     {operation.error && <Typography variant="caption" color="error" sx={{ width: '100%' }}>{operation.error}</Typography>}
   </>;
 }
