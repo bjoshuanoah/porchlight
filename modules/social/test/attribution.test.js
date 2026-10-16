@@ -16,7 +16,8 @@ const OTHER = "net_other";
  * membership — on the feed (base, group, ranked, search), post detail,
  * reply threads, and album items — for every member's perspective,
  * including self-attribution. Nothing is frozen on the documents, votes
- * and reactions surfaces stay untouched, and a DID that holds no active
+ * surfaces stay untouched, PORCH-091: the reaction origin reads carry
+ * reactor attribution (name + avatar), and a DID that holds no active
  * membership at the origin renders nameless.
  */
 
@@ -201,8 +202,18 @@ test("ac-4: revoked membership loses attribution; reactions and votes render exa
   assert.equal(after.authorName, null);
 
   // Reactions stay as-given and votes stay undiscoverable after the revocation.
+  // PORCH-091: the origin read now carries reactor attribution — SUSAN's row
+  // attributes her (name + avatar) because her membership stays active; a
+  // revoked member's row would fall back to the nameless shape.
   const reactionsAfter = (await fx.interactions.reactionsFor({ accessToken: fx.susanToken, postId: post._id })).reactions;
-  assert.deepEqual(reactionsAfter, [{ _id: reactions[0]._id, memberDid: SUSAN, emoji: "🌻", createdAt: reaction.createdAt }]);
+  assert.deepEqual(reactionsAfter, [{
+    _id: reactions[0]._id,
+    memberDid: SUSAN,
+    emoji: "🌻",
+    createdAt: reaction.createdAt,
+    memberName: "Susan Hale",
+    memberAvatar: avatarMetas[SUSAN],
+  }]);
   const threadAfter = (await fx.interactions.commentThread({ accessToken: fx.susanToken, postId: post._id })).comments;
   assert.deepEqual(
     threadAfter.map((row) => ({ id: row._id, authorName: row.authorName })),

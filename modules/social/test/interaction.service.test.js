@@ -156,8 +156,10 @@ test("ac-3: the member can clear or swap a reaction, others render untouched", a
   const cleared = await interactions.unreact({ accessToken: familyToken, payload: starPayload, signature: dev.signPayload(starPayload) });
   assert.equal(cleared.removed, true);
   const afterClear = await interactions.reactionsFor({ accessToken: familyToken, postId: post._id });
+  // PORCH-091: the origin read carries reactor attribution; this fixture
+  // wires no identity name resolver, so the row renders the nameless shape.
   assert.deepEqual(afterClear.reactions, [
-    { _id: juneRow._id, memberDid: JUNE, emoji: "😂", createdAt: juneRow.createdAt },
+    { _id: juneRow._id, memberDid: JUNE, emoji: "😂", createdAt: juneRow.createdAt, memberName: null, memberAvatar: null },
   ]);
 
   // Swap = remove one, add another: a distinct emoji is a fresh reaction.
@@ -191,6 +193,65 @@ test("ac-3: the member can clear or swap a reaction, others render untouched", a
   // Counters recount after removal: SUSAN's sun and JUNE's laugh remain.
   const stored = await collections.posts.findOne({ _id: post._id });
   assert.equal(stored.interactionCounters.reactionCount, 2);
+});
+
+test("PORCH-091 ac-1: the reaction read attributes reactors (name + avatar); ac-3: the event keeps member + emoji only", async () => {
+  const avatarMetas = {
+    [SUSAN]: {
+      header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "s".repeat(64) },
+      chooser: { kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: "S".repeat(64) },
+    },
+  };
+  const names = { [SUSAN]: "Susan Hale" };
+
+  const fx = fixture({
+    networkIds: [FAMILY, OTHER],
+    memberNames: async (dids) => dids.map((did) => ({ did, displayName: names[did] ?? null, avatar: avatarMetas[did] ?? null })),
+  });
+  const dev = device("dev_s");
+  const juneDev = device("dev_j");
+  const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
+  const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
+  const postPayload = { type: "text", body: "chips" };
+  const post = (await fx.posts.create({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) })).post;
+
+  // A live origin channel records what reaction.applied delivers.
+  const seen = [];
+  await fx.realtime.subscribe({ token: familyToken, networkId: FAMILY, channel: { id: "ch_s", emit: (envelope) => seen.push(envelope), close: () => {} } });
+
+  // Same emoji, two members: one distinct reaction each — the rows the
+  // per-member rule guarantees are exactly the distinct-people count.
+  for (const [member, token] of [[SUSAN, familyToken], [JUNE, juneToken]]) {
+    const payload = { postId: post._id, emoji: "🫶" };
+    const written = (await fx.interactions.react({ accessToken: token, payload, signature: member === SUSAN ? dev.signPayload(payload) : juneDev.signPayload(payload) })).reaction;
+    // The write response stays the bare member + emoji row: attribution is
+    // read breadth, never wire-served on the write surface.
+    assert.deepEqual(Object.keys(written).sort(), ["_id", "createdAt", "emoji", "memberDid"]);
+  }
+
+  const reads = (await fx.interactions.reactionsFor({ accessToken: juneToken, postId: post._id })).reactions;
+  // Origin's served order (insertion order), one attributed row per reactor.
+  assert.deepEqual(
+    reads.map((row) => ({ memberDid: row.memberDid, memberName: row.memberName, memberAvatar: row.memberAvatar })),
+    [
+      { memberDid: SUSAN, memberName: "Susan Hale", memberAvatar: avatarMetas[SUSAN] },
+      { memberDid: JUNE, memberName: null, memberAvatar: null },
+    ],
+    "a member the identity plane holds no row for renders the nameless fallback",
+  );
+  assert.deepEqual(Object.keys(reads[0]).sort(), ["_id", "createdAt", "emoji", "memberAvatar", "memberDid", "memberName"], "no count, roster, or aggregate field rides the read");
+  const duplicate = { postId: post._id, emoji: "🫶" };
+  await assert.rejects(
+    () => fx.interactions.react({ accessToken: familyToken, payload: duplicate, signature: dev.signPayload(duplicate) }),
+    (error) => error.code === "E_REACTION_EXISTS",
+  );
+
+  // Live envelope unchanged (ac-3): member + emoji as content only — no
+  // name, no avatar, no count, no roster. One envelope per applied reaction.
+  assert.deepEqual(seen.map((envelope) => envelope.type), ["reaction.applied", "reaction.applied"]);
+  for (const envelope of seen) {
+    assert.deepEqual(Object.keys(envelope.content).sort(), ["_id", "createdAt", "emoji", "memberDid"]);
+  }
 });
 
 test("ac-4: votes are one effective signed vote per member per post, changeable", async () => {
