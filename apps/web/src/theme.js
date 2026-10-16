@@ -16,6 +16,32 @@ import { createTheme } from "@mui/material/styles";
 // ~4.1:1 once on the card surface). No other value moved. Warmth invariant:
 // every dark surface token satisfies red ≥ green ≥ blue (never neutral gray,
 // never blue-shifted).
+// PORCH-095: the boot's mode-invariant brand palette — one navy canvas,
+// both display modes (the boot is a brand moment, not an app surface, per
+// the loading-experience build contract, Brian Oct 16, 2026; the dark
+// charcoal-brown family is for app surfaces and does not govern it). The
+// values ride BOTH token sets (spread above) so the boot consumes custom
+// properties like every other surface, never a screen literal. Contrast of
+// record (WCAG 2.2 AA on the navy canvas): wordmark 17.3:1, status ink
+// 7.2:1, dim frame 3.4:1, lit facet 11.0:1 — pinned in lantern.test.js.
+// The manifest splash reconciliation (PORCH-051 porch-warm vs boot navy)
+// stays recorded as pending Brian's ruling; implemented only on his word.
+const bootTokens = {
+  bootBg: "#0B1622",
+  bootInk: "#FCFAE8",
+  bootStatusInk: "#B3A48B",
+  bootFrame: "#E3D5B8",
+  bootFrameDim: "#8A6420",
+  bootFacet: "#FFBE57",
+  bootCore: "#FCFAE8",
+  bootNode: "#FFD799",
+  bootGlowDim: "rgba(255,190,87,.35)",
+  bootGlowBloom: "rgba(255,190,87,.95)",
+  bootGlowRest: "rgba(255,190,87,.6)",
+  bootGlowHalo: "rgba(255,190,87,.9)",
+};
+
+
 export const lightTokens = {
   page: "#F7F5F0",
   surface: "#FFFFFF",
@@ -39,6 +65,7 @@ export const lightTokens = {
   // Ink that sits on amber fills (compose circle, current-step): navy in
   // light, the dark ink in dark — verified ≥4.5:1 against both ambers.
   amberInk: "#10243A",
+  ...bootTokens,
 };
 
 export const darkTokens = {
@@ -64,6 +91,7 @@ export const darkTokens = {
   lampGlow: "rgba(255,190,87,.32)",
   lampGlowSoft: "rgba(255,190,87,.22)",
   amberInk: "#17120E",
+  ...bootTokens,
 };
 
 // Back-compat alias: the Oct 9 light set (the existing `tokens` import
@@ -254,6 +282,14 @@ const CSS_VAR_NAMES = [
   ["shadowCard", "shadow-card"], ["shadowModal", "shadow-modal"], ["shadowCompose", "shadow-compose"],
   ["appbarBg", "appbar-bg"], ["lampGlow", "lamp-glow"], ["lampGlowSoft", "lamp-glow-soft"],
   ["amberInk", "amber-ink"],
+  // PORCH-095: the boot's mode-invariant brand palette (one navy canvas,
+  // both modes) — declared in both blocks, so the boot surfaces consume
+  // custom properties like every other screen.
+  ["bootBg", "boot-bg"], ["bootInk", "boot-ink"], ["bootStatusInk", "boot-status-ink"],
+  ["bootFrame", "boot-frame"], ["bootFrameDim", "boot-frame-dim"],
+  ["bootFacet", "boot-facet"], ["bootCore", "boot-core"], ["bootNode", "boot-node"],
+  ["bootGlowDim", "boot-glow-dim"], ["bootGlowBloom", "boot-glow-bloom"],
+  ["bootGlowRest", "boot-glow-rest"], ["bootGlowHalo", "boot-glow-halo"],
 ];
 
 // Screen-facing token map: camelCase keys matching the token sets, values as

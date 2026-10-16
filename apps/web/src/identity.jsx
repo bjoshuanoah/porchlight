@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert, Avatar, Box, Button, Card, CardContent, CircularProgress, Collapse, Dialog, DialogActions,
+  Alert, Avatar, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemIcon,
   ListItemText, Menu, MenuItem, Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
+// PORCH-095: the lantern loader family — the boot surface doubles as the
+// loading state for full-screen flows, LanternLoader serves the small
+// blocked-surface marks. No spinner anywhere on these surfaces.
+import { LanternBoot, LanternLoader } from './lantern.jsx';
 import CheckOutlined from '@mui/icons-material/CheckOutlined';
 import LogoutOutlined from '@mui/icons-material/LogoutOutlined';
 import { hubOrigin, joinLinkMismatch, parseDeviceGrant, parseJoinCode, readJoinQuery, splitJoinLink, verifyFailure } from './frontdoor.js';
@@ -587,12 +591,12 @@ export function DeviceLink({ data, actions, navigate }) {
     await operation.run('linkDevice', [grant.trim()], 'This device is now yours.');
   };
   if (beat) {
-    return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
-      <Stack spacing={2} sx={{ alignItems: 'center', py: 8 }}>
-        <CircularProgress size={32} aria-label={arrivalBeatCopy} />
-        <Typography sx={{ mt: 2 }}>{arrivalBeatCopy}</Typography>
-      </Stack>
-    </Box>;
+    // PORCH-095: the consume beat is a full-screen long-operation surface,
+    // so it rides the boot surface itself — the boot doubles as the loading
+    // state for flows that hold a page, with the beat's own copy as the
+    // status line. The parent unmounts it the moment the consume resolves
+    // or refuses; the loader never outlives its context.
+    return <LanternBoot variant="surface" status={arrivalBeatCopy} />;
   }
   return <Box sx={{ maxWidth: 540, mx: 'auto' }}>
     <Heading title="Welcome back" subtitle={`Welcome back. This link adds this device to your place in ${network}. Your moments, groups, and profile arrive untouched — nothing to bring over.`} />
@@ -749,7 +753,7 @@ function AvatarPanel({ account, actions, origin, name }) {
           </Button>
           {hasFace && <Button variant="text" color="error" sx={control} disabled={busy} onClick={() => void remove()}>Remove photo</Button>}
         </>}
-      {busy && <CircularProgress size={22} aria-label="Working on your photo" />}
+      {busy && <LanternLoader size={22} label="Working on your photo" />}
       {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
       {notice && <Alert severity="success" sx={{ mt: 1 }}>{notice}</Alert>}
     </Stack> : null}
@@ -918,12 +922,20 @@ export function WhoIsHere({ data, actions, navigate }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the chooser reads its faces once per device registration
   }, [faceSignature]);
   const chosen = faces.find(item => item.identity.id === pinFor);
+  // PORCH-095: the session open behind the chooser is a long-operation
+  // flow that holds a full screen — the boot surface doubles as its
+  // loading state, under the flow's own copy. The parent unmounts it the
+  // moment the open resolves (navigate) or refuses.
+  const [opening, setOpening] = useState(false);
   async function openFace(face) {
     if (storedPin(face)) { setPinFor(face.identity.id); return; }
+    setOpening(true);
     const result = await operation.run('switchIdentity', [face.identity.id]);
     if (result) navigate?.('/timeline');
+    setOpening(false);
   }
   return <Box sx={{ maxWidth: 560, mx: 'auto', textAlign: 'center', pt: { xs: 2, sm: 6 } }}>
+    {opening && <LanternBoot variant="surface" status="Opening your place…" />}
     <Box component="header" sx={{ mb: 4 }}>
       <Lockup size={30} sx={{ mb: 3 }} />
       {faces.length > 0 && <>
@@ -1484,7 +1496,7 @@ export function OwnerConsole({ data, actions, navigate }) {
         <Button type="submit" variant="contained" disabled={moving || operation.busy || typeof actions?.changeAddress !== 'function'}>Register this address</Button>
       </Box>
       {moving && <Box sx={{ ...rows, mt: 2 }}>
-        <CircularProgress size={20} />
+        <LanternLoader size={20} label="Checking the new address" />
         <Typography color="text.secondary">Checking the new address, then redirecting your browser there…</Typography>
       </Box>}
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>The hub checks the new address first. If it cannot be reached, or belongs to some other hub, nothing changes and the refusal says which.</Typography>

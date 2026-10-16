@@ -4,6 +4,11 @@ import {
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, List, ListItemButton,
   ListItemText, Menu, MenuItem, Paper, Popover, Popper, Select, Snackbar, Stack, Switch, TextField, Tooltip, Typography,
 } from '@mui/material';
+// PORCH-095: LanternLoader serves the genuinely empty or blocked surfaces —
+// group reads, conversation reads, member-candidate reads, picker chunk
+// loads, post submission. The media frame machinery and its stamp fallback
+// (below) are untouched content-surface machinery, per the hierarchy rule.
+import { LanternLoader } from './lantern.jsx';
 import {
   AddReactionOutlined, ArrowDownwardOutlined, ArrowUpwardOutlined, ChevronLeft, ChevronRight,
   FullscreenOutlined, MoreHorizOutlined, MoreVertOutlined, PauseOutlined, PlayArrowOutlined, ReplayOutlined,
@@ -821,7 +826,7 @@ export function PresentReactions({ post, data, actions, reactionState, spacingY 
     </Stack>
     {actionBar && chipList.length > 0 && <Stack direction="row" spacing={1} flexWrap="wrap"
       aria-label="Reactions from your family" sx={{ mt: photoFirst.spacing.actionsReactions / 8 }}>{chipList}</Stack>}
-    {anchor && <Suspense fallback={<CircularProgress size={20} />}>
+    {anchor && <Suspense fallback={<LanternLoader size={20} label="Your reaction picker" />}>
       <EmojiPicker open anchorEl={anchor} onClose={() => setAnchor(null)} own={own} onToggle={toggle} busy={operation.busy} />
     </Suspense>}
     {reveal && revealChip && <Popper open placement="bottom" anchorEl={reveal.anchor}
@@ -1992,7 +1997,7 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
       : <Heading title={group?.name ?? 'Groups'} subtitle="Spaces within your family network" />}
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>Groups may be out of date while your family server is unreachable.</Alert>}
     {selectedId && <Button sx={{ mb: 2 }} onClick={() => navigate?.('/groups')}>All groups</Button>}
-    {loading && <CircularProgress aria-label="Loading group" size={24} />}
+    {loading && <LanternLoader label="Reading your group" />}
     {loadError && <Alert severity="error">{loadError}</Alert>}
     {selectedId && !group && !loading && !loadError && <Alert severity="info">{data.offline ? 'This group is not saved on this device. Reconnect to check it.' : 'This group is not available in your network.'}</Alert>}
     {group && !loading && !loadError && <Stack spacing={2}>
@@ -2086,7 +2091,7 @@ function AddMembersDialog({ group, actions, onClose, onAdded }) {
     <DialogTitle>Add members to {group.name}</DialogTitle>
     <DialogContent>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Members of this network only — a group's membership never outgrows the network's.</Typography>
-      {!candidates && !error && <CircularProgress size={24} />}
+      {!candidates && !error && <LanternLoader label="Reading the roster" />}
       {error && <Alert severity="error">{error}</Alert>}
       {candidates && (candidates.length
         ? <List dense>{candidates.map((candidate) => <ListItemButton key={candidate.did} onClick={() => toggle(candidate.did)} selected={picked.has(candidate.did)}>
@@ -2366,7 +2371,7 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   };
   return <Box sx={{ maxWidth: 1120, mx: 'auto' }}>
     <Button onClick={() => navigate?.('/timeline')} sx={{ mb: 2 }}>Back to timeline</Button>
-    {loading && !data.offline && <CircularProgress aria-label="Loading conversation" />}
+    {loading && !data.offline && <LanternLoader label="Loading conversation" />}
     {loadError && <Alert severity="error">{loadError}</Alert>}
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>The conversation cannot refresh while your family server is unreachable. Only a saved post, if available, is shown.</Alert>}
     {!loading && !loadError && (!post || !visibleAtOrigin(post, data)) && <Alert severity="info">This post is not available in your network.</Alert>}
@@ -2524,7 +2529,7 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
       </>}
         {operation.error && <Alert severity="error">{operation.error}</Alert>}
       </Stack></DialogContent>
-      <DialogActions><Button disabled={operation.busy} onClick={onClose}>Cancel</Button><Button variant="contained" type="submit" disabled={operation.busy || data.offline || (mediaType ? !files.length : !body.trim())}>{operation.busy ? <CircularProgress size={20} color="inherit" /> : 'Publish'}</Button></DialogActions>
+      <DialogActions><Button disabled={operation.busy} onClick={onClose}>Cancel</Button><Button variant="contained" type="submit" disabled={operation.busy || data.offline || (mediaType ? !files.length : !body.trim())}>{operation.busy ? <LanternLoader size={20} label="Publishing your moment" glow="var(--porch-boot-core)" style={{ color: 'var(--porch-amber-ink)', minWidth: 28, minHeight: 28 }} /> : 'Publish'}</Button></DialogActions>
     </Box>
   </Dialog>;
 }

@@ -99,7 +99,7 @@ const mainSource = await readFile(new URL("../src/main.jsx", import.meta.url), "
 
 test("the arrival beat renders and auto-consumes only under the self-grant marker (ac-3)", () => {
 	assert.match(identitySource, /const arrive = selfGrantArrival\(window\.location\.search\);/);
-	assert.match(identitySource, /<CircularProgress size=\{32\} aria-label=\{arrivalBeatCopy\}/);
+	assert.match(identitySource, /<LanternBoot variant="surface" status=\{arrivalBeatCopy\} \/>/);
 	// The beat screen shows the marker's consume in flight, then falls back
 	// to the normal consume screen the moment the consume refuses.
 	assert.match(identitySource, /operation\.setError\(cause\?\.body\?\.error \|\| memberError\(cause\)\);/);

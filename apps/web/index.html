@@ -31,6 +31,87 @@
     </script>
   </head>
   <body>
+    <!-- PORCH-095: the boot surface, first paint and pre-JS — the facet
+         climb, node glows, and single pulse ride THIS canvas from the
+         first byte: the boot's only guaranteed window on a cold load is
+         the bundle-download span (readiness is the app's first mount, so
+         the animated React layer never outlives the handoff). React's
+         LanternBoot (src/lantern.jsx) adopts this node: it manages status
+         lines past the copy threshold, rides app readiness, takes the
+         dissolve, and removes the node — it never re-renders a second
+         canvas over a healthy load. No flash of another color precedes it
+         in either display mode (the pre-hydration mode script cannot
+         flash through a full-viewport fixed layer). Geometry and motion
+         constants of record: src/lantern-geometry.js; the palette of
+         record: src/theme.js bootTokens (--porch-boot-*), mirrored here
+         as literals only because this canvas must paint before JS. -->
+    <style>
+      @keyframes porch95-facet-ramp { from { fill: var(--porch-boot-frame-dim, #8A6420); opacity: .5; } to { fill: var(--porch-boot-facet, #FFBE57); opacity: 1; } }
+      @keyframes porch95-core-ramp { from { fill: var(--porch-boot-frame-dim, #8A6420); opacity: .5; } to { fill: var(--porch-boot-core, #FCFAE8); opacity: 1; } }
+      @keyframes porch95-frame-ramp { from { stroke: var(--porch-boot-frame-dim, #8A6420); } to { stroke: var(--porch-boot-frame, #E3D5B8); } }
+      @keyframes porch95-node-glow {
+        0% { fill: var(--porch-boot-frame-dim, #8A6420); opacity: .4; filter: none; }
+        35% { fill: var(--porch-boot-node, #FFD799); opacity: 1; filter: drop-shadow(0 0 6px var(--porch-boot-glow-halo, rgba(255,190,87,.9))); }
+        100% { fill: var(--porch-boot-frame, #E3D5B8); opacity: .95; filter: none; }
+      }
+      @keyframes porch95-pulse {
+        0% { filter: drop-shadow(0 0 4px var(--porch-boot-glow-dim, rgba(255,190,87,.35))); }
+        45% { filter: drop-shadow(0 0 22px var(--porch-boot-glow-bloom, rgba(255,190,87,.95))); }
+        100% { filter: drop-shadow(0 0 10px var(--porch-boot-glow-rest, rgba(255,190,87,.6))); }
+      }
+      @keyframes porch95-fade { from { opacity: 1; } to { opacity: 0; } }
+      .porch95-boot-mark { animation: porch95-pulse 500ms ease-in-out 950ms both; }
+      .porch95-boot-facet { animation: porch95-facet-ramp 340ms ease-out both; }
+      .porch95-boot-core { animation: porch95-core-ramp 340ms ease-out both; }
+      .porch95-boot-frame { animation: porch95-frame-ramp 860ms linear both; }
+      .porch95-boot-node { animation: porch95-node-glow 300ms ease-out both; }
+      /* Readiness dissolve: LanternBoot adds this class the moment the
+         app's first surface is ready — never a timer. Keep the duration
+         in step with BOOT_FADE_MS (src/lantern.jsx). */
+      .porch95-boot-fade { animation: porch95-fade 250ms ease-out forwards; }
+      /* prefers-reduced-motion: the static fully-lit mark with the plain
+         fade into the app (the dissolve class itself stays live). */
+      @media (prefers-reduced-motion: reduce) {
+        .porch95-boot-mark, .porch95-boot-facet, .porch95-boot-core, .porch95-boot-frame, .porch95-boot-node { animation: none !important; }
+        .porch95-boot-facet { fill: var(--porch-boot-facet, #FFBE57) !important; opacity: 1 !important; }
+        .porch95-boot-node { fill: var(--porch-boot-frame, #E3D5B8) !important; opacity: .95 !important; }
+        .porch95-boot-core { fill: var(--porch-boot-core, #FCFAE8) !important; opacity: 1 !important; }
+        .porch95-boot-frame { stroke: var(--porch-boot-frame, #E3D5B8) !important; filter: none !important; }
+      }
+    </style>
+    <div id="porch-boot" role="status" style="position:fixed;top:0;right:0;bottom:0;left:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:var(--porch-boot-bg,#0B1622);z-index:2147483000;pointer-events:none">
+      <svg class="porch95-boot-mark" viewBox="0 0 120 132" width="80" height="88" aria-hidden="true" focusable="false" style="display:block">
+        <g class="porch95-boot-facet" style="animation-delay:0ms" fill="var(--porch-boot-frame-dim,#8A6420)"><path d="M44 58 L76 58 L70 88 L50 88 Z" /></g>
+        <g class="porch95-boot-facet" style="animation-delay:260ms" fill="var(--porch-boot-frame-dim,#8A6420)"><path d="M48 36 L72 36 L76 58 L44 58 Z" /></g>
+        <g class="porch95-boot-facet" style="animation-delay:520ms" fill="var(--porch-boot-frame-dim,#8A6420)"><path d="M40 30 L52 16 L68 16 L80 30 Z" /></g>
+        <ellipse class="porch95-boot-core" cx="60" cy="52" rx="9" ry="12" style="animation-delay:260ms" fill="var(--porch-boot-frame-dim,#8A6420)" />
+        <g class="porch95-boot-frame" fill="none" stroke="var(--porch-boot-frame-dim,#8A6420)" stroke-width="2.5" stroke-linejoin="round">
+          <path d="M40 30 L52 16 L68 16 L80 30" />
+          <path d="M46 30 H74 V36 H46" />
+          <path d="M48 36 L72 36 L76 58 L44 58" />
+          <path d="M44 58 L76 58 L70 88 L50 88" />
+          <path d="M50 88 H70 V94 H50" />
+          <path d="M52 94 V99 M68 94 V99" />
+          <path d="M60 9 V16" />
+          <circle cx="60" cy="6" r="3" />
+        </g>
+        <g fill="var(--porch-boot-frame-dim,#8A6420)" opacity=".55">
+          <circle class="porch95-boot-node" style="animation-delay:120ms" cx="50" cy="88" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:120ms" cx="70" cy="88" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:120ms" cx="50" cy="94" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:120ms" cx="70" cy="94" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:120ms" cx="44" cy="58" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:120ms" cx="76" cy="58" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:380ms" cx="46" cy="36" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:380ms" cx="74" cy="36" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:640ms" cx="60" cy="3" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:640ms" cx="60" cy="16" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:640ms" cx="40" cy="30" r="2.2" />
+          <circle class="porch95-boot-node" style="animation-delay:640ms" cx="80" cy="30" r="2.2" />
+        </g>
+      </svg>
+      <div style="color:var(--porch-boot-ink,#FCFAE8);font-size:21px;font-weight:650;letter-spacing:.02em;font-family:Inter,system-ui,sans-serif">Porchlight</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
