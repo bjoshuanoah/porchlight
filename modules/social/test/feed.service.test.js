@@ -520,6 +520,63 @@ test("ac-5/ac-4: reaction rows ride the view as authored; containment excludes f
   assert.equal(view.reactionRows[0].memberDid, JUNE, "per-member rows identify the member's own reaction for the warm highlight only");
 });
 
+test("PORCH-091 ac-1: card reaction rows attribute reactors in the origin's served order; no count or roster field, no foreign-origin chip", async () => {
+  const avatarMetas = {
+    [SUSAN]: {
+      header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "s".repeat(64) },
+      chooser: { kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: "S".repeat(64) },
+    },
+    [JUNE]: {
+      header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "j".repeat(64) },
+      chooser: { kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: "J".repeat(64) },
+    },
+    [MEG]: {
+      header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "m".repeat(64) },
+      chooser: { kind: "chooser", width: 144, height: 144, contentType: "image/webp", sha256: "M".repeat(64) },
+    },
+  };
+  const names = { [SUSAN]: "Susan Hale", [JUNE]: "June River", [MEG]: "Meg Fale" };
+  const base = fixture({
+    networkIds: [FAMILY, OTHER],
+    memberNames: async (dids) => dids.map((did) => ({ did, displayName: names[did] ?? null, avatar: avatarMetas[did] ?? null })),
+  });
+  const fx = { ...base, dev: device("dev_s"), juneDev: device("dev_j"), megDev: device("dev_m") };
+  const { susan, june, meg } = await admitAll(fx);
+  const { feed } = withFeed(fx);
+
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "chip board" });
+  // Chip joins ride the existing signed reaction add, in origin order.
+  const sunPayload = { postId: post._id, emoji: "🌻" };
+  const juneRow = (await fx.interactions.react({ accessToken: june, payload: sunPayload, signature: fx.juneDev.signPayload(sunPayload) })).reaction;
+  const susanRow = (await fx.interactions.react({ accessToken: susan, payload: sunPayload, signature: fx.dev.signPayload(sunPayload) })).reaction;
+  const starPayload = { postId: post._id, emoji: "⭐" };
+  const megRow = (await fx.interactions.react({ accessToken: meg, payload: starPayload, signature: fx.megDev.signPayload(starPayload) })).reaction;
+
+  const [view] = (await feed.timeline({ accessToken: susan })).posts;
+  assert.deepEqual(
+    view.reactionRows.map((row) => ({ memberDid: row.memberDid, emoji: row.emoji, memberName: row.memberName })),
+    [
+      { memberDid: JUNE, emoji: "🌻", memberName: "June River" },
+      { memberDid: SUSAN, emoji: "🌻", memberName: "Susan Hale" },
+      { memberDid: MEG, emoji: "⭐", memberName: "Meg Fale" },
+    ],
+    "attribution rides the rows in the origin's served order",
+  );
+  assert.deepEqual(view.reactionRows.map((row) => row.memberAvatar), [avatarMetas[JUNE], avatarMetas[SUSAN], avatarMetas[MEG]]);
+  // The people count is DERIVED client-side from distinct reactor rows —
+  // nothing numeric is stored or wire-served (payload-privacy ruling).
+  assert.deepEqual(Object.keys(view.reactionRows[0]).sort(), ["_id", "createdAt", "emoji", "memberAvatar", "memberDid", "memberName"]);
+  assert.equal(
+    new Set(view.reactionRows.filter((row) => row.emoji === "🌻").map((row) => row.memberDid)).size,
+    2,
+    "distinct members hold the emoji; one row per member per emoji",
+  );
+  // The write responses stay member + emoji (the rows above are read breadth).
+  for (const row of [juneRow, susanRow, megRow]) {
+    assert.equal("memberName" in row, false, "no attribution on the write response");
+  }
+});
+
 test("ac-5: an empty feed read performs no conversation reads and carries plain views", async () => {
   const fx = feedFixture();
   const { susan } = await admitAll(fx);

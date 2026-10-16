@@ -322,11 +322,40 @@ export class InteractionService {
     return ordered;
   }
 
-  /** Reaction read for a member: as-authored emoji values, by member. */
+  /**
+   * Reaction read for a member: as-authored emoji values, by member, with
+   * reactor attribution (PORCH-091 ac-1) — every row carries the reactor's
+   * display name and avatar rendering data, resolved at READ time against
+   * THIS origin's active membership only (a DID holding no active
+   * membership here renders nameless, exactly as comments do). Content
+   * only: no count, no roster, no aggregate field ever rides this payload;
+   * the client derives the people count from the rows themselves.
+   */
   async reactionsFor({ accessToken, postId } = {}) {
     const session = await this.#requireSession({ accessToken, postId });
     const rows = await this.reactions.find({ postId, networkId: session.networkId });
-    return { reactions: rows.map((row) => InteractionService.reactionView(row)) };
+    const names = await this.membership.attributionNames({
+      networkId: session.networkId,
+      dids: rows.map((row) => row.memberDid),
+    });
+    return { reactions: rows.map((row) => InteractionService.attributedReactionView(row, names)) };
+  }
+
+  /**
+   * Reaction rows already hold the member reference (memberDid); PORCH-091
+   * adds projection breadth on the origin reads that serve the chips: the
+   * reactor's display name and avatar rendering data ride beside it, in the
+   * origin's served row order (the collection insertion order — the read's
+   * order of record). Rows stay flat; the client groups them per emoji.
+   * Content only — no count and no roster field joins the row.
+   */
+  static attributedReactionView(reaction, names) {
+    const resolved = names?.get(String(reaction.memberDid)) ?? null;
+    return {
+      ...InteractionService.reactionView(reaction),
+      memberName: resolved?.name ?? null,
+      memberAvatar: resolved?.avatar ?? null,
+    };
   }
 
   /** Every interaction write is actor-signed (device signature at the origin). */

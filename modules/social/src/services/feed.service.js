@@ -252,7 +252,12 @@ export class FeedService {
     ]);
     const names = await this.membership.attributionNames({
       networkId,
-      dids: [...new Set(comments.map((comment) => comment.authorDid))],
+      dids: [
+        ...new Set([
+          ...comments.map((comment) => comment.authorDid),
+          ...(reactions ?? []).map((row) => row.memberDid),
+        ]),
+      ],
     });
     return FeedService.withConversationPreviews(views, comments, reactions, names);
   }
@@ -272,7 +277,12 @@ export class FeedService {
     const rowsByPost = new Map();
     for (const row of reactions ?? []) {
       if (!rowsByPost.has(row.postId)) rowsByPost.set(row.postId, []);
-      rowsByPost.get(row.postId).push(InteractionService.reactionView(row));
+      // Reactor attribution (PORCH-091 ac-1): each chip row carries the
+      // reactor's display name + avatar rendering data in the origin's
+      // served order — the origin-scoped find keeps foreign-network rows
+      // and non-members (names resolve for active origin members only)
+      // off every payload. Content only: no count, no roster field.
+      rowsByPost.get(row.postId).push(InteractionService.attributedReactionView(row, names));
     }
     return views.map((view) => {
       const mine = commentsByPost.get(view._id) ?? [];
