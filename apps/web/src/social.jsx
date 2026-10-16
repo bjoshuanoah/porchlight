@@ -29,7 +29,7 @@ import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 import { AvatarFace, useAvatarFaceUrl } from './avatar-face.js';
 import { LampMark } from './brand.jsx';
 import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle, reactionChips, revealMachine } from './reactions.js';
-import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
+import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, composePresetLocationId, isGroupMember, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
 import {
   groupMenuRows, groupToggleLine, resolvedGroupNotification,
   GROUP_COLOR_ROWS, GROUP_NO_COLOR, GROUP_PRIVACY_ROWS, groupMemberRemoveCopy,
@@ -2002,6 +2002,12 @@ export function Groups({ data = {}, actions = {}, navigate, id, routeId }) {
     {selectedId && !group && !loading && !loadError && <Alert severity="info">{data.offline ? 'This group is not saved on this device. Reconnect to check it.' : 'This group is not available in your network.'}</Alert>}
     {group && !loading && !loadError && <Stack spacing={2}>
       <Typography color="text.secondary">Posts in {group.name} stay within {data.network?.name ?? 'this family network'}. Each post shows its origin.</Typography>
+      {/* PORCH-096 (Brian, Oct 16 2026): the group surface's compose entry
+          reads "+ New post" and opens the compose card with the location
+          control pre-set to this group — visible pre-population, the
+          target never implicit. Members only: a non-member's offered
+          targets never include this group, so the entry keeps to them. */}
+      {isGroupMember(group, data.identity?.id) && <Button variant="contained" sx={{ alignSelf: 'flex-start' }} onClick={() => navigate?.('/compose')} data-testid="group-new-post">+ New post</Button>}
       {canJoinGroup(group, data.identity?.id) && <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
         <Button variant="contained" onClick={() => void onJoin()} disabled={joining} data-testid="join-group">Join group</Button>
         <Typography color="text.secondary">Join to see {group.name}'s posts in your own feed.</Typography>
@@ -2451,7 +2457,7 @@ function mediaIds(result) {
   return values.map((entry) => typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id).filter(Boolean);
 }
 
-export function Compose({ open, onClose, data = {}, actions = {} }) {
+export function Compose({ open, onClose, data = {}, actions = {}, target = null }) {
   const [type, setType] = useState('text');
   const [body, setBody] = useState('');
   const [caption, setCaption] = useState('');
@@ -2474,6 +2480,23 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
   // server refuses group-targeted writes from non-members; the gate is
   // server-enforced, this keeps the picker honest).
   const groups = composableGroups(groupRows(data.groups, data.network?.id), data.identity?.id);
+  // PORCH-096 (Brian, Oct 16 2026, compose pre-population ruling): the
+  // location control pre-populates from context — opening from a group
+  // surface pre-sets that group, opening from the main timeline pre-sets
+  // the general timeline. Not implicit, not silent: the target is always
+  // visible and pre-set the moment the card opens. A context target the
+  // author's option law does not hold (a non-member group, a foreign
+  // network) falls back to the general timeline rather than pre-setting
+  // what the control never offers.
+  const presetRef = useRef(composePresetLocationId(target, groups, data.identity?.id));
+  presetRef.current = composePresetLocationId(target, groups, data.identity?.id);
+  const lastOpenRef = useRef(false);
+  useEffect(() => {
+    // Only the open transition pre-sets: a staged choice never loses to a
+    // roster refresh that re-renders the preset while the card is open.
+    if (open && !lastOpenRef.current) setGroupId(presetRef.current);
+    lastOpenRef.current = open;
+  }, [open]);
   // Debounce-tolerant detection: one resolve per distinct URL once typing
   // settles — mid-typing URL fragments don't fire hub fetches (bounded
   // fetch hygiene); the chip re-arms on URL change and no chip at all when
@@ -2515,7 +2538,11 @@ export function Compose({ open, onClose, data = {}, actions = {} }) {
       <DialogContent><Stack spacing={2}>
         {data.offline && <Alert severity="warning">Posting is unavailable while your family server is unreachable. Your draft stays here.</Alert>}
         <FormControl fullWidth><InputLabel id="post-type-label">Post type</InputLabel><Select labelId="post-type-label" label="Post type" value={type} onChange={(event) => { setType(event.target.value); setFiles([]); }}><MenuItem value="text">Text</MenuItem><MenuItem value="photo">Photo</MenuItem><MenuItem value="video">Video</MenuItem><MenuItem value="audio">Audio</MenuItem></Select></FormControl>
-        {groups.length > 0 && <FormControl fullWidth><InputLabel id="post-group-label">Group (optional)</InputLabel><Select labelId="post-group-label" label="Group (optional)" value={groupId} onChange={(event) => setGroupId(event.target.value)}><MenuItem value="">Entire network</MenuItem>{groups.map((group) => <MenuItem key={identityOf(group)} value={identityOf(group)}>{group.name}</MenuItem>)}</Select></FormControl>}
+        {/* PORCH-096: the location control — the same control the edit
+            composer carries — always renders: the target is visible and
+            pre-set before any send, even when the author holds no groups
+            (the general timeline is the only row). */}
+        <FormControl fullWidth><InputLabel id="post-location-label">Post to</InputLabel><Select labelId="post-location-label" label="Post to" data-testid="compose-location" value={groupId} onChange={(event) => setGroupId(event.target.value)}><MenuItem value="">General timeline</MenuItem>{groups.map((group) => <MenuItem key={identityOf(group)} value={identityOf(group)}>{group.name}</MenuItem>)}</Select></FormControl>
         {mediaType ? <><Button variant="outlined" component="label">Choose {type}<input hidden type="file" accept={type === 'photo' ? 'image/*' : `${type}/*`} multiple={type === 'photo'} onChange={(event) => { setFiles(Array.from(event.target.files || [])); event.target.value = ''; }} /></Button><Typography variant="body2" color="text.secondary">{files.length ? files.map((file) => file.name).join(', ') : 'Choose an original file to upload before publishing.'}</Typography>
         {type === 'photo' && <ComposerPreviewCarousel files={files} />}
         <TextField label="Caption (optional)" multiline minRows={2} value={caption} onChange={(event) => setCaption(event.target.value)} /></> : <>
