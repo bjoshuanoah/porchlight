@@ -195,7 +195,7 @@ test("ac-2: cross-post interactions stay contained — voting on one copy leaves
 });
 
 test("ac-5: post deletion cascades transactionally — interactions, derived rows, artifacts all go", async () => {
-  const { posts, interactions, quota, collections, dev, familyToken, juneToken, juneDev } = await dualFixture();
+  const { posts, interactions, quota, collections, dev, familyToken, juneToken, juneDev, realtimePlane } = await dualFixture();
   const payload = { type: "photo", mediaRefs: ["med_a"], caption: "trip" };
   const post = (await posts.create({ accessToken: familyToken, payload, signature: dev.signPayload(payload) })).post;
 
@@ -218,15 +218,39 @@ test("ac-5: post deletion cascades transactionally — interactions, derived row
   const signature = dev.signPayload({ kind: "delete", postId: post._id, networkId: FAMILY });
   const result = await posts.deletePost({ accessToken: familyToken, postId: post._id, signature });
   assert.equal(result.deleted, true);
-  // post + comment + reaction + vote + 2 derived rows + 2 artifact rows.
+  // post + comment + reaction + vote + 2 derived rows + 2 artifact rows
+  // (this fixture's ledger rows are synthetic keyed counters — the kind
+  // original row is keyed by the post id, not a held media ref — so both
+  // die with the cascade; the REAL held-original retention of record runs
+  // in the lifecycle suite against real asset rows).
   assert.equal(result.cascadeRows, 8);
+  assert.ok(result.tombstoneId);
 
   assert.equal(await collections.posts.findOne({ _id: post._id }), null);
   assert.equal((await collections.comments.find({ postId: post._id })).length, 0);
   assert.equal((await collections.reactions.find({ postId: post._id })).length, 0);
   assert.equal((await collections.votes.find({ postId: post._id })).length, 0);
   assert.equal((await collections.derivedData.find({ postId: post._id })).length, 0);
-  assert.equal((await collections.artifacts.find({ networkId: FAMILY })).length, 0);
+  // The tombstone of record: attribution + the held original refs, restore
+  // window open, nothing purged yet.
+  const tombstone = await collections.tombstones.findOne({ _id: result.tombstoneId });
+  assert.equal(tombstone.subjectType, "post");
+  assert.equal(tombstone.subjectId, post._id);
+  assert.equal(tombstone.deletedByRole, "author");
+  assert.equal(tombstone.originNetworkId, FAMILY);
+  assert.deepEqual(tombstone.mediaOrigins, ["med_a"]);
+  assert.equal(tombstone.purgedAt, null);
+  assert.ok(new Date(tombstone.purgeAt).getTime() >= new Date(tombstone.deletedAt).getTime() + 29 * 24 * 60 * 60 * 1000);
+  // The comment cascade is captured on the tombstone for restore —
+  // comments carry no tombstones of their own.
+  assert.equal(tombstone.cascade.comments.length, 1);
+  assert.equal(tombstone.cascade.subject._id, post._id);
+  assert.equal((await collections.tombstones.find({ subjectType: "comment" })).length, 0);
+  // The post.deleted event rode the plane, tree-scoped and content-only.
+  const { events: planeEvents } = await realtimePlane.readSince(FAMILY, null);
+  const removals = planeEvents.filter((row) => row.type === "post.deleted" && row.postId === post._id);
+  assert.equal(removals.length, 1);
+  assert.deepEqual(removals[0].content.cascadeIds.length, 1);
 });
 
 test("ac-5: only the author deletes — another member's signed deletion fails", async () => {

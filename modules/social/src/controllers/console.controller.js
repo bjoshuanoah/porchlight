@@ -42,7 +42,7 @@ export class ConsoleController {
    * @param {((line: string) => void) | null} [deps.log]
    *   Auth-failure capture sink (PORCH-019); defaults to console.log.
    */
-  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system, hubUrl, log, memberAdmin }) {
+  constructor({ networks, invites, membership, quota, audit, groups, ranking, media, system, hubUrl, log, memberAdmin, lifecycle }) {
     this.networks = networks;
     this.invites = invites;
     this.membership = membership;
@@ -52,6 +52,11 @@ export class ConsoleController {
     this.ranking = ranking;
     this.media = media ?? null;
     this.memberAdmin = memberAdmin ?? null;
+    // PORCH-093: the lifecycle service behind the tombstone restore write
+    // (owner-console write of record; the tombstone LIST surface itself is
+    // deferred — "We can sleep on a restore surface later."). Optional on
+    // assemblies built without it.
+    this.lifecycle = lifecycle ?? null;
     this.system = system ?? null;
     this.hubUrl = typeof hubUrl === "function" ? hubUrl : null;
     this.log = log ?? null;
@@ -328,6 +333,42 @@ export class ConsoleController {
       limit: req.query?.limit,
       offset: req.query?.offset,
     }));
+  };
+
+  /**
+   * POST /console/tombstones/:tombstoneId/restore — the owner-console
+   * restore write (PORCH-093, TS 3 lifecycle write paths). Owner-only by
+   * the lifecycle service's own authority gate; within the 30-day window
+   * it re-materializes the subject and its cascade children, regenerates
+   * renditions on demand, and removes the tombstone; after the one-time
+   * hard purge it refuses loudly. The tombstone LIST surface itself rides
+   * the deferred console work — this is the write path of record.
+   */
+  restoreTombstone = async (req, res) => {
+    if (!(await this.#requireOwner(req, res))) return;
+    if (this.lifecycle) {
+      try {
+        const accessToken = (req.headers?.authorization ?? "").startsWith("Bearer ")
+          ? req.headers.authorization.slice(7).trim()
+          : null;
+        return res.json(
+          await this.lifecycle.restore({ accessToken, tombstoneId: req.params?.tombstoneId }),
+        );
+      } catch (error) {
+        const statusByCode = {
+          E_RESTORE_SIGN_IN: 401,
+          E_RESTORE_NOT_PERMITTED: 403,
+          E_TOMBSTONE_NOT_FOUND: 404,
+          E_TOMBSTONE_MATERIALIZED: 409,
+          E_TOMBSTONE_ORPHANED: 409,
+          E_TOMBSTONE_PURGED: 410,
+        };
+        return res
+          .status(statusByCode[error.code] ?? 500)
+          .json({ error: error.message, code: error.code ?? "E_INTERNAL" });
+      }
+    }
+    res.status(501).json({ error: "The content lifecycle is not wired into this deployment" });
   };
 
   /**

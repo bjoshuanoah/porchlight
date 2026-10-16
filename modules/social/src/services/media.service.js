@@ -65,13 +65,17 @@ export class MediaService {
    *           chunkSize?: number, uploadTtlSeconds?: number,
    *           renditionRungs?: { image?: Record<string, number>, video?: Record<string, number> }} [options]
    */
-  constructor({ uploads, assets, artifacts, membership, quota, blobs, diskProbe, audit, realtime, volume }, options = {}) {
+  constructor({ uploads, assets, artifacts, membership, quota, blobs, diskProbe, audit, realtime, volume, tombstones }, options = {}) {
     this.uploads = uploads;
     this.assets = assets;
     this.artifacts = artifacts;
     this.membership = membership;
     this.quota = quota;
     this.blobs = blobs;
+    // PORCH-093: the tombstone collection behind the serving gate — an
+    // original held through a delete's restore window never resolves on
+    // any media read surface (ac-2), even though its bytes are at rest.
+    this.tombstones = tombstones ?? null;
     this.realtime = realtime ?? null;
     this.diskProbe = diskProbe ?? null;
     this.audit = audit ?? (async () => {});
@@ -575,6 +579,13 @@ export class MediaService {
     // The origin-asset lookup IS the containment check (throws when the
     // media does not exist at this token's origin).
     const original = await this.#originAsset(mediaId, session);
+    // PORCH-093: a tombstone-held original never renders during the
+    // restore window — the self-heal path above this check would otherwise
+    // regenerate renditions for deleted media (ac-2: deleted media never
+    // renders and never resolves).
+    if (await this.#heldByTombstone(session.networkId, mediaId)) {
+      throw typedError("E_MEDIA_NOT_FOUND", MESSAGES.E_MEDIA_NOT_FOUND);
+    }
     if (!RENDITION_KINDS.includes(renditionKind)) {
       throw typedError("E_RENDITION_KIND_UNKNOWN", MESSAGES.E_RENDITION_KIND_UNKNOWN);
     }
@@ -630,7 +641,10 @@ export class MediaService {
     // action too — the original is never served from another location.
     await this.volume.assertReady();
     const original = await this.#originAsset(mediaId, session);
-    if (original.kind !== "original") {
+    // PORCH-093: the delete cascade purges renditions and holds the
+    // original through the restore window — at rest, never served. A
+    // media-resolution route over a deleted post's media never resolves.
+    if (original.kind !== "original" || (await this.#heldByTombstone(session.networkId, mediaId))) {
       throw typedError("E_MEDIA_NOT_FOUND", MESSAGES.E_MEDIA_NOT_FOUND);
     }
     const bytes = await this.blobs.get(original.blobKey);
@@ -649,6 +663,11 @@ export class MediaService {
   async describe({ accessToken, mediaId }) {
     const session = await this.#requireSession(accessToken);
     const asset = await this.#originAsset(mediaId, session);
+    // PORCH-093: a tombstone-held original never resolves on any media
+    // read surface during the restore window (ac-2).
+    if (await this.#heldByTombstone(session.networkId, mediaId)) {
+      throw typedError("E_MEDIA_NOT_FOUND", MESSAGES.E_MEDIA_NOT_FOUND);
+    }
     return {
       mediaId: asset._id,
       kind: asset.kind,
@@ -912,6 +931,91 @@ export class MediaService {
       bytesFreed += row.bytes ?? 0;
     }
     return { assetRowsRemoved: rows.length, bytesFreed };
+  }
+
+  /**
+   * The delete-time media step of the lifecycle law (PORCH-093): RENDITIONS
+   * purge at delete; the ORIGINAL binaries are untouched — the tombstone
+   * holds them (mediaOrigins) through the restore window. Every rendition
+   * derived from the named originals leaves the archive (asset rows, blob
+   * bytes, quota ledger rows). Store-side only: the caller owns the authority
+   * gate, the tombstone write, and the audit record.
+   */
+  async purgeRenditionsOf({ networkId, originalIds } = {}) {
+    const wanted = new Set((originalIds ?? []).map(String));
+    if (!wanted.size) return { renditionRowsRemoved: 0, bytesFreed: 0 };
+    const rows = (await this.assets.find({ networkId: String(networkId), kind: "rendition" })).filter(
+      (row) => wanted.has(row.originalId),
+    );
+    let bytesFreed = 0;
+    for (const row of rows) {
+      await this.assets.deleteOne({ _id: row._id });
+      await this.blobs.delete(row.blobKey);
+      await this.quota.removeArtifact(row._id);
+      bytesFreed += row.bytes ?? 0;
+    }
+    return { renditionRowsRemoved: rows.length, bytesFreed };
+  }
+
+  /**
+   * Hard-purge destruction (PORCH-093): the day-30 reaper's store side —
+   * the held ORIGINAL binaries (asset rows, bytes, ledger rows) and the
+   * held link-preview derivations (the blob keys a tombstone held through
+   * the window) leave the archive in this pass. Blob destruction is
+   * survivor-guarded: the content-addressed store dedupes identical bytes,
+   * and a key still held by any surviving asset row (this origin or any
+   * other) keeps its bytes — a tombstone's purge can never destroy a
+   * sibling's media. Idempotent by construction: re-running the pass deletes
+   * nothing twice (retries never double-destroy).
+   */
+  async purgeHeldLifecycleMedia({ networkId, originalIds = [], heldBlobKeys = [] } = {}) {
+    const wanted = new Set((originalIds ?? []).map(String));
+    let assetRowsRemoved = 0;
+    let bytesFreed = 0;
+    if (wanted.size) {
+      const originals = (await this.assets.find({ networkId: String(networkId) })).filter(
+        (row) => wanted.has(row._id) && row.kind === "original",
+      );
+      for (const original of originals) {
+        const renditionRows = await this.assets.find({
+          networkId: original.networkId,
+          originalId: original._id,
+          kind: "rendition",
+        });
+        for (const rendition of renditionRows) {
+          await this.assets.deleteOne({ _id: rendition._id });
+          await this.blobs.delete(rendition.blobKey);
+          await this.quota.removeArtifact(rendition._id);
+          bytesFreed += rendition.bytes ?? 0;
+          assetRowsRemoved += 1;
+        }
+        await this.assets.deleteOne({ _id: original._id });
+        await this.#deleteBlobIfUnheld(original.blobKey);
+        await this.quota.removeArtifact(original._id);
+        bytesFreed += original.bytes ?? 0;
+        assetRowsRemoved += 1;
+      }
+    }
+    for (const key of heldBlobKeys ?? []) {
+      await this.#deleteBlobIfUnheld(key);
+    }
+    return { assetRowsRemoved, bytesFreed };
+  }
+
+  /** Delete a blob's bytes only when no surviving asset row holds the key. */
+  async #deleteBlobIfUnheld(blobKey) {
+    const survivors = await this.assets.find({ blobKey });
+    if (survivors.length === 0) await this.blobs.delete(blobKey);
+  }
+
+  /** True when a lifecycle tombstone at this origin holds the media id
+   *  (the original binary is retained at rest but is unreachable by
+   *  read law during the restore window — and after purge the rows are
+   *  audited-only, so the hold stays true either way). */
+  async #heldByTombstone(networkId, mediaId) {
+    if (!this.tombstones) return false;
+    const rows = await this.tombstones.find({ originNetworkId: String(networkId) });
+    return rows.some((row) => (row.mediaOrigins ?? []).includes(String(mediaId)));
   }
 
   /* Internals */

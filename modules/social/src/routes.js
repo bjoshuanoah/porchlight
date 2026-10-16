@@ -56,6 +56,14 @@ export function createSocialRouter(controllers) {
   router.delete("/posts/:postId/reactions", content.unreact);
   router.post("/posts/:postId/votes", content.vote);
   router.delete("/posts/:postId", content.deletePost);
+  // Lifecycle edits (PORCH-093): the author's silent text/caption edit on
+  // the post and the author's text edit on a comment; media changes are
+  // refused with the delete-and-repost direction.
+  router.put("/posts/:postId", content.editPost);
+  router.put("/posts/:postId/comments/:commentId", content.editComment);
+  // Lifecycle comment delete (PORCH-093 ac-1): author or network owner;
+  // one atomic operation tombstones the root and cascades its reply tree.
+  router.delete("/posts/:postId/comments/:commentId", content.deleteComment);
   // Bulk original download (PORCH-083): the post's photo set as one
   // streaming zip on the audited original path.
   router.get("/posts/:postId/media/originals.zip", originals.post);
@@ -158,6 +166,10 @@ export function createSocialRouter(controllers) {
   router.get("/console/update", ownerConsole.updateStatus);
   router.post("/console/update", ownerConsole.applyUpdate);
   router.post("/console/retention/sweep", ownerConsole.sweepRetention);
+  // Content lifecycle (PORCH-093): the owner-console tombstone RESTORE
+  // write of record (the console's tombstone list surface itself rides the
+  // deferred console work; when Brian wakes it, the surface rides this).
+  router.post("/console/tombstones/:tombstoneId/restore", ownerConsole.restoreTombstone);
   router.post("/console/groups", ownerConsole.createGroup);
   router.get("/console/groups", ownerConsole.listGroups);
 

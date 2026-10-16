@@ -626,3 +626,154 @@ test("PORCH-054: media-root console pair is served by the real vertical — owne
   assert.ok(change, "a media-root edit is audited");
   assert.equal(((change.detail as Json) ?? {}).mediaMoved, false);
 });
+/* ---- PORCH-093: the post/comment lifecycle route family ------------------ */
+
+test("PORCH-093: the lifecycle route family serves the author edit, the comment delete cascade, and the owner console tombstone restore", async (t) => {
+  const hub = testHub();
+  const port = await hub.port;
+  t.after(() => hub.close());
+  const owner = await bootOwner(port);
+  const member = await bootMember(hub, port, owner.auth, "June", "dev_june");
+
+  // Member writes a post and a two-level comment tree.
+  const postPayload = { type: "text", body: "route family" };
+  const created = await call(port, "/api/social/posts", {
+    method: "POST",
+    headers: member.auth,
+    body: JSON.stringify({ payload: postPayload, signature: signPayload(member.pair, postPayload) }),
+  });
+  assert.equal(created.status, 200);
+  const post = created.body.post as Json;
+  const postId = post._id as string;
+  const networkId = post.originNetworkId as string;
+
+  const rootPayload = { postId, body: "root note" };
+  const rootRes = await call(port, `/api/social/posts/${postId}/comments`, {
+    method: "POST",
+    headers: member.auth,
+    body: JSON.stringify({ payload: rootPayload, signature: signPayload(member.pair, rootPayload) }),
+  });
+  assert.equal(rootRes.status, 200);
+  const rootId = ((rootRes.body.comment as Json)._id) as string;
+  const replyPayload = { postId, body: "nested reply", parentId: rootId };
+  const replyRes = await call(port, `/api/social/posts/${postId}/comments`, {
+    method: "POST",
+    headers: member.auth,
+    body: JSON.stringify({ payload: replyPayload, signature: signPayload(member.pair, replyPayload) }),
+  });
+  assert.equal(replyRes.status, 200);
+  const replyId = ((replyRes.body.comment as Json)._id) as string;
+
+  // PUT /posts/:postId — the author's edit applies.
+  const editBody = "route family, revised";
+  const editRes = await call(port, `/api/social/posts/${postId}`, {
+    method: "PUT",
+    headers: member.auth,
+    body: JSON.stringify({
+      payload: { body: editBody },
+      signature: signPayload(member.pair, { kind: "post-edit", postId, networkId, body: editBody }),
+    }),
+  });
+  assert.equal(editRes.status, 200);
+  assert.equal(((editRes.body.post as Json).body) as string, editBody);
+
+  // The author-only gate: the network owner's edit is refused loudly.
+  const ownerEditRes = await call(port, `/api/social/posts/${postId}`, {
+    method: "PUT",
+    headers: owner.auth,
+    body: JSON.stringify({
+      payload: { body: "owner edit" },
+      signature: signPayload(owner.pair, { kind: "post-edit", postId, networkId, body: "owner edit" }),
+    }),
+  });
+  assert.equal(ownerEditRes.status, 403);
+  assert.equal(ownerEditRes.body.code, "E_EDIT_NOT_AUTHOR");
+
+  // Media immutability: the mediaRef change refuses with the direction named.
+  const mediaEditRes = await call(port, `/api/social/posts/${postId}`, {
+    method: "PUT",
+    headers: member.auth,
+    body: JSON.stringify({
+      payload: { mediaRefs: ["med_swap"] },
+      signature: signPayload(member.pair, { kind: "post-edit", postId, networkId }),
+    }),
+  });
+  assert.equal(mediaEditRes.status, 400);
+  assert.equal(mediaEditRes.body.code, "E_EDIT_MEDIA_IMMUTABLE");
+
+  // PUT comment — the author's text edit applies; DELETE comment — the
+  // tree cascade rides the same route family.
+  const commentEditRes = await call(port, `/api/social/posts/${postId}/comments/${rootId}`, {
+    method: "PUT",
+    headers: member.auth,
+    body: JSON.stringify({
+      payload: { body: "root note, revised" },
+      signature: signPayload(member.pair, { kind: "comment-edit", postId, commentId: rootId, body: "root note, revised", networkId }),
+    }),
+  });
+  assert.equal(commentEditRes.status, 200);
+  assert.equal(((commentEditRes.body.comment as Json).body) as string, "root note, revised");
+
+  const deleteCommentRes = await call(port, `/api/social/posts/${postId}/comments/${rootId}`, {
+    method: "DELETE",
+    headers: member.auth,
+    body: JSON.stringify({ signature: signPayload(member.pair, { kind: "comment-delete", postId, commentId: rootId, networkId }) }),
+  });
+  assert.equal(deleteCommentRes.status, 200);
+  const commentDeleteBody = deleteCommentRes.body as { deleted: boolean; tombstoneId: string; cascadedReplies: number };
+  assert.equal(commentDeleteBody.deleted, true);
+  assert.equal(commentDeleteBody.cascadedReplies, 1);
+  const threadAfter = await call(port, `/api/social/posts/${postId}/comments`, { headers: member.auth });
+  assert.deepEqual(((threadAfter.body.comments as Json[]) ?? []).map((row) => row._id), []);
+
+  // The owner console restores the comment tombstone first: the root and
+  // its nested reply re-materialize exactly as captured.
+  const commentRestoreRes = await call(port, `/api/social/console/tombstones/${commentDeleteBody.tombstoneId}/restore`, {
+    method: "POST",
+    headers: owner.auth,
+  });
+  assert.equal(commentRestoreRes.status, 200);
+  assert.equal(((commentRestoreRes.body as Json).subjectId) as string, rootId);
+  const threadRestored = await call(port, `/api/social/posts/${postId}/comments`, { headers: member.auth });
+  assert.deepEqual(((threadRestored.body.comments as Json[]) ?? []).map((row) => row._id), [rootId, replyId]);
+
+  // DELETE the post — the tombstone lands; the member's restore attempt is
+  // refused (owner-only), the owner's restore re-materializes, and a second
+  // restore of the consumed tombstone refuses as unknown.
+  const deletePostRes = await call(port, `/api/social/posts/${postId}`, {
+    method: "DELETE",
+    headers: member.auth,
+    body: JSON.stringify({ signature: signPayload(member.pair, { kind: "delete", postId, networkId }) }),
+  });
+  assert.equal(deletePostRes.status, 200);
+  const tombstoneId = ((deletePostRes.body as Json).tombstoneId) as string;
+  assert.ok(tombstoneId);
+  const goneRes = await call(port, `/api/social/posts/${postId}`, { headers: member.auth });
+  assert.equal(goneRes.status, 404);
+
+  const memberRestoreRes = await call(port, `/api/social/console/tombstones/${tombstoneId}/restore`, {
+    method: "POST",
+    headers: member.auth,
+  });
+  assert.equal(memberRestoreRes.status, 403);
+  assert.equal(memberRestoreRes.body.code, "E_FORBIDDEN", "the console perimeter refuses a non-owner before the lifecycle gate");
+
+  const restoreRes = await call(port, `/api/social/console/tombstones/${tombstoneId}/restore`, {
+    method: "POST",
+    headers: owner.auth,
+  });
+  assert.equal(restoreRes.status, 200);
+  assert.equal(((restoreRes.body as Json).restored) as boolean, true);
+  const backRes = await call(port, `/api/social/posts/${postId}`, { headers: member.auth });
+  assert.equal(backRes.status, 200);
+  assert.equal(((backRes.body.post as Json).body) as string, editBody, "the edited content re-materialized");
+  const threadBack = await call(port, `/api/social/posts/${postId}/comments`, { headers: member.auth });
+  assert.deepEqual(((threadBack.body.comments as Json[]) ?? []).map((row) => row._id), [rootId, replyId]);
+
+  const reRestoreRes = await call(port, `/api/social/console/tombstones/${tombstoneId}/restore`, {
+    method: "POST",
+    headers: owner.auth,
+  });
+  assert.equal(reRestoreRes.status, 404);
+  assert.equal(reRestoreRes.body.code, "E_TOMBSTONE_NOT_FOUND");
+});

@@ -286,23 +286,43 @@ test("ac-2 deletion cascade: a post delete carries its preview records, og:image
   const secondView = (await fx.postService.get({ accessToken, postId: postTwo._id })).post;
   assert.ok(secondView.preview.ogImage.mediaId, "the surviving reference still hydrates its ingested og:image");
 
-  // The reply's og:image died fully: no asset, no rendition, no ledger row,
-  // no bytes.
+  // The reply's og:image derived artifacts left reachable state: no asset,
+  // no rendition, no ledger row — but its bytes HOLD the restore window
+  // (PORCH-093): the tombstone's heldBlobKeys, destroyed only at hard purge.
   assert.equal((await rows("media_assets")).some((row) => row._id === replyMediaId || row.originalId === replyMediaId), false);
   assert.equal((await rows("artifacts")).some((row) => row.sourceId === replyMediaId), false);
-  assert.equal(await fx.mediaService.blobs.get(replyBlobKey), null, "the og:image bytes died with the parent content");
+  assert.notEqual(await fx.mediaService.blobs.get(replyBlobKey), null, "the og:image bytes hold the restore window at rest");
+  const firstTombstone = (await fx.store.collection("tombstones").find({})).find((row) => row.subjectId === postOne._id);
+  assert.ok(firstTombstone.heldBlobKeys.includes(replyBlobKey), "the tombstone holds the reply's og:image bytes through the window");
 
   // Cascading the second post removes the last reference: the og:image
-  // asset, renditions, ledger, and the shared bytes all go.
+  // asset, renditions, and ledger rows go; its bytes hold the window beside
+  // the second tombstone.
+  const gardenMediaId = previews.get(second.preview.id).ogImageMediaId;
+  const gardenBlobKey = (await rows("media_assets")).find((row) => row._id === gardenMediaId)?.blobKey;
   await fx.postService.deletePost({
     accessToken,
     postId: postTwo._id,
     signature: fx.dev.signPayload({ kind: "delete", postId: postTwo._id, networkId: FAMILY }),
   });
-  const gardenMediaId = previews.get(second.preview.id).ogImageMediaId;
   const rowsAfter = (await rows("media_assets")).filter((row) => row._id === gardenMediaId || row.originalId === gardenMediaId);
   assert.equal(rowsAfter.length, 0);
   assert.equal((await rows("artifacts")).some((row) => row.sourceId === gardenMediaId), false);
+  assert.notEqual(await fx.mediaService.blobs.get(gardenBlobKey), null, "the shared og:image bytes hold the window at rest");
+
+  // The day-30 reaper: shift both tombstones past their window and sweep —
+  // the held bytes die one time; the tombstones remain audit-only.
+  for (const tombstone of await fx.store.collection("tombstones").find({})) {
+    await fx.store.collection("tombstones").updateOne(
+      { _id: tombstone._id },
+      { $set: { purgeAt: new Date(Date.now() - 1000).toISOString() } },
+    );
+  }
+  const swept = await fx.lifecycleService.sweep({ now: () => new Date() });
+  assert.equal(swept.purged, 2);
+  assert.equal(await fx.mediaService.blobs.get(replyBlobKey), null, "the held reply bytes died at the one-time purge");
+  assert.equal(await fx.mediaService.blobs.get(gardenBlobKey), null, "the held shared bytes died at the one-time purge");
+  assert.equal((await fx.store.collection("tombstones").find({})).length, 2, "the purged tombstones remain for audit");
   // The URL-level cache never dies with content — the hub keeps reusing it.
   assert.ok(await fx.store.collection("link_preview_cache").find({}).then((c) => c.some((row) => row.url === page)));
   // A third share of the same URL re-ingests bytes (the cache metadata is

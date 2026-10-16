@@ -406,14 +406,26 @@ test("ac-4: the removal executes the origin deletion cascade and lands one audit
     signature: fx.devs.cass.signPayload({ kind: "group_post_remove", postId: removedPost._id, groupId, networkId: FAMILY }),
   });
   assert.equal(removed.removed, true);
-  assert.equal(removed.mediaRemoved, 1);
+  assert.ok(removed.tombstoneId);
 
-  // The post and every derived artifact are gone.
+  // The post and every derived artifact are gone — onto the tombstone: the
+  // moderation delete rides the SAME tombstone pattern as every lifecycle
+  // delete (Brian, Oct 16, 2026: "It should be the same tombstone pattern"),
+  // with the managing member attributed deletedByRole: group-manager.
   assert.equal(await fx.store.collection("posts").findOne({ _id: removedPost._id }), null);
   assert.equal((await fx.store.collection("comments").find()).filter((row) => row.postId === removedPost._id).length, 0);
   assert.equal((await fx.store.collection("reactions").find()).filter((row) => row.postId === removedPost._id).length, 0);
-  assert.equal(await fx.store.collection("media_assets").findOne({ _id: "med_removed" }), null);
-  assert.equal(await fx.mod.mediaService.blobs.get(createHash("sha256").update(Buffer.from("original bytes")).digest("hex")), null, "the original bytes left the archive with the post");
+  // Renditions purge at delete; the ORIGINAL binary holds the restore
+  // window at rest (never served) — the day-30 reaper purges it once.
+  const tombstone = await fx.store.collection("tombstones").findOne({ _id: removed.tombstoneId });
+  assert.equal(tombstone.deletedByRole, "group-manager");
+  assert.equal(tombstone.subjectType, "post");
+  assert.equal(tombstone.subjectId, removedPost._id);
+  assert.deepEqual(tombstone.mediaOrigins, ["med_removed"]);
+  assert.equal(tombstone.purgedAt, null);
+  assert.ok(await fx.store.collection("media_assets").findOne({ _id: "med_removed" }), "the original holds the restore window");
+  const originalKey = createHash("sha256").update(originalBytes).digest("hex");
+  assert.notEqual(await fx.mod.mediaService.blobs.get(originalKey), null, "the original bytes hold the restore window at rest");
   // Other members' content untouched: the untouched post and its own
   // comment survive the removal whole.
   const otherComment = (await fx.interactions.comment({
@@ -456,8 +468,16 @@ test("ac-4: a removed post leaves the event catch-up immediately, and every catc
     postId: groupPost._id,
     signature: fx.devs.cass.signPayload({ kind: "group_post_remove", postId: groupPost._id, groupId, networkId: FAMILY }),
   });
-  const replayed = await fx.realtime.catchUp({ accessToken: fx.tokens.devon, since: null });
-  assert.ok(!replayed.events.some((e) => e.postId === groupPost._id), "the removed post never replays");
+  // The removed post leaves every read surface immediately; the delta now
+  // replays exactly the tree-scoped post.deleted removal event (PORCH-093)
+  // — no created or decorated view of the removed post ever replays again.
+  // The removal rode the module assembly's event plane (the same store, the
+  // assembled hub's own realtime service).
+  const replayed = await fx.mod.realtimeService.catchUp({ accessToken: fx.tokens.devon, since: null });
+  const forRemoved = replayed.events.filter((e) => e.postId === groupPost._id);
+  assert.equal(forRemoved.length, 1);
+  assert.equal(forRemoved[0].type, "post.deleted");
+  assert.equal(forRemoved[0].content.cascadeIds !== undefined, true);
 });
 
 /* ---- ac-5 + ac-6: the per-group notification preference ------------------ */
