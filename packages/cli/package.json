@@ -1,6 +1,6 @@
 {
   "name": "porchlight",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Porchlight CLI — the npm global install surface and the hub's one-command bring-up: setup, daemon supervision, tunnel, remote bootstrap.",
   "license": "MIT",
   "author": "Brian Noah",
@@ -24,8 +24,8 @@
     "mongodb-memory-server"
   ],
   "dependencies": {
-    "@porchlight/server": "0.4.0",
-    "@porchlight/shared": "0.4.0",
+    "@porchlight/server": "0.4.1",
+    "@porchlight/shared": "0.4.1",
     "mongodb": "^6.10.0",
     "redis": "^4.7.0",
     "mongodb-memory-server": "^11.3.0"
