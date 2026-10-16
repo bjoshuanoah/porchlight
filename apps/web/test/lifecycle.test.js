@@ -182,6 +182,23 @@ test("ac-2: the edit composer is pre-filled, media read-only, with the location 
   // rendered DOM in the sweep below).
 });
 
+// PORCH-093 user-testing fix (Brian, Oct 16, 2026, "The edit action should
+// load everything exactly as is"): readDraft must hand back the RAW held
+// value — an absent draft reads undefined, so the composers'
+// `?? the-current-content` fallbacks engage. The shipped
+// `drafts.get(target) ?? ''` coerced "no draft" to '', and '' is not
+// nullish, so the prefill object never engaged and every fresh edit
+// composer opened blank (the wipe the member had to retype).
+test("ac-2: an absent edit draft reads undefined — the composers pre-fill from the current content", () => {
+  assert.match(social, /const readDraft = \(target\) => drafts\.get\(target\);/,
+    "the draft read never coerces an absent draft to '' — that swallowed the edit prefill");
+  // The fallbacks of record stay in place: the post edit pre-fills from the
+  // row's current text/caption/target, comment edits from the row's text.
+  assert.match(card, /initial=\{readDraft\('edit:post'\) \?\? \{ body: row\.body \?\? '', caption: row\.caption \?\? '', locationId: currentLocationId\(row\) \}\}/);
+  assert.match(social, /initialText=\{readDraft\?\.\(`edit:\$\{editTarget\}`\) \?\? editRow\?\.body \?\? ''\}/);
+  assert.match(social, /initialText=\{readDraft\(`edit:\$\{editFor\}`\) \?\? editRow\?\.body \?\? ''\}/);
+});
+
 test("ac-2: the location rows offer the general timeline plus the author's groups only", () => {
   const data = {
     identity: { id: "did:me" },
