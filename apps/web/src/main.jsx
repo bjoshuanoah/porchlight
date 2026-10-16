@@ -32,6 +32,10 @@ import { registerMediaTransport, syncMediaTransport, workerRegistration } from "
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Settings, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, UserSwitcher, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
+// PORCH-095: the boot surface (first paint, before route resolution) and
+// the app-ready bus — readiness ends the boot, never a timer.
+import { LanternBoot } from "./lantern.jsx";
+import { markAppReady } from "./appready.js";
 // PORCH-051: the Add to Home Screen machinery — the decision logic module
 // and its two surfaces (the Android custom CTA, the iOS guided card).
 import { consumeInstallPrompt, installSuppressed, isStandaloneLaunch, surfaceInstallKind, webkitClass } from "./install.js";
@@ -218,6 +222,11 @@ function App() {
     setRoute(next);
     restoreScroll(next);
   }, [restoreScroll]);
+  // PORCH-095: readiness ends the boot. The first surface's commit is the
+  // app-ready event — the crossfade fires the moment it lands, even
+  // mid-sequence, with no artificial hold and no minimum display time
+  // (boot progress is driven by readiness events, never a timer alone).
+  useEffect(() => { markAppReady(); }, []);
   useEffect(() => {
     const pop = () => {
       const next = routeOf();
@@ -1482,6 +1491,11 @@ function App() {
   };
 
   return <ThemeProvider theme={muiTheme}><CssBaseline />
+    {/* PORCH-095: the boot surface — the app's first paint, before route
+        resolution. Readiness ends it: the first surface's commit is the
+        app-ready event, and the crossfade fires the moment it lands, even
+        mid-sequence, with no artificial hold. */}
+    <LanternBoot />
     {!frontDoor && <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(12px)", background: `var(--porch-appbar-bg)` }}>
       <Toolbar sx={{ minHeight: { xs: 56, lg: 64 }, maxWidth: 1180, width: "100%", mx: "auto", px: { xs: 2, lg: 4 }, pt: "env(safe-area-inset-top)" }}>
         {/* Brand lockup (PORCH-032): the new lamp mark plus the navy wordmark. */}
