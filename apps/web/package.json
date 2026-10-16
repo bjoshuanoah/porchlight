@@ -1,6 +1,6 @@
 {
   "name": "@porchlight/web",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Hub-served Porchlight web and mobile-web SPA",
   "license": "MIT",

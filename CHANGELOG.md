@@ -5,6 +5,12 @@ under its `## v` heading is the line of record the release workflow copies
 into that release's notes (the npm-publish workflow fails loudly if the
 heading is missing).
 
+## v0.4.1 — 2026-10-16
+
+- PORCH-093/094: posts and comments have a lifecycle. The author can Edit or Delete their own posts and comments from the card and detail `···` menus; the network owner may also delete anything inside the networks they own, and a group's managing member may delete posts in their group (posts only, attributed to them). Edits are silent — no edited marker, badge, or history, and the content re-renders in place on connected devices. The edit composer opens with the post's content exactly as it stands (never a blank form), carries a Cancel button that abandons the edit, and includes the location control: a post can move between the general timeline and a group on its own network, and delivery follows the new target immediately. Deletes cascade — comments, replies, reactions, votes, and notifications go together; photo and video renditions are removed at delete while the originals hold a 30-day restore window the owner console can reverse (restore re-materializes the post or comment with everything it lost); after 30 days a tombstone hard-purges once and restore is refused.
+- PORCH-095: the loading experience is quieter and unmistakably Porchlight — a lantern boot screen climbs navy until the hub is ready, and in-app waits carry reserved-space loader marks instead of jumping layouts, with a spinner sweep on the remaining waits.
+- PORCH-096: the compose card always names its room — the location control pre-fills from where the member already is (a group's "+ New post" opens the composer pre-set to that group, and nothing is ambiguous about where a moment will land).
+
 ## v0.4.0 — 2026-10-16
 
 - The update surfaces now speak for the cut itself (PORCH-077): the console's Updates card and `porchlight update` show the pending release's notes verbatim — the GitHub release body first, then this changelog line — so these lines render on those surfaces whenever a newer release is pending. Never generated, never summarized.
