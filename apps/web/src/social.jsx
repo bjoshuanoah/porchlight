@@ -861,7 +861,12 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
   const holdDraft = (target, text) => {
     if (text) drafts.set(target, text); else drafts.delete(target);
   };
-  const readDraft = (target) => drafts.get(target) ?? '';
+  // A held draft reads back as the held value; an absent draft reads
+  // undefined so every consumer's `?? the-current-content` fallback engages
+  // (the edit composer pre-fills from the post exactly as it stands —
+  // Brian's user-testing fix, Oct 16, 2026). A draft is never held empty:
+  // holdDraft deletes on an empty value.
+  const readDraft = (target) => drafts.get(target);
   const operation = useOperation();
   // Conversation slice state (PORCH-046): pending replies (write in flight,
   // rolled back on failure) and acknowledged replies (write confirmed, next
@@ -2281,7 +2286,7 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const [groupRevision, setGroupRevision] = useState(0);
   const openComposer = (target) => setComposerFor(target);
   const holdDraft = (target, text) => { if (text) drafts.set(target, text); else drafts.delete(target); };
-  const readDraft = (target) => drafts.get(target) ?? '';
+  const readDraft = (target) => drafts.get(target);
   // Comment lifecycle parity (PORCH-094 ac-4): the detail column rides the
   // same authority gating, the same one-composer edit mode, and the same
   // confirm-then-live-tombstone delete flow as the card slice.
