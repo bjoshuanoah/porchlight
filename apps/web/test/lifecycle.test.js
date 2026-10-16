@@ -199,6 +199,24 @@ test("ac-2: an absent edit draft reads undefined — the composers pre-fill from
   assert.match(social, /initialText=\{readDraft\(`edit:\$\{editFor\}`\) \?\? editRow\?\.body \?\? ''\}/);
 });
 
+// PORCH-093 user-testing fix (Brian, Oct 16, 2026, "If I want to cancel
+// editing, I should be able to hit a cancel button"): the edit composers
+// carry Cancel beside Save. Cancel abandons the edit — the composer closes,
+// nothing is written, no merge touches the card, and the staged draft is
+// dropped so a fresh Edit loads the content exactly as it stands.
+test("ac-2: the edit composers carry Cancel — cancel abandons the edit and drops the staged draft", () => {
+  const postComposer = social.slice(social.indexOf("function PostEditForm("), social.indexOf("function CommentEditForm("));
+  const commentComposer = social.slice(social.indexOf("function CommentEditForm("), social.indexOf("/**\n * A comment row's lifecycle overflow"));
+  // Cancel rides the composer, disabled only mid-write.
+  assert.match(postComposer, /data-testid="cancel-edit-post" disabled=\{operation\.busy\} onClick=\{\(\) => onCancel\?\.\(\)\}>Cancel</);
+  assert.match(commentComposer, /data-testid="comment-edit-cancel" disabled=\{operation\.busy\} onClick=\{\(\) => onCancel\?\.\(\)\}>Cancel</);
+  // Every edit-mode call site wires the abandonment: composer closed, staged
+  // draft dropped, no state mutated. The post edit never merges editedFields.
+  assert.match(card, /onCancel=\{\(\) => \{ setEditFor\(null\); holdDraft\('edit:post', ''\); \}\}/);
+  assert.match(social, /onCancel=\{\(\) => \{ onEditClosed\?\.\(\); onDraftDone\?\.\(`edit:\$\{editTarget\}`, ''\); \}\}/);
+  assert.match(social, /onCancel=\{\(\) => \{ setEditFor\(null\); holdDraft\(`edit:\$\{editFor\}`, ''\); \}\}/);
+});
+
 test("ac-2: the location rows offer the general timeline plus the author's groups only", () => {
   const data = {
     identity: { id: "did:me" },

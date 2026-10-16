@@ -1126,6 +1126,10 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
         initial={readDraft('edit:post') ?? { body: row.body ?? '', caption: row.caption ?? '', locationId: currentLocationId(row) }}
         onDraft={(value) => holdDraft('edit:post', value)}
         onSaved={applyEditResult}
+        // Cancel (Brian, Oct 16, 2026): the composer closes with the pre-edit
+        // card exactly as it stood and the staged draft is dropped — a fresh
+        // Edit loads the post's current content again.
+        onCancel={() => { setEditFor(null); holdDraft('edit:post', ''); }}
         onSubmit={(fields) => invoke(actions, 'editPost', post, fields)}
       />}
       {editFor !== 'post' && (row.body || row.caption) && <Box sx={{ mt: detail ? 2 : 1 }}>
@@ -1587,7 +1591,7 @@ function GroupHeader({ group, data, actions, onchanged }) {
 // never another network, never a group the author does not belong to. Save
 // applies text, caption, and target as ONE write; a failed write holds the
 // full draft including the staged target choice.
-function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved = null, onSubmit }) {
+function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved = null, onCancel = null, onSubmit }) {
   const [body, setBody] = useState(initial?.body ?? '');
   const [caption, setCaption] = useState(initial?.caption ?? '');
   const [locationId, setLocationId] = useState(initial?.locationId ?? currentLocationId(post));
@@ -1635,9 +1639,16 @@ function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved =
       {locationRows.map((item) => <MenuItem key={item.id || 'general'} value={item.id}>{item.label}</MenuItem>)}
     </TextField>
     {(row?.mediaRefs ?? row?.mediaIds ?? []).length > 0 && <Typography variant="caption" color="text.secondary">Media is set as posted. To change it, delete this post and post it again.</Typography>}
-    <Button type="submit" variant="contained" disabled={offline || operation.busy || !body.trim()} sx={{ alignSelf: 'flex-start' }}>
-      {operation.busy ? 'Saving…' : 'Save changes'}
-    </Button>
+    {/* Cancel (Brian, Oct 16, 2026, user-testing): hitting Cancel abandons
+        the edit — the composer closes, nothing is written, and the staged
+        draft is dropped so a fresh Edit loads the post's current content
+        again. Disabled mid-write: the save's outcome decides the close. */}
+    <Stack direction="row" spacing={1}>
+      <Button type="submit" variant="contained" disabled={offline || operation.busy || !body.trim()} sx={{ alignSelf: 'flex-start' }}>
+        {operation.busy ? 'Saving…' : 'Save changes'}
+      </Button>
+      <Button data-testid="cancel-edit-post" disabled={operation.busy} onClick={() => onCancel?.()}>Cancel</Button>
+    </Stack>
     {operation.error && <Alert severity="error" data-testid="edit-error">{operation.error}</Alert>}
   </Stack>;
 }
@@ -1645,7 +1656,7 @@ function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved =
 // The comment's edit composer (PORCH-094 ac-4): text only — comments carry
 // no location and no media to edit. Pre-filled, full rail width, one
 // composer per surface; a failed write keeps it open with the draft held.
-function CommentEditForm({ row, initialText, onDraft = null, onDone = null, onSubmit }) {
+function CommentEditForm({ row, initialText, onDraft = null, onDone = null, onCancel = null, onSubmit }) {
   const [text, setText] = useState(initialText ?? '');
   const operation = useOperation();
   return <Stack component="form" spacing={1} sx={{ my: 1 }} onSubmit={(event) => {
@@ -1664,9 +1675,16 @@ function CommentEditForm({ row, initialText, onDraft = null, onDone = null, onSu
       data-testid="comment-edit-field"
       onChange={(event) => { setText(event.target.value); onDraft?.(event.target.value); }}
     />
-    <Button type="submit" variant="contained" disabled={operation.busy || !text.trim()} sx={{ alignSelf: 'flex-start' }} data-testid="comment-edit-save">
-      {operation.busy ? 'Saving…' : 'Save changes'}
-    </Button>
+    {/* Cancel (Brian, Oct 16, 2026, user-testing): abandons the edit — the
+        composer closes, nothing is written, and the staged draft is dropped
+        so a fresh Edit loads the comment's current text again. Disabled
+        mid-write: the save's outcome decides the close. */}
+    <Stack direction="row" spacing={1}>
+      <Button type="submit" variant="contained" disabled={operation.busy || !text.trim()} sx={{ alignSelf: 'flex-start' }} data-testid="comment-edit-save">
+        {operation.busy ? 'Saving…' : 'Save changes'}
+      </Button>
+      <Button data-testid="comment-edit-cancel" disabled={operation.busy} onClick={() => onCancel?.()}>Cancel</Button>
+    </Stack>
     {operation.error && <Alert severity="error" data-testid="comment-edit-error">{operation.error}</Alert>}
   </Stack>;
 }
@@ -1858,6 +1876,10 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
       initialText={readDraft?.(`edit:${editTarget}`) ?? editRow?.body ?? ''}
       onDraft={(text) => onDraftDone?.(`edit:${editTarget}`, text)}
       onDone={() => { onEditClosed?.(); onDraftDone?.(`edit:${editTarget}`, ''); }}
+      // Cancel (Brian, Oct 16, 2026): the composer closes with the row
+      // exactly as it stood and the staged draft is dropped — a fresh Edit
+      // loads the comment's current text again.
+      onCancel={() => { onEditClosed?.(); onDraftDone?.(`edit:${editTarget}`, ''); }}
       onSubmit={(body) => submitCommentEdit(editRow, body)}
     />}
     {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
@@ -2420,6 +2442,10 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
             initialText={readDraft(`edit:${editFor}`) ?? editRow?.body ?? ''}
             onDraft={(text) => holdDraft(`edit:${editFor}`, text)}
             onDone={() => setEditFor(null)}
+            // Cancel (Brian, Oct 16, 2026): the composer closes with the row
+            // exactly as it stood and the staged draft is dropped — a fresh
+            // Edit loads the comment's current text again.
+            onCancel={() => { setEditFor(null); holdDraft(`edit:${editFor}`, ''); }}
             onSubmit={(body) => submitThatCommentEdit(editRow, body)}
           />;
         })()}
