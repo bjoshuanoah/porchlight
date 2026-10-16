@@ -152,7 +152,7 @@ test("menu shape: the options control is an MUI IconButton anchored menu on the 
 test("presentation: chips stay color-independent; faces render through the hub's own loads", () => {
   // The group chip's amber treatment is the shipped constant — the color is
   // never allowed to ride the chips.
-  assert.match(social, /post\.groupName && <Chip label=\{post\.groupName\}[^\n]*'porchlight\.amberSoft'/);
+  assert.match(social, /row\.groupName && <Chip label=\{row\.groupName\}[^\n]*'porchlight\.amberSoft'/);
   // The group face's bytes ride the authorized rung loader (hub origin
   // only, blob-cached) — never a raw third-party URL.
   assert.match(social, /loadGroupAvatarRendition/);

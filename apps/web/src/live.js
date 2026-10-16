@@ -20,9 +20,16 @@
 import { identityOf } from "./feed-filter.js";
 import { readLocal, writeLocal } from "./store.js";
 import { windowOf } from "./slice.js";
+import {
+  applyPostEditedRow, applyPostDeletedRow, applyCommentEditedRow, applyCommentDeletedRows,
+  groupDeliversTo,
+} from "./lifecycle.js";
 
-/** The closed event vocabulary (PORCH-047). */
-export const EVENT_TYPES = ["post.created", "reply.created", "reaction.applied", "media.attached"];
+/** The closed event vocabulary (PORCH-047; lifecycle events added Oct 16, PORCH-094). */
+export const EVENT_TYPES = [
+  "post.created", "reply.created", "reaction.applied", "media.attached",
+  "post.updated", "post.deleted", "comment.updated", "comment.deleted",
+];
 
 /** The per-origin catch-up cursor (the plane's opaque seq), browser-local. */
 export function readEventCursor(storage, origin) {
@@ -65,7 +72,65 @@ export function applyEvent(posts, envelope, context = {}) {
   }
   if (type === "post.created") return mergeNewPost(posts, envelope, context);
   if (type === "reply.created") return mergeNewReply(posts, envelope);
-  return mergeNewReaction(posts, envelope);
+  if (type === "reaction.applied") return mergeNewReaction(posts, envelope);
+  if (type === "post.updated") return mergeUpdatedPost(posts, envelope, context);
+  if (type === "post.deleted") return applyPostDeletedRow(posts, envelope.postId, envelope.networkId);
+  if (type === "comment.updated") return applyCommentEditedRow(posts, {
+    postId: envelope.postId,
+    networkId: envelope.networkId,
+    comment: envelope.content,
+  });
+  if (type === "comment.deleted") {
+    return applyCommentDeletedRows(posts, {
+      postId: envelope.postId,
+      rootId: envelope.content?.rootId,
+      cascadeIds: envelope.content?.cascadeIds ?? [],
+      networkId: envelope.networkId,
+    });
+  }
+  // The vocabulary membership is asserted above; this line is unreachable
+  // by construction and safe by the copy-on-write no-op.
+  return posts;
+}
+
+/**
+ * The post.updated merge (edit + location change, PORCH-094): the served
+ * view swaps the row's delivered fields in place per the row it already
+ * holds — the changed fields re-render with no redraw of the river. The
+ * delivery law drives visibility: a viewer the move removes the card from
+ * drops the row in the same frame; a newly delivered viewer gains it
+ * through the same merge; a viewer keeping visibility re-renders the
+ * location context in place. The decorated conversation slice a read
+ * served stays the richer local source.
+ */
+function mergeUpdatedPost(posts, envelope, context) {
+  const content = envelope.content ?? {};
+  const postId = String(envelope.postId ?? identityOf(content) ?? "");
+  if (!postId) return posts;
+  const existing = (posts ?? []).find((post) =>
+    identityOf(post) === postId && sameOrigin(post, envelope));
+  if (existing) {
+    const fields = { ...content };
+    if (existing.replySlice) fields.replySlice = existing.replySlice;
+    if (existing.knownResponses) fields.knownResponses = existing.knownResponses;
+    if (existing.reactionRows) fields.reactionRows = existing.reactionRows;
+    if (Number.isFinite(existing.replyTotal)) fields.replyTotal = existing.replyTotal;
+    // Silence carries the move: a post moved back to the general timeline
+    // drops its group chip with the same delivery law — no stale chip ever
+    // outlives the envelope that cleared its group.
+    if (!fields.groupId) fields.groupName = null;
+    return applyPostEditedRow(posts, {
+      postId: postId,
+      networkId: envelope.networkId,
+      fields,
+      viewerDid: context.viewerDid ?? null,
+      groups: context.viewerGroups ?? [],
+    });
+  }
+  // A card the viewer gains (a location move delivering it here) enters
+  // the river as an arrival — never a whole-view redraw.
+  if (!groupDeliversTo(content, context.viewerDid ?? null, context.viewerGroups ?? [])) return posts;
+  return mergeNewPost(posts, envelope, context);
 }
 
 function mergeNewPost(posts, envelope, context) {

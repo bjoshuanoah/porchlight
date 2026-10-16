@@ -18,7 +18,11 @@ import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage, signDevicePayload } from "./device.js";
 import { sha256Hex } from "./device-crypto.js";
 import { resolveStoredNames } from "./name-heal.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost, editPost as sendPostEdit, deletePost as sendPostDelete, editComment as sendCommentEdit, deleteComment as sendCommentDelete } from "./member-actions.js";
+import {
+  snapshotPostRow, applyPostEditedRow, revertPostEditedRow,
+  applyCommentEditedRow, applyCommentDeletedRows,
+} from "./lifecycle.js";
 import { firstUrlIn } from "./link-preview.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { applyEvent, readEventCursor, saveEventCursor, catchUpSince } from "./live.js";
@@ -135,6 +139,14 @@ function App() {
   }));
   const [identity, setIdentity] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? initialConnections[0].identity || null : null);
   const [groups, setGroups] = useState([]);
+  // Lifecycle event merges (PORCH-094) read the viewer's delivery facts —
+  // the open identity and the served group roster — through refs so an
+  // arrival merge never depends on (or re-fires) the stream effect when a
+  // group read or an identity touch re-renders.
+  const identityRef = useRef(identity);
+  const groupsRef = useRef(groups);
+  identityRef.current = identity;
+  groupsRef.current = groups;
   const [owner, setOwner] = useState({ members: [], invites: [], devices: [], allDevices: null, deviceLinks: null, settings: {}, audit: [], disk: null, update: null, mediaRoot: null, availability: {} });
   const [network, setNetwork] = useState(null);
   const [networkLoaded, setNetworkLoaded] = useState(false);
@@ -385,7 +397,7 @@ function App() {
     if (membershipEndedRef.current) return;
     let eventUrl = null;
     try { eventUrl = new URL(connection.url).origin; } catch { return; }
-    const context = { origin: eventUrl, network: connection.name || eventUrl, log: console };
+    const context = { origin: eventUrl, network: connection.name || eventUrl, log: console, viewerDid: identityRef.current?.id ?? null, viewerGroups: groupsRef.current };
     const before = captureFeedAnchor();
     const merged = applyEvent(postsRef.current, envelope, context);
     if (merged === postsRef.current) return;
@@ -410,6 +422,7 @@ function App() {
       for (const envelope of result.events) {
         const merged = applyEvent(postsRef.current, envelope, {
           origin: eventUrl, network: connection.name || eventUrl, log: console,
+          viewerDid: identityRef.current?.id ?? null, viewerGroups: groupsRef.current,
         });
         if (merged !== postsRef.current) {
           postsRef.current = merged;
@@ -1059,6 +1072,86 @@ function App() {
     react: async (post, emoji) => publishReaction(connectionForPost(post), post, emoji),
     unreact: async (post, emoji) => unpublishReaction(connectionForPost(post), post, emoji),
     submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
+    // Post + comment lifecycle (PORCH-094): the edit merges the changed
+    // fields into the river optimistically (same instance, stable key — the
+    // card re-renders its fields in place, no full-card remount) and reverts
+    // the exact pre-action row when the signed write fails. The delete
+    // tombstones at the card itself (the confirming member's card leaves in
+    // the same frame; the pre-action card restores on a failed write); the
+    // river reconciles through the post-confirm reload and the other
+    // members' cards through the post.deleted event.
+    editPost: async (post, fields) => {
+      const postId = post._id || post.id;
+      const snapshot = snapshotPostRow(postsRef.current, postId, null);
+      const optimistic = applyPostEditedRow(postsRef.current, {
+        postId, fields, viewerDid: identity?.id ?? null, groups,
+      });
+      postsRef.current = optimistic;
+      setPosts(optimistic);
+      try {
+        const result = await sendPostEdit(connectionForPost(post), post, fields);
+        await reload();
+        return result;
+      } catch (failure) {
+        if (snapshot) {
+          const next = revertPostEditedRow(postsRef.current, { postId, snapshot });
+          postsRef.current = next;
+          setPosts(next);
+        }
+        throw failure;
+      }
+    },
+    deletePost: async (post) => {
+      const result = await sendPostDelete(connectionForPost(post), post);
+      await reload();
+      return result;
+    },
+    // Comment edits and deletes ride the same optimistic discipline at row
+    // scale: the row (and the deleted row's rendered subtree) swaps or
+    // leaves the card slice in place, and a failed write restores the exact
+    // pre-action rows.
+    editComment: async (post, commentId, body) => {
+      const postId = post._id || post.id;
+      const snapshot = snapshotPostRow(postsRef.current, postId, null);
+      const optimistic = applyCommentEditedRow(postsRef.current, {
+        postId, comment: { _id: commentId, body },
+      });
+      postsRef.current = optimistic;
+      setPosts(optimistic);
+      try {
+        const result = await sendCommentEdit(connectionForPost(post), post, commentId, body);
+        await reload();
+        return result;
+      } catch (failure) {
+        if (snapshot) {
+          const next = revertPostEditedRow(postsRef.current, { postId, snapshot });
+          postsRef.current = next;
+          setPosts(next);
+        }
+        throw failure;
+      }
+    },
+    deleteComment: async (post, commentId) => {
+      const postId = post._id || post.id;
+      const snapshot = snapshotPostRow(postsRef.current, postId, null);
+      const optimistic = applyCommentDeletedRows(postsRef.current, {
+        postId, rootId: commentId, cascadeIds: [],
+      });
+      postsRef.current = optimistic;
+      setPosts(optimistic);
+      try {
+        const result = await sendCommentDelete(connectionForPost(post), post, commentId);
+        await reload();
+        return result;
+      } catch (failure) {
+        if (snapshot) {
+          const next = revertPostEditedRow(postsRef.current, { postId, snapshot });
+          postsRef.current = next;
+          setPosts(next);
+        }
+        throw failure;
+      }
+    },
     submitReply: async (post, body, parentId, mentions = []) => {
       // Link previews (PORCH-052): a reply body carrying a URL resolves at
       // submit time, hub-side and device-signed; a failed or degraded

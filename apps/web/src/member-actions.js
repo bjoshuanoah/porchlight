@@ -137,6 +137,103 @@ export async function removeGroupPost(connection, post) {
   });
 }
 
+// Post and comment lifecycle (PORCH-094): the member writes ride the
+// shipped signed lifecycle routes (PORCH-093) — the server rebuilds each
+// payload from the path's post before verifying, so the client signs
+// exactly the values the path's post carries. Builders are exported so the
+// wire shapes stay pinned by tests and re-verified against a deployed hub
+// by the stage-2 checklist (the Oct 12 contract).
+
+/** The author's post edit: body and caption text, plus the editable
+ * location target (Oct 16 location ruling) as ONE write. Media never rides
+ * an edit: a delete-and-repost changes media, so no media field exists on
+ * this payload (the server refuses one that arrives). */
+export function postEditPayload(post, { body = null, caption = null, groupId = undefined } = {}) {
+  const payload = {
+    kind: "post-edit",
+    postId: post?._id || post?.id,
+    networkId: post?.originNetworkId ?? post?.networkId ?? null,
+  };
+  if (body !== null) payload.body = body;
+  // The server's caption normalization runs BEFORE verification (an empty
+  // caption resolves null), so the signed bytes carry the normalized value.
+  if (caption !== null && caption !== undefined) {
+    payload.caption = typeof caption === "string" && caption.trim().length > 0 ? caption : null;
+  }
+  if (groupId !== undefined) payload.groupId = groupId || null;
+  return payload;
+}
+
+/** The author's comment edit: text only — comments carry no location and no media. */
+export function commentEditPayload(post, commentId, body) {
+  return {
+    kind: "comment-edit",
+    postId: post?._id || post?.id,
+    commentId,
+    body,
+    networkId: post?.originNetworkId ?? post?.networkId ?? null,
+  };
+}
+
+/** The tombstoning post delete: kind + postId + networkId, the values the server rebuilds. */
+export function postDeletePayload(post) {
+  return {
+    kind: "delete",
+    postId: post?._id || post?.id,
+    networkId: post?.originNetworkId ?? post?.networkId ?? null,
+  };
+}
+
+/** The tombstoning comment delete: kind + postId + commentId + networkId. */
+export function commentDeletePayload(post, commentId) {
+  return {
+    kind: "comment-delete",
+    postId: post?._id || post?.id,
+    commentId,
+    networkId: post?.originNetworkId ?? post?.networkId ?? null,
+  };
+}
+
+export async function editPost(connection, post, fields) {
+  const member = device(connection);
+  const payload = postEditPayload(post, fields);
+  const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
+  return request(member, `social/posts/${encodeURIComponent(payload.postId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ payload, signature }),
+  });
+}
+
+export async function deletePost(connection, post) {
+  const member = device(connection);
+  const payload = postDeletePayload(post);
+  const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
+  return request(member, `social/posts/${encodeURIComponent(payload.postId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ payload, signature }),
+  });
+}
+
+export async function editComment(connection, post, commentId, body) {
+  const member = device(connection);
+  const payload = commentEditPayload(post, commentId, body);
+  const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
+  return request(member, `social/posts/${encodeURIComponent(payload.postId)}/comments/${encodeURIComponent(commentId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ payload, signature }),
+  });
+}
+
+export async function deleteComment(connection, post, commentId) {
+  const member = device(connection);
+  const payload = commentDeletePayload(post, commentId);
+  const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId, payload);
+  return request(member, `social/posts/${encodeURIComponent(payload.postId)}/comments/${encodeURIComponent(commentId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ payload, signature }),
+  });
+}
+
 function sha256(bytes) {
   return crypto.subtle.digest("SHA-256", bytes).then((hash) =>
     Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""));
