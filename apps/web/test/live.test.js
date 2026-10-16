@@ -26,7 +26,14 @@ test("ac-1: the fixed-interval refresh cycle is deleted from the client path", a
 });
 
 test("ac-5: the event vocabulary is closed and logged on unknown types, never guessed at", () => {
-  assert.deepEqual([...EVENT_TYPES].sort(), ["media.attached", "post.created", "reaction.applied", "reply.created"].sort());
+  // The lifecycle amendment (PORCH-094, Oct 16, 2026): the server-half
+  // write contract publishes post.updated, post.deleted, comment.updated,
+  // and comment.deleted on this same plane — the client consumes them on
+  // the closed vocabulary it already carries.
+  assert.deepEqual([...EVENT_TYPES].sort(), [
+    "comment.deleted", "comment.updated", "media.attached", "post.created",
+    "post.deleted", "post.updated", "reaction.applied", "reply.created",
+  ].sort());
   const warns = [];
   const posts = [{ _id: "p1", originNetworkId: "net_family" }];
   const unchanged = applyEvent(posts, { type: "vote.counted", networkId: "net_family", postId: "p1", content: {} }, { log: { warn: (line) => warns.push(line) } });

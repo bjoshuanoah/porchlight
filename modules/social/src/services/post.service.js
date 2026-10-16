@@ -539,7 +539,14 @@ export class PostService {
     }
     const hasBody = "body" in payload;
     const hasCaption = "caption" in payload;
-    if (!hasBody && !hasCaption) {
+    // The location ruling (Brian, Oct 16, 2026; PORCH-094): the edit write
+    // carries the post's location target too — the general timeline (null)
+    // or a group the author belongs to, in BOTH directions. The membership
+    // gate rides the same assertion group-targeted creation rides; a group
+    // outside the author's membership is refused exactly like a targeted
+    // creation (the author can never move a post where they cannot see).
+    const hasGroup = "groupId" in payload;
+    if (!hasBody && !hasCaption && !hasGroup) {
       throw typedError("E_EDIT_EMPTY", POST_MESSAGES.E_EDIT_EMPTY);
     }
     const set = {};
@@ -552,7 +559,23 @@ export class PostService {
     if (hasCaption) {
       set.caption = typeof payload.caption === "string" && payload.caption.trim().length > 0 ? payload.caption : null;
     }
-    const verifyPayload = { kind: "post-edit", postId: post._id, networkId: post.originNetworkId, ...(hasBody ? { body: set.body } : {}), ...(hasCaption ? { caption: set.caption } : {}) };
+    if (hasGroup) {
+      if (payload.groupId !== null && typeof payload.groupId !== "string") {
+        throw typedError("E_GROUP_UNKNOWN", "A post's location is the general timeline or one of your groups.");
+      }
+      if (payload.groupId) {
+        await this.#assertGroupContainment({ networkId: session.networkId, did: session.did, groupId: payload.groupId });
+      }
+      set.groupId = payload.groupId ?? null;
+    }
+    const verifyPayload = {
+      kind: "post-edit",
+      postId: post._id,
+      networkId: post.originNetworkId,
+      ...(hasBody ? { body: set.body } : {}),
+      ...(hasCaption ? { caption: set.caption } : {}),
+      ...(hasGroup ? { groupId: set.groupId } : {}),
+    };
     await this.verifyWrite({ networkId: session.networkId, did: session.did, deviceId: session.deviceId, payload: verifyPayload, signature });
     await this.posts.updateOne({ _id: post._id }, { $set: set });
     const updated = await this.posts.findOne({ _id: post._id });
@@ -560,7 +583,12 @@ export class PostService {
     // post.created envelope carries (PORCH-081 client parity): the
     // connected timeline re-renders the changed fields in place, and
     // nothing in the view, the payload, or the envelope reveals an edit
-    // occurred (the no-marker contract, enforced by omission).
+    // occurred (the no-marker contract, enforced by omission). A location
+    // change resolves by delivery through this same envelope: connected
+    // members the move removes drop the card in the same frame, members it
+    // delivers re-render the group context in place — never a marker, a
+    // badge, or a history of the move (the silence law covers location
+    // exactly as it covers text).
     const [eventView] = this.feed
       ? await this.feed.eventViews([updated], session.networkId)
       : await this.memberViews([updated], session.networkId);
@@ -568,7 +596,7 @@ export class PostService {
       networkId: session.networkId,
       type: "post.updated",
       postId: post._id,
-      groupId: post.groupId ?? null,
+      groupId: updated.groupId ?? null,
       content: { ...eventView, preview: eventView?.preview ?? null },
     });
     await this.audit("post_edit", {

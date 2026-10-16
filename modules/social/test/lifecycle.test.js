@@ -740,3 +740,59 @@ test("ac-7: containment — authority and restore resolve within the origin only
     (error) => error.code === "E_POST_NOT_FOUND",
   );
 });
+
+/* ---- location ruling (Brian, Oct 16, 2026; PORCH-094): the edit write ---- */
+
+test("ac-2: the location target rides the SAME edit write in both directions, membership-gated, and the move is silent", async () => {
+  const fx = await lifecycleFixture();
+  await fx.groups.create({ networkId: FAMILY, name: "Lake Crew", createdBy: MEG, members: [MEG, JUNE] });
+  const groupId = (await fx.collections.groups.findOne({ name: "Lake Crew" }))._id;
+  const textPost = await createPost(fx, "june", { type: "text", body: "dinner at six" });
+
+  // A general-timeline post moves into the author's group as ONE write —
+  // text and target together.
+  const moved = await fx.posts.editPost({
+    accessToken: fx.tokens.june,
+    postId: textPost._id,
+    payload: { body: "dinner at seven", groupId },
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "dinner at seven", groupId }),
+  });
+  assert.equal(moved.post.groupId, groupId, "the move into the author's group lands");
+  assert.equal((await fx.collections.posts.findOne({ _id: textPost._id })).groupId, groupId);
+
+  // …and back to the general timeline — both directions ride the edit.
+  const movedBack = await fx.posts.editPost({
+    accessToken: fx.tokens.june,
+    postId: textPost._id,
+    payload: { body: "dinner at seven", groupId: null },
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "dinner at seven", groupId: null }),
+  });
+  assert.equal(movedBack.post.groupId ?? null, null, "the move back to the general timeline lands");
+
+  // The membership gate mirrors group-targeted creation: the author cannot
+  // move a post into a group they do not belong to — refused with zero
+  // mutation.
+  await fx.groups.create({ networkId: FAMILY, name: "Inner Circle", createdBy: MEG, members: [MEG] });
+  const innerId = (await fx.collections.groups.findOne({ name: "Inner Circle" }))._id;
+  await assert.rejects(
+    () =>
+      fx.posts.editPost({
+        accessToken: fx.tokens.june,
+        postId: textPost._id,
+        payload: { body: "dinner at seven", groupId: innerId },
+        signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "dinner at seven", groupId: innerId }),
+      }),
+    (error) => /member/.test(error.message),
+    "the non-member author cannot move a post into another group",
+  );
+  assert.equal((await fx.collections.posts.findOne({ _id: textPost._id })).groupId ?? null, null, "the refused move writes nothing");
+
+  // The post.updated envelope carries the delivered view (the group chip
+  // context rides groupName) — the delivery law drives the connected cards
+  // in place, and nothing on the wire or the view reveals a move.
+  const events = await planeEvents(fx);
+  const updates = events.filter((row) => row.type === "post.updated" && row.postId === textPost._id);
+  assert.equal(updates.length, 2, "every applied edit rides exactly one post.updated envelope; the refused move rides none");
+  assert.equal(updates[0].content.groupId, groupId, "the carried view carries the new target");
+  assert.equal(updates[1].content.groupId ?? null, null, "the carried view clears the general-timeline target");
+});

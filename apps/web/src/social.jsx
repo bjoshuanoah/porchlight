@@ -35,6 +35,10 @@ import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, ruled
 import { LinkPreviewBlock, LinkedBody } from './link-preview.jsx';
 import { firstUrlIn, previewOrigin } from './link-preview.js';
 import { sharePost } from './share.js';
+import {
+  canEditPost, canDeletePost, canEditComment, canDeleteComment, lifecycleMenuItems,
+  editLocationRows, currentLocationId, GENERAL_LOCATION_ID, removedTreeIds, rowKeyOf,
+} from './lifecycle.js';
 
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
@@ -845,7 +849,10 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
   // never silently lost while the member re-points the composer.
   const [composerFor, setComposerFor] = useState(null); // null | 'post' | comment id
   const [drafts] = useState(() => new Map());
-  const openComposer = (target) => setComposerFor(target);
+  // One composer per surface (PORCH-094): opening a reply closes any open
+  // edit composer in the same frame — and the edit opens close any open
+  // reply composer in theirs.
+  const openComposer = (target) => { setEditFor(null); setComposerFor(target); };
   const holdDraft = (target, text) => {
     if (text) drafts.set(target, text); else drafts.delete(target);
   };
@@ -857,6 +864,35 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
   const [localConversation, setLocalConversation] = useState(() => ({ pending: [], confirmed: [] }));
   const replyCountRef = useRef(0);
   const [menuAnchor, setMenuAnchor] = useState(null);
+  // Lifecycle affordances (PORCH-094): the ··· menu carries Edit and Delete
+  // authority-gated; the confirming member's tombstone drops the card in
+  // the same frame, and the comment rows' own overflow carries their
+  // lifecycle actions.
+  const [tombstoned, setTombstoned] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [editFor, setEditFor] = useState(null); // null | 'post'
+  const [commentDelete, setCommentDelete] = useState(null); // the comment row awaiting its one confirmation
+  // The member's own removed comment rows (and their rendered subtrees):
+  // the row leaves the slice live; a failed write removes the id and the
+  // exact pre-action rows return.
+  const [removedIds, setRemovedIds] = useState(() => new Set());
+  // The member's own applied edit fields: the optimistic river merge
+  // re-renders the timeline row in place, and this local view override
+  // keeps the detail surface's freshly loaded post object rendering the
+  // same applied fields (the reload reconciles both).
+  const [editedFields, setEditedFields] = useState(null);
+  // The view override retires the moment the served row carries the applied
+  // fields (the post-confirm reload): the card renders from one source of
+  // truth again.
+  useEffect(() => {
+    if (!editedFields) return undefined;
+    if ((post.body ?? null) === (editedFields.body ?? null)
+      && (post.caption ?? null) === (editedFields.caption ?? null)
+      && String(post.groupId ?? '') === String(editedFields.groupId ?? '')) {
+      setEditedFields(null);
+    }
+    return undefined;
+  }, [editedFields, post.body, post.caption, post.groupId]);
   // Remove post (PORCH-089 ac-3): the owner's entry on a group post carries
   // Remove — the group's managing member (or the network owner) — from the
   // group surface's card or the detail card alike. The confirmation names
@@ -885,7 +921,19 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
     // poll that changes nothing reconciles nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconcile rides the server slice signature
   }, [sliceIdentity]);
-  if (localHidden || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
+  if (localHidden || tombstoned || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
+  // The applied edit's view override (PORCH-094 ac-2): body, caption, and
+  // the location context render from the applied fields until the next
+  // served read carries them — no full-card remount, and no stale chip or
+  // stale text outlives the reload's reconciliation.
+  const row = editedFields
+    ? {
+      ...post,
+      ...(editedFields.body !== undefined ? { body: editedFields.body } : {}),
+      ...(editedFields.caption !== undefined ? { caption: editedFields.caption } : {}),
+      ...(editedFields.groupId !== undefined ? { groupId: editedFields.groupId, groupName: editedFields.groupName ?? null } : {}),
+    }
+    : post;
   // Remove post (ac-3): the entry renders only on a group post whose group
   // this viewer manages — the client predicate shapes the menu; the hub
   // re-checks the authority on the write (refusal copies plain language).
@@ -948,6 +996,50 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
       }, (failure) => { revert(); throw failure; });
   };
   const displaySlice = detail ? null : sliceDisplay(post, localConversation);
+  // Lifecycle authority (PORCH-094 ac-1): the author sees Edit and Delete in
+  // ···, the network owner sees Delete-only on posts they do not author,
+  // and every other member sees neither. Menu-only placement: no top-level
+  // lifecycle control renders on the action row, header body, or any card
+  // surface.
+  const ownsPostEdit = canEditPost(post, data);
+  const ownsPostDelete = canDeletePost(post, data);
+  const openEdit = () => { setComposerFor(null); setEditFor('post'); };
+  const applyEditResult = (fields) => {
+    setEditedFields((current) => ({ ...(current ?? {}), ...fields }));
+    setEditFor(null);
+    holdDraft('edit:post', '');
+  };
+  // The confirming member's tombstone: the card leaves in the same frame as
+  // the confirm (a null-render, never a placeholder) and the exact
+  // pre-action card restores with the failure named when the signed write
+  // fails. No member-facing undelete exists anywhere (ac-3).
+  const deleteThisPostConfirm = () => {
+    setDeleteOpen(false);
+    setTombstoned(true);
+    operation.run(() => invoke(actions, 'deletePost', post), () => {}, () => {
+      setTombstoned(false);
+    });
+  };
+  // Comment lifecycle (ac-1/ac-4): one confirmation, then the row (and its
+  // loaded subtree) leaves the slice in the same frame; a failed write
+  // restores the exact pre-action rows. The edits ride the same
+  // optimistic-discipline actions the river merges implement.
+  const removeCommentRow = (row) => {
+    const id = identityOf(row);
+    setRemovedIds((current) => new Set(current).add(id));
+    operation.run(
+      () => invoke(actions, 'deleteComment', post, id),
+      () => {},
+      () => {
+        setRemovedIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      },
+    );
+  };
+  const editCommentRow = (row) => { setComposerFor(null); setEditFor(identityOf(row)); };
   // Mobile posts stay full-bleed while the feed exposes page background
   // between neighbors. Desktop retains its contained card treatment.
   const cardSx = detail ? undefined : {
@@ -981,7 +1073,7 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
             <Typography variant="body2" fontWeight={600} fontSize={15} color="text.primary">{post.author?.name ?? post.authorName ?? memberName(post.authorId, data)}</Typography>
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
               <Chip label={`From ${originName(post, data)}`} size="small" variant="outlined" sx={{ fontSize: '0.75rem', height: '24px' }} />
-              {post.groupName && <Chip label={post.groupName} size="small" sx={{ bgcolor: 'porchlight.amberSoft', color: 'primary.main', fontSize: '0.6875rem', height: '24px' }} />}
+              {row.groupName && <Chip label={row.groupName} size="small" sx={{ bgcolor: 'porchlight.amberSoft', color: 'primary.main', fontSize: '0.6875rem', height: '24px' }} data-testid="location-chip" />}
               <Typography variant="caption" color="porchlight.muted">{dateOf(post.createdAt)}</Typography>
             </Stack>
           </Box>
@@ -997,6 +1089,8 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
             onClick={(event) => setMenuAnchor(event.currentTarget)}><MoreHorizOutlined /></IconButton>
           <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
             {!detail && <MenuItem onClick={() => { setMenuAnchor(null); openPost(); }}>Open conversation</MenuItem>}
+            {ownsPostEdit && <MenuItem data-testid="edit-post" onClick={() => { setMenuAnchor(null); openEdit(); }}>Edit</MenuItem>}
+            {ownsPostDelete && <MenuItem data-testid="delete-post" disabled={data.offline} onClick={() => { setMenuAnchor(null); setDeleteOpen(true); }}>Delete</MenuItem>}
             <MenuItem onClick={runShare}>Share</MenuItem>
             <MenuItem disabled={operation.busy} onClick={() => {
               setMenuAnchor(null);
@@ -1010,9 +1104,23 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
       {/* Rhythm (PORCH-043 vertical table): 25–30% tighter post-internal
           spacing; the body line stays 16px/25px on the timeline with the
           readable 68ch length. */}
-      {(post.body || post.caption) && <Box sx={{ mt: detail ? 2 : 1 }}>
-        {post.body && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch' }}><LinkedBody text={post.body} /></Typography>}
-        {post.caption && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch', ...(post.body ? { mt: 0.5 } : {}) }}><LinkedBody text={post.caption} /></Typography>}
+      {/* Edit mode (PORCH-094 ac-2) is a mode of the ruled composer: the
+          text/caption fields render pre-filled in place, media stays
+          rendered read-only beneath (no swap, add, or remove affordance
+          exists in edit mode — changes ride delete-and-repost), and the
+          location control carries the Oct 16 location ruling. */}
+      {editFor === 'post' && !data.offline && <PostEditForm
+        post={post}
+        row={row}
+        data={data}
+        initial={readDraft('edit:post') ?? { body: row.body ?? '', caption: row.caption ?? '', locationId: currentLocationId(row) }}
+        onDraft={(value) => holdDraft('edit:post', value)}
+        onSaved={applyEditResult}
+        onSubmit={(fields) => invoke(actions, 'editPost', post, fields)}
+      />}
+      {editFor !== 'post' && (row.body || row.caption) && <Box sx={{ mt: detail ? 2 : 1 }}>
+        {row.body && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch' }}><LinkedBody text={row.body} /></Typography>}
+        {row.caption && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch', ...(row.body ? { mt: 0.5 } : {}) }}><LinkedBody text={row.caption} /></Typography>}
       </Box>}
       {/* Link preview (PORCH-052): the compact embed facade or og:image card
           rides the text rail — inside the 16px padding band, never
@@ -1049,11 +1157,43 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
         actions={actions} offline={data.offline} origin={previewOrigin(post, data)}
         onReply={submitOptimistic} navigate={navigate}
         composerFor={composerFor} onReplyTarget={openComposer} onDraftDone={holdDraft} readDraft={readDraft}
-        onComposerClosed={() => setComposerFor(null)} />}
+        onComposerClosed={() => setComposerFor(null)}
+        removedIds={removedIds} editFor={editFor} onEditTarget={editCommentRow} onDeleteComment={setCommentDelete}
+        onCommentDeleted={removeCommentRow} onEditClosed={() => setEditFor(null)} />}
       {shareNote && <Typography color="text.secondary" role="status" sx={{ mt: 1 }}>{shareNote}</Typography>}
       {shareError && <Alert severity="warning" sx={{ mt: 1 }}>{shareError}</Alert>}
       {/* The fallback outcome's in-view confirmation (PORCH-078): the same
           strings the card foot reports, surfaced where the member is. */}
+    {/* The confirming member's one delete confirmation (PORCH-094 ac-3):
+        the ruled question with the cascade note; cancel mutates nothing. */}
+    <Dialog open={deleteOpen} onClose={() => setDeleteOpen(false)} fullWidth maxWidth="xs">
+      <DialogTitle>Delete this post?</DialogTitle>
+      <DialogContent>
+        <Typography>Its conversation goes with it — the replies and reactions are removed too. This cannot be undone here.</Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setDeleteOpen(false)}>Cancel</Button>
+        <Button color="error" variant="contained" disabled={operation.busy || data.offline} data-testid="confirm-delete-post"
+          onClick={deleteThisPostConfirm}>Delete post</Button>
+      </DialogActions>
+    </Dialog>
+    {/* The comment's one delete confirmation on the card slice
+        (PORCH-094 ac-3): identical copy and flow to the detail column's. */}
+    <Dialog open={Boolean(commentDelete)} onClose={() => setCommentDelete(null)} fullWidth maxWidth="xs">
+      <DialogTitle>Delete this comment?</DialogTitle>
+      <DialogContent>
+        <Typography>This comment and the replies that follow it are removed. This cannot be undone here.</Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setCommentDelete(null)}>Cancel</Button>
+        <Button color="error" variant="contained" disabled={operation.busy} data-testid="confirm-delete-comment"
+          onClick={() => {
+            const row = commentDelete;
+            setCommentDelete(null);
+            removeCommentRow(row);
+          }}>Delete comment</Button>
+      </DialogActions>
+    </Dialog>
     {/* The removal's in-place confirmation (PORCH-089 ac-3/ac-6): the named
         consequence verbatim, cancel mutates nothing, confirm executes the
         device-signed group post removal (the server's origin cascade). */}
@@ -1427,8 +1567,129 @@ function GroupHeader({ group, data, actions, onchanged }) {
 // The comment surfaces are named exports for the contract tests (the
 // rendered-surface sweep in test/reply-order.test.js); no routing outside
 // social.jsx needs them.
+// The edit composer (PORCH-094 ac-2): a mode of the ruled composer family —
+// pre-filled with the post's current text and caption, full width of its
+// rail, one composer at a time per surface. Media renders read-only in
+// place on the card it belongs to (this composer never offers a media
+// affordance: changes ride delete-and-repost). The location control carries
+// the Oct 16 location ruling: pre-set to the post's current target,
+// offering the general timeline plus the groups the author belongs to —
+// never another network, never a group the author does not belong to. Save
+// applies text, caption, and target as ONE write; a failed write holds the
+// full draft including the staged target choice.
+function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved = null, onSubmit }) {
+  const [body, setBody] = useState(initial?.body ?? '');
+  const [caption, setCaption] = useState(initial?.caption ?? '');
+  const [locationId, setLocationId] = useState(initial?.locationId ?? currentLocationId(post));
+  const operation = useOperation();
+  const offline = Boolean(data.offline);
+  const locationRows = editLocationRows(post, data);
+  const stage = { body, caption, locationId };
+  const report = (next) => { onDraft?.(next); };
+  return <Stack component="form" spacing={1.5} sx={{ my: 1.5 }} onSubmit={(event) => {
+    event.preventDefault();
+    if (offline || operation.busy || !body.trim()) return;
+    operation.run(
+      // One write: text, caption, and target ride the same signed edit (the
+      // empty caption and the general timeline ride their null values).
+      () => onSubmit({ body: body.trim(), caption: caption.trim() ? caption : null, groupId: locationId === GENERAL_LOCATION_ID ? null : locationId }),
+      () => onSaved?.(stage),
+      () => {}, // the composer stays open; the full draft holds through the failure
+    );
+  }}>
+    <TextField
+      label="Edit your post"
+      value={body}
+      disabled={offline}
+      multiline minRows={2}
+      onChange={(event) => { const next = { ...stage, body: event.target.value }; setBody(event.target.value); report(next); }}
+      helperText={offline ? 'Editing needs your family server. It is unreachable right now.' : undefined}
+    />
+    <TextField
+      label="Caption"
+      value={caption}
+      disabled={offline}
+      multiline minRows={1}
+      onChange={(event) => { const next = { ...stage, caption: event.target.value }; setCaption(event.target.value); report(next); }}
+    />
+    <TextField
+      select
+      // Location in edit mode (Brian, Oct 16, 2026): the general timeline
+      // plus the author's groups only — both directions ride the edit.
+      data-testid="edit-location"
+      label="Post to"
+      value={locationId}
+      disabled={offline}
+      onChange={(event) => { const next = { ...stage, locationId: event.target.value }; setLocationId(event.target.value); report(next); }}
+    >
+      {locationRows.map((item) => <MenuItem key={item.id || 'general'} value={item.id}>{item.label}</MenuItem>)}
+    </TextField>
+    {(row?.mediaRefs ?? row?.mediaIds ?? []).length > 0 && <Typography variant="caption" color="text.secondary">Media is set as posted. To change it, delete this post and post it again.</Typography>}
+    <Button type="submit" variant="contained" disabled={offline || operation.busy || !body.trim()} sx={{ alignSelf: 'flex-start' }}>
+      {operation.busy ? 'Saving…' : 'Save changes'}
+    </Button>
+    {operation.error && <Alert severity="error" data-testid="edit-error">{operation.error}</Alert>}
+  </Stack>;
+}
+
+// The comment's edit composer (PORCH-094 ac-4): text only — comments carry
+// no location and no media to edit. Pre-filled, full rail width, one
+// composer per surface; a failed write keeps it open with the draft held.
+function CommentEditForm({ row, initialText, onDraft = null, onDone = null, onSubmit }) {
+  const [text, setText] = useState(initialText ?? '');
+  const operation = useOperation();
+  return <Stack component="form" spacing={1} sx={{ my: 1 }} onSubmit={(event) => {
+    event.preventDefault();
+    if (operation.busy || !text.trim()) return;
+    operation.run(
+      () => onSubmit(text.trim()),
+      () => { setText(''); onDraft?.(''); onDone?.(); },
+      () => {}, // keep the composer open, draft held through the failure
+    );
+  }}>
+    <TextField
+      label="Edit your comment"
+      value={text}
+      multiline minRows={2}
+      data-testid="comment-edit-field"
+      onChange={(event) => { setText(event.target.value); onDraft?.(event.target.value); }}
+    />
+    <Button type="submit" variant="contained" disabled={operation.busy || !text.trim()} sx={{ alignSelf: 'flex-start' }} data-testid="comment-edit-save">
+      {operation.busy ? 'Saving…' : 'Save changes'}
+    </Button>
+    {operation.error && <Alert severity="error" data-testid="comment-edit-error">{operation.error}</Alert>}
+  </Stack>;
+}
+
+/**
+ * A comment row's lifecycle overflow (PORCH-094 ac-1): Edit and Delete in
+ * the row's own affordance, authority-gated — the author's own rows carry
+ * both; the network owner sees Delete-only on other members' rows; members
+ * with no authority see no overflow control at all. Menu-only placement:
+ * no top-level lifecycle control renders anywhere.
+ */
+function CommentOverflow({ row, data = {}, offline = false, onEdit = null, onDelete = null }) {
+  const [anchor, setAnchor] = useState(null);
+  const items = lifecycleMenuItems({ edit: canEditComment(row, data), remove: canDeleteComment(row, data) });
+  if (!items.length) return null;
+  return <>
+    <IconButton aria-label="Comment options" aria-haspopup="menu" aria-expanded={Boolean(anchor)}
+      data-testid="comment-options"
+      sx={{ width: 32, height: 32, p: 0, color: 'text.secondary', '&::after': { content: '""', position: 'absolute', inset: -4 } }}
+      onClick={(event) => setAnchor(event.currentTarget)}><MoreHorizOutlined sx={{ fontSize: 18 }} /></IconButton>
+    <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
+      {canEditComment(row, data) && <MenuItem data-testid="edit-comment" disabled={offline}
+        onClick={() => { setAnchor(null); onEdit?.(row); }}>Edit</MenuItem>}
+      {canDeleteComment(row, data) && <MenuItem data-testid="delete-comment" disabled={offline}
+        onClick={() => { setAnchor(null); onDelete?.(row); }}>Delete</MenuItem>}
+    </Menu>
+  </>;
+}
+
 export function ReplySliceBlock({ post, slice, data, actions, offline, origin, onReply, navigate,
-  composerFor = null, onReplyTarget = null, onDraftDone = null, readDraft = null, onComposerClosed = null }) {
+  composerFor = null, onReplyTarget = null, onDraftDone = null, readDraft = null, onComposerClosed = null,
+  removedIds = null, editFor = null, onEditTarget = null, onDeleteComment = null,
+  onCommentDeleted = null, onEditClosed = null }) {
   const [loaded, setLoaded] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [expandedRoots, setExpandedRoots] = useState(() => new Set());
@@ -1467,11 +1728,15 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only a changed decorated slice refreshes an open thread
   }, [signature]);
   const byParent = repliesByParent(loaded ?? []);
+  // The member's removed comment rows (and the subtrees hanging under them)
+  // leave the slice live: a removed id never renders, in any state (ac-3).
+  const isRemoved = (row) => Boolean(removedIds?.has?.(identityOf(row)));
   const roots = showAll && loaded
     ? repliesByParent([...loaded, ...slice.replies.filter((row) => !loaded.some((item) => identityOf(item) === identityOf(row)))]).get('') ?? []
     : slice.replies;
+  const visibleRoots = roots.filter((row) => !isRemoved(row));
   const more = showAll ? 0 : expanderCount(slice.total);
-  if (!roots.length && !more) return null;
+  if (!visibleRoots.length && !more) return null;
   const expand = async (id) => {
     if (offline || busy) return;
     if (!await load()) return;
@@ -1485,9 +1750,28 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
     }
     return result;
   };
+  // Comment edit (PORCH-094 ac-4): text only, the ruled composer in edit
+  // mode — the river merge the action performs re-renders rows served in
+  // the slice in place; a nested expanded row swaps in the open tree
+  // optimistically and reverts exactly when the write fails.
+  const submitCommentEdit = async (row, body) => {
+    const id = identityOf(row);
+    const snapshot = loaded;
+    if (snapshot?.some((item) => identityOf(item) === id)) {
+      setLoaded((current) => current
+        ? current.map((item) => (identityOf(item) === id ? { ...item, body } : item))
+        : current);
+    }
+    try {
+      return await invoke(actions, 'editComment', post, id, body);
+    } catch (failure) {
+      if (snapshot) setLoaded(snapshot);
+      throw failure;
+    }
+  };
   const renderRow = (reply, depth = 0, seen = new Set(), rootId = identityOf(reply)) => {
     const id = identityOf(reply);
-    if (!id || seen.has(id)) return null;
+    if (!id || seen.has(id) || isRemoved(reply)) return null;
     const children = byParent.get(id) ?? [];
     const count = reply.responseCount ?? children.length;
     const open = expandedRoots.has(rootId);
@@ -1506,8 +1790,12 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
           </Typography>
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
           {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={origin ?? previewOrigin(reply, data)} compact />}
-          {!offline && depth < 8 && <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}
-            sx={{ px: 0, minWidth: 0 }}>Reply</Button>}
+          {!offline && depth < 8 && <Stack direction="row" spacing={0.5} alignItems="center">
+            <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}
+              sx={{ px: 0, minWidth: 0 }}>Reply</Button>
+            <CommentOverflow row={reply} data={data} offline={offline}
+              onEdit={(r) => onEditTarget?.(r)} onDelete={(r) => onDeleteComment?.(r)} />
+          </Stack>}
           {!open && count > 0 && <Button size="small" disabled={offline || busy}
             onClick={() => expand(id)} sx={{ display: 'block', px: 0, minWidth: 0, color: 'secondary.main' }}>
             {`View ${count} more responses`}
@@ -1518,9 +1806,14 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
     </Box>;
   };
   const composerTarget = composerFor && composerFor !== 'post' ? composerFor : null;
+  const editTarget = editFor && editFor !== 'post' ? editFor : null;
   const targetRow = composerTarget
     ? (slice?.replies ?? []).find((row) => identityOf(row) === composerTarget)
       ?? (loaded ?? []).find((row) => identityOf(row) === composerTarget)
+    : null;
+  const editRow = editTarget
+    ? (slice?.replies ?? []).find((row) => identityOf(row) === editTarget)
+      ?? (loaded ?? []).find((row) => identityOf(row) === editTarget)
     : null;
   // The open target stays legible: the composer names the comment it answers
   // (the post-target composer sits beside the post it answers).
@@ -1528,7 +1821,7 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
     ? targetRow.author?.name ?? targetRow.authorName ?? memberName(targetRow.authorDid, data)
     : null;
   return <Box sx={{ mt: photoFirst.spacing.reactionsSlice / 8, borderTop: '1px solid', borderColor: photoFirst.dividerColor, pt: 1.25 }}>
-    <Stack spacing={1}>{roots.map((reply) => renderRow(reply))}</Stack>
+    <Stack spacing={1}>{visibleRoots.map((reply) => renderRow(reply))}</Stack>
     {more > 0 && <Button size="small" disabled={offline || busy} onClick={() => expand(null)}
       sx={{ mt: 1, px: 0, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'secondary.main' }}>
       {`View ${more} more comments`}
@@ -1545,6 +1838,18 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
       onDone={() => { onComposerClosed?.(); onDraftDone?.(composerTarget, ''); }}
       onSubmit={(body, mentions) => submitNested(body, composerTarget, mentions)}
     />}
+    {/* The comment's edit mode (PORCH-094 ac-4): the same composer family in
+        edit mode, pre-filled with the row's current text, full rail width,
+        one composer per surface — opening it closed the reply composer in
+        the same frame. */}
+    {editTarget && !offline && <CommentEditForm
+      key={`edit:${editTarget}`}
+      row={editRow}
+      initialText={readDraft?.(`edit:${editTarget}`) ?? editRow?.body ?? ''}
+      onDraft={(text) => onDraftDone?.(`edit:${editTarget}`, text)}
+      onDone={() => { onEditClosed?.(); onDraftDone?.(`edit:${editTarget}`, ''); }}
+      onSubmit={(body) => submitCommentEdit(editRow, body)}
+    />}
     {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
   </Box>;
 }
@@ -1558,7 +1863,7 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
 // inside each tree (repliesByParent) — so the detail column and the card
 // slice agree with the served order between fetches. The rows carry no
 // composer of their own: the column owns the one on-demand composer.
-export function ReplyThread({ comments, post, data, actions, navigate, composerFor = null, onReplyTarget = null }) {
+export function ReplyThread({ comments, post, data, actions, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null }) {
   const byParent = repliesByParent(comments);
   // The root's threaded-ness for the ruled sort: the tree the read returned,
   // or the server's decorated count when the tree is not (yet) loaded.
@@ -1574,7 +1879,7 @@ export function ReplyThread({ comments, post, data, actions, navigate, composerF
       .map((reply, index) => {
         const nextSeen = new Set(seen);
         nextSeen.add(identityOf(reply));
-        return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} data={data} post={post} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={onReplyTarget}>{render(identityOf(reply), depth + 1, nextSeen)}</Reply>;
+        return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} data={data} post={post} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={onReplyTarget} rowLifecycle={rowLifecycle}>{render(identityOf(reply), depth + 1, nextSeen)}</Reply>;
       });
   };
   return <>{render()}</>;
@@ -1917,15 +2222,21 @@ function ReplyForm({ label, onSubmit, offline, post, actions, replyingTo = null,
   </Stack>;
 }
 
-function Reply({ reply, depth, children, data, post, navigate, composerFor = null, onReplyTarget = null }) {
+function Reply({ reply, depth, children, data, post, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null }) {
   const id = identityOf(reply);
   return <Box sx={{ ml: { xs: Math.min(depth, 3) * 1.5, sm: Math.min(depth, 4) * 3 }, pl: 2, py: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}>
     <Typography variant="subtitle2">{reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)} <Typography component="span" variant="caption" color="text.secondary">{dateOf(reply.createdAt)}</Typography></Typography>
     <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
     {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={previewOrigin(post, data)} />}
     {/* PORCH-084: the row's Reply action points the column's one composer at
-        this comment; no inline input renders inside the indented row. */}
-    {depth < 8 && <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}>Reply</Button>}
+        this comment; no inline input renders inside the indented row.
+        PORCH-094: the row's own overflow carries its lifecycle affordances,
+        authority-gated exactly as the card slice renders them. */}
+    {depth < 8 && <Stack direction="row" spacing={0.5} alignItems="center">
+      <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}>Reply</Button>
+      {rowLifecycle && <CommentOverflow row={reply} data={data}
+        onEdit={rowLifecycle.onEdit ?? null} onDelete={rowLifecycle.onDelete ?? null} />}
+    </Stack>}
     {children}
   </Box>;
 }
@@ -1960,6 +2271,12 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const openComposer = (target) => setComposerFor(target);
   const holdDraft = (target, text) => { if (text) drafts.set(target, text); else drafts.delete(target); };
   const readDraft = (target) => drafts.get(target) ?? '';
+  // Comment lifecycle parity (PORCH-094 ac-4): the detail column rides the
+  // same authority gating, the same one-composer edit mode, and the same
+  // confirm-then-live-tombstone delete flow as the card slice.
+  const [editFor, setEditFor] = useState(null); // null | comment id
+  const [commentDelete, setCommentDelete] = useState(null);
+  const editThatComment = (row) => { setComposerFor(null); setEditFor(identityOf(row)); };
   useEffect(() => {
     if (!selectedId) { setLoading(false); return undefined; }
     if (data.offline) { setLoading(false); return undefined; }
@@ -2005,6 +2322,48 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
     setThread((current) => current?.id === selectedId ? { ...current, comments: [...current.comments, result.comment] } : current);
     return result;
   };
+  // Comment edit (ac-4): text swaps in place optimistically and reverts
+  // exactly when the signed write fails; the composer closes on success.
+  const submitThatCommentEdit = async (row, body) => {
+    const id = identityOf(row);
+    const snapshot = thread?.comments;
+    setThread((current) => current?.id === selectedId
+      ? { ...current, comments: current.comments.map((item) => (identityOf(item) === id ? { ...item, body } : item)) }
+      : current);
+    try {
+      const result = await invoke(actions, 'editComment', post, id, body);
+      setThread((current) => current?.id === selectedId
+        ? { ...current, comments: current.comments.map((item) => (identityOf(item) === id ? { ...item, body } : item)) }
+        : current);
+      setEditFor(null);
+      holdDraft(`edit:${id}`, '');
+      return result;
+    } catch (failure) {
+      if (snapshot) setThread((current) => current?.id === selectedId ? { ...current, comments: snapshot } : current);
+      throw failure;
+    }
+  };
+  // Comment delete (ac-3/ac-4): the row and its loaded subtree leave the
+  // column in the same frame as the confirm; a failed write restores the
+  // exact pre-action rows. An open composer whose target is deleted closes
+  // cleanly with its draft held for reopen (ac-5).
+  const removeThatComment = async (row) => {
+    const id = identityOf(row);
+    const snapshot = thread?.comments;
+    const cascade = removedTreeIds(snapshot ?? [], id, []);
+    setThread((current) => current?.id === selectedId
+      ? { ...current, comments: (current.comments ?? []).filter((item) => !cascade.has(identityOf(item))) }
+      : current);
+    if (composerFor === id) setComposerFor(null);
+    if (editFor === id) setEditFor(null);
+    try {
+      const result = await invoke(actions, 'deleteComment', post, id);
+      return result;
+    } catch (failure) {
+      if (snapshot) setThread((current) => current?.id === selectedId ? { ...current, comments: snapshot } : current);
+      throw failure;
+    }
+  };
   return <Box sx={{ maxWidth: 1120, mx: 'auto' }}>
     <Button onClick={() => navigate?.('/timeline')} sx={{ mb: 2 }}>Back to timeline</Button>
     {loading && !data.offline && <CircularProgress aria-label="Loading conversation" />}
@@ -2025,12 +2384,29 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
         <PresentReactions post={post} data={data} actions={actions} reactionState={reactionState} />
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2, mb: 1 }}>
           <Typography variant="h6">Replies</Typography>
-          {!data.offline && <Button size="small" data-testid="detail-reply" onClick={() => openComposer('post')}>Reply</Button>}
+          {!data.offline && <Button size="small" data-testid="detail-reply" onClick={() => { setEditFor(null); openComposer('post'); }}>Reply</Button>}
         </Stack>
-        {!data.offline && (replies.length ? <ReplyThread comments={replies} post={post} data={data} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={openComposer} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
+        {!data.offline && (replies.length ? <ReplyThread comments={replies} post={post} data={data} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={openComposer}
+          rowLifecycle={{
+            onEdit: editThatComment,
+            onDelete: (row) => setCommentDelete(row),
+          }} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
         {/* PORCH-084 (ac-3/ac-4): the on-demand composer rides the full
             conversation column width — never an always-visible inline input,
-            and nothing shrunken renders anywhere on the surface. */}
+            and nothing shrunken renders anywhere on the surface. The
+            composer renders for a reply target or, in edit mode (PORCH-094),
+            for the comment being edited — one composer per surface. */}
+        {editFor && !data.offline && (() => {
+          const editRow = replies.find((reply) => identityOf(reply) === editFor);
+          return <CommentEditForm
+            key={`edit:${editFor}`}
+            row={editRow}
+            initialText={readDraft(`edit:${editFor}`) ?? editRow?.body ?? ''}
+            onDraft={(text) => holdDraft(`edit:${editFor}`, text)}
+            onDone={() => setEditFor(null)}
+            onSubmit={(body) => submitThatCommentEdit(editRow, body)}
+          />;
+        })()}
         {!data.offline && composerFor && <ReplyForm
           key={composerFor}
           label={composerFor === 'post' ? 'Write a reply' : 'Your reply'}
@@ -2043,6 +2419,24 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
           onSubmit={(body, mentions) => submit(body, composerFor === 'post' ? null : composerFor, mentions)}
         />}
       </Box>
+      {/* The comment's one delete confirmation (PORCH-094 ac-3), identical on
+          the detail column and the card slice: ruled question, cascade note,
+          cancel mutates nothing. */}
+      <Dialog open={Boolean(commentDelete)} onClose={() => setCommentDelete(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Delete this comment?</DialogTitle>
+        <DialogContent>
+          <Typography>This comment and the replies that follow it are removed. This cannot be undone here.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCommentDelete(null)}>Cancel</Button>
+          <Button color="error" variant="contained" data-testid="confirm-delete-comment"
+            onClick={async () => {
+              const row = commentDelete;
+              setCommentDelete(null);
+              try { await removeThatComment(row); } catch { /* handled: exact rows restored */ }
+            }}>Delete comment</Button>
+        </DialogActions>
+      </Dialog>
     </Box>}
   </Box>;
 }
