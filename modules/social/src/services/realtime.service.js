@@ -23,7 +23,23 @@
 /** Payload privacy module import (PORCH-068 group gate helpers). */
 import { groupDeliversTo } from "./group.service.js";
 
-export const EVENT_TYPES = Object.freeze(["post.created", "reply.created", "reaction.applied", "media.attached"]);
+export const EVENT_TYPES = Object.freeze([
+  "post.created",
+  "reply.created",
+  "reaction.applied",
+  "media.attached",
+  // PORCH-093 lifecycle events (Brian, Oct 16, 2026 rulings): the shipped
+  // vocabulary rides the removals and edits too — ordered and idempotent
+  // per origin, content-only payloads (updated carries no edit-revealing
+  // field; deleted carries tree-scoped ids so clients drop the subtree).
+  "post.deleted",
+  "comment.deleted",
+  "post.updated",
+  "comment.updated",
+]);
+
+/** The removal events whose post row is gone by construction — catch-up replays them (they are exactly how a client learns the removal). */
+const REMOVAL_EVENT_TYPES = new Set(["post.deleted", "comment.deleted"]);
 
 /** Field names that must NEVER appear on an event envelope (payload-privacy contract). */
 const FORBIDDEN_ENVELOPE_FIELDS = [
@@ -339,7 +355,13 @@ export class RealtimeService {
     // a returning device's delta.
     const visible = [];
     for (const event of stale || pastWindow ? [] : events) {
-      if (this.posts && event?.postId) {
+      // PORCH-088: removal leaves the event streams and catch-up
+      // immediately — but the REMOVAL events themselves are exactly how a
+      // returning device learns the subject and its subtree are gone
+      // (PORCH-093): a post.deleted / comment.deleted envelope replays even
+      // though its subject row is gone by construction. Every other
+      // envelope's referenced post must still exist to replay.
+      if (this.posts && event?.postId && !REMOVAL_EVENT_TYPES.has(event.type)) {
         const post = await this.posts.findOne({ _id: event.postId });
         if (!post) continue;
       }

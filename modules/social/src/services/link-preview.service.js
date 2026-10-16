@@ -219,9 +219,9 @@ export class LinkPreviewService {
     const blobKeys = [...new Set(assetRows.map((asset) => asset.blobKey))];
     return {
       parts: [
-        { collection: this.previews, rows: recordRows },
-        { collection: this.assets, rows: assetRows },
-        { collection: this.artifacts, rows: artifactRows },
+        { kind: "previews", collection: this.previews, rows: recordRows },
+        { kind: "assets", collection: this.assets, rows: assetRows },
+        { kind: "artifacts", collection: this.artifacts, rows: artifactRows },
       ],
       blobKeys,
     };

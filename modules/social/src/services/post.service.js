@@ -1,5 +1,6 @@
 import { socialModels } from "../models.js";
 import { canSeeGroup, postDeliversToViewer, isGroupManager } from "./group.service.js";
+import { purgeAtFor } from "./lifecycle.service.js";
 
 /** Plain-language content failures for member clients. */
 export const POST_MESSAGES = {
@@ -13,6 +14,11 @@ export const POST_MESSAGES = {
   E_GROUP_NOT_MEMBER: "Only members of the group can post into it.",
   E_SIGNATURE_REQUIRED: "This write must be signed by your device key.",
   E_SIGNATURE_INVALID: "This write's device signature does not verify.",
+  E_EDIT_NOT_AUTHOR: "Only the post's author can edit it — ownership never confers edit authority.",
+  E_EDIT_MEDIA_IMMUTABLE: "Media is never edited — swap, add, or remove media by deleting this post and posting it again.",
+  E_EDIT_TYPE_IMMUTABLE: "A post's type never changes — delete this post and post the new one.",
+  E_EDIT_EMPTY: "An edit needs new text or a new caption.",
+  E_COMMENT_NOT_FOUND: "That comment doesn't exist in this network.",
 };
 
 export function typedError(code, message, extra = {}) {
@@ -118,7 +124,7 @@ export class PostService {
    *   Link previews (PORCH-052) — compose-time attach validation, view
    *   hydration, and the deletion cascade for ingested og:image artifacts.
    */
-  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime, previews, push, feed }) {
+  constructor({ posts, comments, reactions, votes, notifications, derivedData, artifacts, groups, membership, media, audit, realtime, previews, push, feed, tombstones }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -129,6 +135,10 @@ export class PostService {
     this.groups = groups;
     this.membership = membership;
     this.media = media;
+    // PORCH-093: the tombstone collection of record — every lifecycle
+    // delete rides one (subject attribution + restore window + purge
+    // accounting). Absent on bare assemblies that predate the lifecycle.
+    this.tombstones = tombstones ?? null;
     this.push = push ?? null;
     this.previews = previews ?? null;
     this.realtime = realtime ?? null;
@@ -281,11 +291,14 @@ export class PostService {
   }
 
   /**
-   * Delete a post (ac-5): the transactional cascade. The author signs the
-   * deletion like any write; the post plus every derived artifact keyed to
-   * it (renditions, tags, album memberships in the derived-data container;
-   * quota artifact rows keyed by source id) and every comment, reaction,
-   * vote, and notification on it are removed in one all-or-nothing write.
+   * Delete a post (ac-5 cascade; PORCH-093 ac-1 authority): the
+   * transactional cascade behind the tombstone. The two-role server gate —
+   * the AUTHOR (own post) and the NETWORK OWNER (any post within networks
+   * they own); ownership never confers edit authority, only this delete.
+   * The remover signs the deletion like any write; the post plus every
+   * derived artifact keyed to it and every comment, reaction, vote, and
+   * notification on it leave every read surface in one all-or-nothing
+   * write, tombstoned with the remover's role deletedByRole.
    */
   async deletePost({ accessToken, postId, signature } = {}) {
     const session = await this.#requireSession(accessToken);
@@ -293,9 +306,7 @@ export class PostService {
     if (!post || post.originNetworkId !== session.networkId) {
       throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
     }
-    if (post.authorId !== session.did) {
-      throw typedError("E_NOT_PERMITTED", POST_MESSAGES.E_NOT_PERMITTED);
-    }
+    const deletedByRole = await this.#deleteAuthorityRole(post, session);
     await this.verifyWrite({
       networkId: session.networkId,
       did: session.did,
@@ -303,25 +314,46 @@ export class PostService {
       payload: { kind: "delete", postId: post._id, networkId: post.originNetworkId },
       signature,
     });
-    return this.cascadePost(post, { actorDid: session.did });
+    return this.cascadePost(post, { actorDid: session.did, deletedByRole });
   }
 
   /**
-   * Owner (managing-member) post removal (PORCH-088 ac-4, Oct 15 2026
-   * rulings): the group's creator — or the network owner, who rides as
-   * superuser — removes a post FROM THEIR GROUP as a moderation act, not a
-   * member-content-retention case. The write is device-signed; the signed
-   * payload shape is { kind: "group_post_remove", postId, groupId,
-   * networkId }. The removal executes the origin deletion cascade over the
-   * same transactional sweep the author's own delete rides (comments,
-   * reactions, votes, notifications, derived artifacts, quota ledger, link
-   * previews) PLUS the post's media (asset rows + content-addressed bytes
-   * + ledger rows — the media dies with the post). The post document and
-   * every derived artifact go, so the post leaves feed, ranked, group
-   * timeline, search, event streams and catch-up, and notification
-   * back-references immediately (hard delete, no tombstone, no undelete).
-   * Other members' content is untouched by construction: the cascade keys
-   * only to this post. One audit record lands (group_post_remove).
+   * The delete-authority gate of record (PORCH-093 ac-1): author first,
+   * then the network owner of the ORIGIN network. Any other member — and
+   * a group's managing member (comments never ride group moderation; a
+   * manager's authority over posts rides removePost only) — is refused
+   * plainly with zero mutation.
+   */
+  async #deleteAuthorityRole(post, session) {
+    if (post.authorId === session.did) return "author";
+    const membership = await this.membership.activeMembership({ networkId: session.networkId, did: session.did });
+    if (membership?.role === "owner") return "owner";
+    throw typedError("E_NOT_PERMITTED", POST_MESSAGES.E_NOT_PERMITTED);
+  }
+
+  /**
+   * The group's managing-member post removal (PORCH-088 ac-4, superseded
+   * Oct 16, 2026 — Brian: "It should be the same tombstone pattern"): the
+   * moderation act rides the same tombstone pattern as every lifecycle
+   * delete. The write is device-signed; the signed payload shape is
+   * { kind: "group_post_remove", postId, groupId, networkId }.
+   *
+   * Authority (PORCH-093 ac-1): the group's managing member (the creator)
+   * over group-origin POSTS ONLY, never comments and never content outside
+   * groups they manage; the network owner rides as superuser on their own
+   * network. A non-authoritative caller is refused plainly with zero
+   * mutation.
+   *
+   * The removal executes the origin deletion cascade over the same
+   * transactional sweep the author's own delete rides (comments, reactions,
+   * votes, notifications, derived artifacts, link previews) INTO A
+   * TOMBSTONE: renditions purge at delete, the original binaries hold the
+   * 30-day restore window via the tombstone's mediaOrigins, and the
+   * day-30 reaper purges once. Every delete records the remover:
+   * deletedByRole is author when the actor authored the post, owner when
+   * the actor is the network owner, group-manager otherwise (the
+   * managing-member attribution rides the tombstone, TS 3). One audit
+   * record lands (group_post_remove).
    *
    * @param {{ accessToken: string, postId: string, signature: string }} args
    */
@@ -355,18 +387,25 @@ export class PostService {
       payload: { kind: "group_post_remove", postId: post._id, groupId: post.groupId, networkId: post.originNetworkId },
       signature,
     });
+    // Attribution (TS 3): the author removing their own post is an author
+    // delete; the network owner is an owner delete; the managing member
+    // (neither) is the group-manager moderation attribution.
+    const deletedByRole =
+      post.authorId === session.did
+        ? "author"
+        : actorMembership?.role === "owner"
+          ? "owner"
+          : "group-manager";
     // The cascade of record first (all-or-nothing over the collection
-    // boundary); the media store side follows (asset rows, blob bytes,
-    // quota ledger rows keyed to this post's media refs alone).
-    const cascade = await this.cascadePost(post, { actorDid: session.did, action: "group_post_remove" });
-    const media = this.media
-      ? await this.media.deletePostMedia({ networkId: post.originNetworkId, mediaIds: [...(post.mediaRefs ?? []), post._id] })
-      : null;
+    // boundary); the media side follows: renditions purge at delete, the
+    // originals hold the tombstone's restore window.
+    const cascade = await this.cascadePost(post, { actorDid: session.did, action: "group_post_remove", deletedByRole });
     return {
       removed: true,
       postId: post._id,
+      tombstoneId: cascade.tombstoneId,
       cascadeRows: cascade.cascadeRows,
-      mediaRemoved: media?.assetRowsRemoved ?? 0,
+      purgedMedia: cascade.purgedMedia,
     };
   }
 
@@ -462,13 +501,101 @@ export class PostService {
   }
 
   /**
-   * The deletion cascade for ONE post (ac-5): everything keyed to it goes
-   * in the same all-or-nothing write — comments, reactions, votes,
-   * notifications, derived-artifact-class rows, and the quota artifact
-   * ledger rows for the post's media (keyed by post id or media ref id).
-   * Any failing step rolls every deletion back.
+   * Edit a post (PORCH-093 ac-4): the author edits their own post's text
+   * and caption. The two-role law is one-directional: ownership NEVER
+   * confers edit authority — any other member (the network owner included)
+   * is refused loudly. Media is never edited: a write attempting a
+   * mediaRefs change (or a type change) is refused with the
+   * delete-and-repost direction. Edits are silent by omission: no edit-time
+   * field is written, no revision history exists, and the served document
+   * stays byte-indistinguishable from the same content authored once.
+   *
+   * The PUT-class partial accepts `body` (text posts) and `caption`; the
+   * event (post.updated) carries the same decorated view as post.created,
+   * so connected clients re-render the edited fields in place.
+   *
+   * @param {{ accessToken: string, postId: string, payload: object, signature: string }} args
    */
-  async cascadePost(post, { actorDid = null, action = "post_delete" } = {}) {
+  async editPost({ accessToken, postId, payload, signature } = {}) {
+    const session = await this.#requireSession(accessToken);
+    const post = await this.posts.findOne({ _id: postId });
+    if (!post || post.originNetworkId !== session.networkId) {
+      throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
+    }
+    if (post.authorId !== session.did) {
+      throw typedError("E_EDIT_NOT_AUTHOR", POST_MESSAGES.E_EDIT_NOT_AUTHOR);
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw typedError("E_BODY_REQUIRED", POST_MESSAGES.E_BODY_REQUIRED);
+    }
+    // Media immutability (TS 3): swapping, adding, or removing media rides
+    // delete-and-repost — the edit write refuses the media-ref change with
+    // that direction, and a type change refuses beside it.
+    if ("mediaRefs" in payload) {
+      throw typedError("E_EDIT_MEDIA_IMMUTABLE", POST_MESSAGES.E_EDIT_MEDIA_IMMUTABLE);
+    }
+    if (payload.type !== undefined && payload.type !== post.type) {
+      throw typedError("E_EDIT_TYPE_IMMUTABLE", POST_MESSAGES.E_EDIT_TYPE_IMMUTABLE);
+    }
+    const hasBody = "body" in payload;
+    const hasCaption = "caption" in payload;
+    if (!hasBody && !hasCaption) {
+      throw typedError("E_EDIT_EMPTY", POST_MESSAGES.E_EDIT_EMPTY);
+    }
+    const set = {};
+    if (hasBody) {
+      if (typeof payload.body !== "string" || payload.body.trim().length === 0) {
+        throw typedError("E_EDIT_EMPTY", POST_MESSAGES.E_EDIT_EMPTY);
+      }
+      set.body = payload.body;
+    }
+    if (hasCaption) {
+      set.caption = typeof payload.caption === "string" && payload.caption.trim().length > 0 ? payload.caption : null;
+    }
+    const verifyPayload = { kind: "post-edit", postId: post._id, networkId: post.originNetworkId, ...(hasBody ? { body: set.body } : {}), ...(hasCaption ? { caption: set.caption } : {}) };
+    await this.verifyWrite({ networkId: session.networkId, did: session.did, deviceId: session.deviceId, payload: verifyPayload, signature });
+    await this.posts.updateOne({ _id: post._id }, { $set: set });
+    const updated = await this.posts.findOne({ _id: post._id });
+    // The post.updated envelope carries the SAME decorated view the
+    // post.created envelope carries (PORCH-081 client parity): the
+    // connected timeline re-renders the changed fields in place, and
+    // nothing in the view, the payload, or the envelope reveals an edit
+    // occurred (the no-marker contract, enforced by omission).
+    const [eventView] = this.feed
+      ? await this.feed.eventViews([updated], session.networkId)
+      : await this.memberViews([updated], session.networkId);
+    await this.realtime?.published({
+      networkId: session.networkId,
+      type: "post.updated",
+      postId: post._id,
+      groupId: post.groupId ?? null,
+      content: { ...eventView, preview: eventView?.preview ?? null },
+    });
+    await this.audit("post_edit", {
+      networkId: session.networkId,
+      did: session.did,
+      detail: { postId: post._id, fields: Object.keys(set) },
+    });
+    return { post: (await this.memberViews([updated], session.networkId))[0], did: session.did };
+  }
+
+  /**
+   * The deletion cascade for ONE post (ac-5; PORCH-093 tombstone law):
+   * everything keyed to it leaves reachable read state in the same
+   * all-or-nothing write — comments, nested replies, reactions, votes,
+   * notifications, derived-artifact-class rows, and the quota ledger rows
+   * for the post's derived media — AND a tombstone records the delete for
+   * the restore window: subject attribution (deletedByRole), mediaOrigins
+   * (the original binaries held at rest through the window — their ledger
+   * rows are retained with them), the held link-preview derivations, and
+   * the exact cascade snapshot the restore re-materializes. Renditions
+   * purge at delete (store-side, after the commit). The tombstone insert
+   * and the cascade sit inside one compensating write: a mid-flight
+   * failure removes the tombstone and rolls every deletion back — no
+   * half-deleted read state is ever reachable. Any failing step rolls
+   * everything back.
+   */
+  async cascadePost(post, { actorDid = null, action = "post_delete", deletedByRole = "author" } = {}) {
     const networkId = post.originNetworkId;
     const comments = await this.comments.find({ postId: post._id });
     const reactions = await this.reactions.find({ postId: post._id });
@@ -476,14 +603,26 @@ export class PostService {
     const notifications = await this.notifications.find({ postId: post._id });
     const derived = await this.derivedData.find({ postId: post._id });
     const keyed = await this.#keyedRows({ networkId, posts: [post] });
+    // The ORIGINAL binaries hold the restore window (TS 3): the originals'
+    // quota ledger rows are retained beside them; only derived ledger rows
+    // (counters keyed to the post) leave with the cascade. Purge removes
+    // the held ledger rows at day 30.
+    const heldOriginals = new Set(post.mediaRefs ?? []);
+    const ledgerRows = keyed
+      .flatMap((part) => part.rows)
+      .filter((row) => !(row.kind === "original" && heldOriginals.has(row.sourceId)));
     // Link previews (PORCH-052): the post's reference and every reply's
-    // reference die with the parent — including each ingest's og:image
-    // asset rows, rendition rows, and ledger rows that survive no other
-    // reference (the content-addressed bytes die with the last reference).
+    // reference die with the parent — but their bytes are HELD through the
+    // window (heldBlobKeys), so a restore re-materializes them exactly.
+    // The day-30 reaper destroys the held bytes one time.
     const previewIds = [post.previewId, ...comments.map((comment) => comment.previewId)].filter(Boolean);
     const previewCascade = this.previews
       ? await this.previews.cascadeRows({ networkId, previewIds })
       : { parts: [], blobKeys: [] };
+    const cascadeByKind = {};
+    for (const part of previewCascade.parts) {
+      cascadeByKind[part.kind] = [...(cascadeByKind[part.kind] ?? []), ...part.rows];
+    }
 
     const snapshot = [
       { collection: this.posts, rows: [post] },
@@ -492,20 +631,80 @@ export class PostService {
       { collection: this.votes, rows: votes },
       { collection: this.notifications, rows: notifications },
       { collection: this.derivedData, rows: derived },
-      ...keyed,
+      { collection: this.artifacts, rows: ledgerRows },
       ...previewCascade.parts,
     ];
-    await this.runTransactional(snapshot);
-    await this.previews?.releaseBlobs(previewCascade.blobKeys);
+    const nowIso = new Date().toISOString();
+    const tombstone = {
+      _id: `tmb_${crypto.randomUUID()}`,
+      subjectType: "post",
+      subjectId: post._id,
+      originNetworkId: networkId,
+      deletedBy: actorDid ?? post.authorId,
+      deletedByRole,
+      deletedAt: nowIso,
+      purgeAt: purgeAtFor(nowIso),
+      purgedAt: null,
+      mediaOrigins: [...heldOriginals],
+      heldBlobKeys: [...new Set(previewCascade.blobKeys)],
+      cascade: {
+        subject: post,
+        comments,
+        reactions,
+        votes,
+        notifications,
+        derivedData: derived,
+        previews: cascadeByKind.previews ?? [],
+        assets: cascadeByKind.assets ?? [],
+        artifacts: cascadeByKind.artifacts ?? [],
+      },
+    };
+    // One all-or-nothing write: tombstone + cascade. A failure anywhere
+    // removes the tombstone and rolls the deletions back (runTransactional
+    // re-installs every already-removed row); no half-deleted read state.
+    try {
+      await this.tombstones.insertOne(tombstone);
+      await this.runTransactional(snapshot);
+    } catch (error) {
+      await this.tombstones.deleteOne({ _id: tombstone._id });
+      throw error;
+    }
+    // Renditions purge at delete (ac-2): asset rows, blob bytes, ledger
+    // rows. The ORIGINAL binaries stay at rest for the tombstone.
+    const purgedMedia = this.media
+      ? await this.media.purgeRenditionsOf({ networkId, originalIds: [...heldOriginals] })
+      : null;
+    // PORCH-093: post.deleted rides the shipped vocabulary (ordered and
+    // idempotent per origin; content-only). The tree-scoped payload carries
+    // the ids of the cascaded children — the deleted post's own view never
+    // re-renders, and no read surface ever serves the tombstoned rows.
+    await this.realtime?.published({
+      networkId,
+      type: "post.deleted",
+      postId: post._id,
+      groupId: post.groupId ?? null,
+      content: { cascadeIds: comments.map((comment) => comment._id) },
+    });
     await this.audit(action, {
       networkId,
       did: actorDid ?? post.authorId,
-      detail: { postId: post._id, comments: comments.length, reactions: reactions.length, votes: votes.length },
+      detail: {
+        postId: post._id,
+        deletedByRole,
+        tombstoneId: tombstone._id,
+        comments: comments.length,
+        reactions: reactions.length,
+        votes: votes.length,
+        renditionsPurged: purgedMedia?.renditionRowsRemoved ?? 0,
+        heldMedia: heldOriginals.size,
+      },
     });
     return {
       deleted: true,
       postId: post._id,
+      tombstoneId: tombstone._id,
       cascadeRows: snapshot.reduce((n, part) => n + part.rows.length, 0),
+      purgedMedia,
     };
   }
 

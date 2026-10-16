@@ -132,6 +132,49 @@ export const socialModels = {
     },
   },
   /**
+   * Tombstone (PORCH-093, added Brian, Oct 16, 2026 lifecycle rulings;
+   * amended the same day for the group-moderation addition). The record
+   * one lifecycle delete leaves behind: subject attribution, the 30-day
+   * restore window, and the one-time hard-purge accounting. Comments and
+   * nested replies of a tombstoned subject are cascade-deleted with no
+   * tombstones of their own — they survive only as rows captured on this
+   * document's restore snapshot, never as their own records, and a
+   * tombstone document itself is never served by any read surface.
+   */
+  tombstone: {
+    type: "object",
+    required: ["_id", "subjectType", "subjectId", "originNetworkId", "deletedBy", "deletedByRole", "deletedAt", "purgeAt", "purgedAt", "mediaOrigins"],
+    properties: {
+      _id: { type: "string" },
+      /** post | comment. */
+      subjectType: { type: "string", enum: ["post", "comment"] },
+      /** The subject's document id (the post or comment tombstoned). */
+      subjectId: { type: "string" },
+      /** The ONE origin network; authority and cascade resolve inside it. */
+      originNetworkId: { type: "string" },
+      /** The remover's DID. */
+      deletedBy: { type: "string" },
+      /** author | owner | group-manager (the managing-member attribution). */
+      deletedByRole: { type: "string", enum: ["author", "owner", "group-manager"] },
+      deletedAt: { type: "string" },
+      /** deletedAt + 30 days; the reaper's claim deadline. */
+      purgeAt: { type: "string" },
+      /** Null until the one-time hard purge; then audit-only, restore refuses. */
+      purgedAt: { type: ["string", "null"] },
+      /** The original binary references held through the restore window
+       *  (kind=original media asset ids; renditions purged at delete). */
+      mediaOrigins: { type: "array", items: { type: "string" } },
+      /** Content-addressed blob keys held through the window (link-preview
+       *  og:image derivations released only at hard purge). */
+      heldBlobKeys: { type: "array", items: { type: "string" } },
+      /** The cascade snapshot captured at delete time: the exact rows the
+       *  transactional cascade removed (post/comment subject plus every
+       *  child), folded back on restore — the restore never fabricates
+       *  state, it re-materializes only these rows. */
+      cascade: { type: "object" },
+    },
+  },
+  /**
    * Notification (PORCH-006, @mentions/nested replies). Content-free by
    * contract: ids and type only — never a comment body or post caption.
    * Transport lives in client delivery; members poll their own inbox.

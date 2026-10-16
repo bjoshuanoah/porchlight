@@ -18,6 +18,7 @@ import { ExportService } from "./services/export.service.js";
 import { AlbumService } from "./services/album.service.js";
 import { BulkOriginalService } from "./services/bulk-original.service.js";
 import { MemberAdminService } from "./services/member-admin.service.js";
+import { LifecycleService } from "./services/lifecycle.service.js";
 import { createMemoryMediaStore, createRelocatableMediaStore, nodeDiskProbe } from "./services/media.store.js";
 import { MediaVolumeService } from "./services/media.volume.js";
 import { SocialBootstrapController } from "./controllers/social-bootstrap.controller.js";
@@ -96,6 +97,13 @@ import { createSocialRouter } from "./routes.js";
  *       The bounded replay window behind the REST catch-up (24h, config
  *       value `realtime.replayHours`, packages/shared).
  *   },
+ *   lifecycle?: {
+ *     PORCH-093: the day-30 hard-purge reaper's arm settings. Tests pass
+ *     timer: null (arm nothing; they call sweep directly); the hub default
+ *     arms the idempotent sweep daily [Assumed: daily, build confirm].
+ *     sweepIntervalMs?: number,
+ *     timer?: { setTimeout: Function, clearTimeout: Function } | null,
+ *   },
  *   push?: {
  *     PORCH-059: the Web Push transport (identity-scoped subscriptions +
  *     hub-enforced member settings).
@@ -139,6 +147,9 @@ export function assembleSocialModule(store, options = {}) {
   const auditEvents = collection("audit_events");
   const posts = collection("posts");
   const comments = collection("comments");
+  // Content lifecycle (PORCH-093): the tombstone of record — one row per
+  // lifecycle delete riding the restore window to its one-time hard purge.
+  const tombstones = collection("tombstones");
   const reactions = collection("reactions");
   const votes = collection("votes");
   const notifications = collection("notifications");
@@ -294,6 +305,7 @@ export function assembleSocialModule(store, options = {}) {
       audit,
       realtime: realtimeService,
       volume: volumeService,
+      tombstones,
     },
     {
       softUsedRatio: mediaConfig.softUsedRatio,
@@ -356,6 +368,7 @@ export function assembleSocialModule(store, options = {}) {
     // envelopes (the arriving card renders exactly what a timeline read
     // row renders — no follow-up read).
     feed: feedService,
+    tombstones,
   });
   const interactionService = new InteractionService({
     posts,
@@ -369,6 +382,44 @@ export function assembleSocialModule(store, options = {}) {
     previews: linkPreviewService,
     push: pushService,
     groups,
+    tombstones,
+    notificationRows: notifications,
+  });
+  // Content lifecycle (PORCH-093): the restore + day-30 reaper half. The
+  // write services own the delete-side tombstone writes; this service owns
+  // the re-materializing restore (owner-console write) and the scheduled
+  // hard-purge sweep ([Assumed] daily, armed below unless a test disables
+  // it). The re-materialization needs the same collections the cascade
+  // removed — the link-preview record rows ride the preview service's
+  // collection, the og:image assets the pipeline's.
+  const lifecycleService = new LifecycleService({
+    tombstones,
+    posts,
+    comments,
+    reactions,
+    votes,
+    notifications,
+    derivedData,
+    assets: mediaAssets,
+    artifacts,
+    membership: membershipService,
+    media: mediaService,
+    previews: linkPreviewService,
+    audit,
+    realtime: realtimeService,
+    feed: feedService,
+    groups,
+  });
+  // Late-bound write services (the same late-binding the revocation kill
+  // rides): a restored subject's updated envelope carries the same
+  // decorated view the creation events carry.
+  lifecycleService.bindServices({ postService, interactions: interactionService });
+  // The reaper arms at assemble ([Assumed] daily sweep) — the injectable
+  // timer seam (tests pass timer: null to arm nothing; they call sweep
+  // directly). The armed handle never holds the process open.
+  lifecycleService.start({
+    sweepIntervalMs: options.lifecycle?.sweepIntervalMs ?? 24 * 60 * 60 * 1000,
+    timer: options.lifecycle?.timer ?? null,
   });
   const exportService = new ExportService({
     posts,
@@ -445,6 +496,7 @@ export function assembleSocialModule(store, options = {}) {
       ranking: rankingService,
       media: mediaService,
       memberAdmin: memberAdminService,
+      lifecycle: lifecycleService,
       system: options.system ?? null,
       hubUrl: options.hubUrl ?? null,
       log: options.log ?? null,
@@ -489,6 +541,7 @@ export function assembleSocialModule(store, options = {}) {
     albumService,
     bulkOriginalService,
     memberAdminService,
+    lifecycleService,
     ogService,
     controllers,
     api: createSocialRouter(controllers),

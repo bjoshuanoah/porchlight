@@ -10,6 +10,7 @@ import { NotificationService } from "../../src/services/notification.service.js"
 import { PushService } from "../../src/services/push.service.js";
 import { InteractionService } from "../../src/services/interaction.service.js";
 import { GroupService } from "../../src/services/group.service.js";
+import { LifecycleService } from "../../src/services/lifecycle.service.js";
 import { RealtimeService, createMemoryEventPlane } from "../../src/services/realtime.service.js";
 import { canonicalJson } from "../../src/services/membership.service.js";
 
@@ -48,6 +49,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     notifications: store.collection("notifications"),
     derivedData: store.collection("derived_data"),
     groups: store.collection("groups"),
+    tombstones: store.collection("tombstones"),
     pushSubscriptions: store.collection("push_subscriptions"),
     pushSettings: store.collection("push_settings"),
     ogImages: store.collection("og_images"),
@@ -86,6 +88,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     quota,
     blobs: createMemoryMediaStore(),
     audit,
+    tombstones: collections.tombstones,
   });
   const groups = new GroupService({ groups: collections.groups, memberships: collections.memberships });
   push = new PushService({
@@ -116,6 +119,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     audit,
     realtime,
     push,
+    tombstones: collections.tombstones,
   });
   const interactions = new InteractionService({
     posts: collections.posts,
@@ -128,7 +132,31 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     realtime,
     push,
     groups: collections.groups,
+    tombstones: collections.tombstones,
+    notificationRows: collections.notifications,
   });
+  // PORCH-093: the lifecycle half mirrors the module assembly — restore +
+  // the reaper sweep ride the same tombstone rows the cascade writes. The
+  // reaper is NOT armed here: tests call lifecycle.sweep directly with
+  // their own clock. (No preview plane wired: restored previews degrade to
+  // the rows' captured state.)
+  const lifecycle = new LifecycleService({
+    tombstones: collections.tombstones,
+    posts: collections.posts,
+    comments: collections.comments,
+    reactions: collections.reactions,
+    votes: collections.votes,
+    notifications: collections.notifications,
+    derivedData: collections.derivedData,
+    assets: store.collection("media_assets"),
+    artifacts: collections.artifacts,
+    membership,
+    media,
+    audit,
+    realtime,
+    groups: collections.groups,
+  });
+  lifecycle.bindServices({ postService: posts, interactions });
 
   for (const networkId of networkIds) {
     collections.networks.insertOne({
@@ -153,5 +181,5 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     return admitted;
   };
 
-  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, realtime, realtimePlane: plane, push, audit: { events: collections.auditEvents }, admit, device };
+  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, realtime, realtimePlane: plane, push, lifecycle, audit: { events: collections.auditEvents }, admit, device };
 }

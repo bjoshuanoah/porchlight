@@ -1,6 +1,13 @@
 import { socialModels } from "../models.js";
 import { canSeeGroup } from "./group.service.js";
 import { typedError, computeCounters, ruledRootCompare } from "./post.service.js";
+import { purgeAtFor } from "./lifecycle.time.js";
+
+const COMMENT_LIFECYCLE_MESSAGES = {
+  E_COMMENT_NOT_FOUND: "That comment doesn't exist in this network.",
+  E_COMMENT_DELETE_NOT_PERMITTED: "Only the comment's author or the network owner can delete a comment.",
+  E_COMMENT_EDIT_NOT_AUTHOR: "Only the comment's author can edit it — ownership never confers edit authority.",
+};
 
 /**
  * Replies nest to a depth cap (directive: "a depth cap [Assumed: 8]"). A
@@ -47,13 +54,18 @@ export class InteractionService {
    *   gate — every interaction surface on a private-group post resolves only
    *   for members of that group.
    */
-  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews, push, groups = null }) {
+  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews, push, groups = null, tombstones = null, notificationRows = null }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
     this.votes = votes;
     this.membership = membership;
     this.notifications = notifications;
+    // PORCH-093: the notifications COLLECTION (distinct from the
+    // NotificationService above) — the comment cascade removes the reply/
+    // mention rows keyed to the deleted comments in the same write.
+    this.notificationRows = notificationRows ?? null;
+    this.tombstones = tombstones;
     this.push = push ?? null;
     this.previews = previews ?? null;
     this.realtime = realtime ?? null;
@@ -124,6 +136,227 @@ export class InteractionService {
       content: commentContent,
     });
     return { comment: commentContent };
+  }
+
+  /**
+   * Delete a comment (PORCH-093 ac-1): one atomic operation tombstones the
+   * root and cascades every nested reply in the same all-or-nothing write
+   * (the reply tree, their notifications, their link previews). Authority
+   * resolves against TWO roles only — the comment's author and the network
+   * owner of the comment's origin; ownership never confers edit authority
+   * and a group's managing member holds NO lifecycle authority over
+   * comments. Refusals are plain-language and write nothing. The
+   * cascaded children carry no tombstones of their own — they are captured
+   * on the subject's tombstone for the restore window.
+   *
+   * The comment.deleted event is tree-scoped and content-only: one event
+   * carrying the deleted root and the ids of its cascaded children, riding
+   * the shipped transport (ordered and idempotent per origin).
+   *
+   * @param {{ accessToken: string, postId: string, commentId: string, signature: string }} args
+   */
+  async deleteComment({ accessToken, postId, commentId, signature } = {}) {
+    const session = await this.#requireSession({ accessToken, postId });
+    const networkId = session.networkId;
+    const comment = await this.comments.findOne({ _id: commentId, postId });
+    if (!comment || comment.networkId !== networkId) {
+      throw typedError("E_COMMENT_NOT_FOUND", COMMENT_LIFECYCLE_MESSAGES.E_COMMENT_NOT_FOUND);
+    }
+    // Two-role authority (TS 14 lifecycle write contract): the comment's
+    // author, or the network owner. A group's managing member is refused
+    // here exactly like any other member.
+    let deletedByRole = null;
+    if (comment.authorDid === session.did) {
+      deletedByRole = "author";
+    } else {
+      const membership = await this.membership.activeMembership({ networkId, did: session.did });
+      if (membership?.role !== "owner") {
+        throw typedError("E_COMMENT_DELETE_NOT_PERMITTED", COMMENT_LIFECYCLE_MESSAGES.E_COMMENT_DELETE_NOT_PERMITTED);
+      }
+      deletedByRole = "owner";
+    }
+    await this.#verifyWrite({
+      session,
+      payload: { kind: "comment-delete", postId, commentId, networkId },
+      signature,
+    });
+    // The cascade of record: the root plus every nested reply, depth-first.
+    const subtree = [comment];
+    const seen = new Set([comment._id]);
+    let frontier = [comment._id];
+    while (frontier.length) {
+      const children = (await this.comments.find({ parentId: frontier[0] })).filter((row) => !seen.has(row._id));
+      for (const child of children) {
+        seen.add(child._id);
+        subtree.push(child);
+      }
+      frontier = [...children.map((row) => row._id), ...frontier.slice(1)];
+    }
+    const subtreeIds = new Set(subtree.map((row) => row._id));
+    // Notifications keyed to the deleted comments die in the same write.
+    const cascadedNotifications = this.notificationRows
+      ? (await this.notificationRows.find({ postId })).filter(
+          (row) => row.commentId !== null && subtreeIds.has(row.commentId),
+        )
+      : [];
+    // Link previews on the deleted comments' rows ride the preview cascade
+    // (held bytes through the window — never released at delete).
+    const previewIds = subtree.map((row) => row.previewId).filter(Boolean);
+    const previewCascade = this.previews
+      ? await this.previews.cascadeRows({ networkId, previewIds })
+      : { parts: [], blobKeys: [] };
+    const cascadeByKind = {};
+    for (const part of previewCascade.parts) {
+      cascadeByKind[part.kind] = [...(cascadeByKind[part.kind] ?? []), ...part.rows];
+    }
+    const cascadedChildren = subtree.filter((row) => row._id !== comment._id);
+    const snapshot = [
+      { collection: this.comments, rows: subtree },
+      ...(this.notificationRows && cascadedNotifications.length
+        ? [{ collection: this.notificationRows, rows: cascadedNotifications }]
+        : []),
+      ...previewCascade.parts,
+    ];
+    const nowIso = new Date().toISOString();
+    const tombstone = {
+      _id: `tmb_${crypto.randomUUID()}`,
+      subjectType: "comment",
+      subjectId: comment._id,
+      originNetworkId: networkId,
+      deletedBy: session.did,
+      deletedByRole,
+      deletedAt: nowIso,
+      purgeAt: purgeAtFor(nowIso),
+      purgedAt: null,
+      mediaOrigins: [],
+      heldBlobKeys: [...new Set(previewCascade.blobKeys)],
+      cascade: {
+        subject: comment,
+        post: session.post,
+        comments: cascadedChildren,
+        reactions: [],
+        votes: [],
+        notifications: cascadedNotifications,
+        derivedData: [],
+        previews: cascadeByKind.previews ?? [],
+        assets: cascadeByKind.assets ?? [],
+        artifacts: cascadeByKind.artifacts ?? [],
+      },
+    };
+    // One all-or-nothing write: tombstone + cascade (the same compensating
+    // shape the post cascade rides — a failure removes the tombstone and
+    // rolls every deletion back).
+    try {
+      await this.tombstones.insertOne(tombstone);
+      await this.#runTransactional(snapshot);
+    } catch (error) {
+      await this.tombstones.deleteOne({ _id: tombstone._id });
+      throw error;
+    }
+    // Expander counts compute against live comments only — the recount
+    // re-derives the totals on the next served read; no counter
+    // maintenance lives on the write path beyond this recompute.
+    await this.#recount({ postId });
+    // Tree-scoped content-only removal event (the shipped transport).
+    await this.realtime?.published({
+      networkId,
+      type: "comment.deleted",
+      postId,
+      groupId: session.post.groupId ?? null,
+      content: {
+        rootId: comment._id,
+        cascadeIds: cascadedChildren.map((row) => row._id),
+      },
+    });
+    await this.audit("comment_delete", {
+      networkId,
+      did: session.did,
+      detail: {
+        postId,
+        commentId: comment._id,
+        deletedByRole,
+        tombstoneId: tombstone._id,
+        cascadedReplies: cascadedChildren.length,
+      },
+    });
+    return { deleted: true, commentId: comment._id, tombstoneId: tombstone._id, cascadedReplies: cascadedChildren.length };
+  }
+
+  /**
+   * Edit a comment (PORCH-093 ac-4): the author may change the comment's
+   * TEXT only — media refs are immutable on comment edits (a comment
+   * carries no media), ownership never confers edit authority, and edits
+   * are silent (no edited marker, no annotation, no version history; the
+   * comment.updated event payload carries the same shape as creation, so
+   * nothing in the event vocabulary reveals an edit occurred).
+   *
+   * @param {{ accessToken: string, postId: string, commentId: string, payload: object, signature: string }} args
+   */
+  async editComment({ accessToken, postId, commentId, payload, signature } = {}) {
+    const session = await this.#requireSession({ accessToken, postId });
+    const networkId = session.networkId;
+    const comment = await this.comments.findOne({ _id: commentId, postId });
+    if (!comment || comment.networkId !== networkId) {
+      throw typedError("E_COMMENT_NOT_FOUND", COMMENT_LIFECYCLE_MESSAGES.E_COMMENT_NOT_FOUND);
+    }
+    if (comment.authorDid !== session.did) {
+      throw typedError("E_COMMENT_EDIT_NOT_AUTHOR", COMMENT_LIFECYCLE_MESSAGES.E_COMMENT_EDIT_NOT_AUTHOR);
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw typedError("E_COMMENT_BODY_REQUIRED", "A comment edit needs a payload object.");
+    }
+    const body = typeof payload.body === "string" && payload.body.trim().length > 0 ? payload.body : null;
+    if (!body) {
+      throw typedError("E_COMMENT_BODY_REQUIRED", "A comment needs some text.");
+    }
+    await this.#verifyWrite({
+      session,
+      payload: { kind: "comment-edit", postId, commentId, body, networkId },
+      signature,
+    });
+    await this.comments.updateOne({ _id: comment._id }, { $set: { body } });
+    const updated = await this.comments.findOne({ _id: comment._id });
+    // comment.updated carries the same decorated view the reply.created
+    // event carries (TS 14: creation shape, no edit-revealing field).
+    const commentContent = await this.#replyContent(updated, networkId);
+    await this.realtime?.published({
+      networkId,
+      type: "comment.updated",
+      postId,
+      groupId: session.post.groupId ?? null,
+      content: commentContent,
+    });
+    await this.audit("comment_edit", {
+      networkId,
+      did: session.did,
+      detail: { postId, commentId: comment._id },
+    });
+    return { comment: commentContent };
+  }
+
+  /**
+   * Transactional write over the CollectionLike boundary (the same
+   * snapshot/rollback all-or-nothing shape PostService.cascadePost rides,
+   * local to the interaction side so the comment cascade stays
+   * service-layer work).
+   */
+  async #runTransactional(snapshot) {
+    const placed = [];
+    try {
+      for (const part of snapshot) {
+        for (const row of part.rows) {
+          await part.collection.deleteOne({ _id: row._id });
+        }
+        placed.push(part);
+      }
+    } catch (error) {
+      for (const part of placed.reverse()) {
+        for (const row of part.rows) {
+          await part.collection.insertOne(structuredClone(row));
+        }
+      }
+      throw error;
+    }
   }
 
   /**

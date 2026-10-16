@@ -116,6 +116,40 @@ export class ContentController {
     );
   };
 
+  /** PUT /posts/:postId — the author's signed text/caption edit (PORCH-093 ac-4). */
+  editPost = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return this.#delegate(res, () =>
+      this.posts.editPost({ accessToken: this.bearer(req), postId: req.params?.postId, payload, signature }),
+    );
+  };
+
+  /** PUT /posts/:postId/comments/:commentId — the author's signed text edit (PORCH-093 ac-4). */
+  editComment = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return this.#delegate(res, () =>
+      this.interactions.editComment({
+        accessToken: this.bearer(req),
+        postId: req.params?.postId,
+        commentId: req.params?.commentId,
+        payload,
+        signature,
+      }),
+    );
+  };
+
+  /** DELETE /posts/:postId/comments/:commentId — signed comment delete with tree cascade (PORCH-093 ac-1). */
+  deleteComment = async (req, res) => {
+    return this.#delegate(res, () =>
+      this.interactions.deleteComment({
+        accessToken: this.bearer(req),
+        postId: req.params?.postId,
+        commentId: req.params?.commentId,
+        signature: req.body?.signature,
+      }),
+    );
+  };
+
   /** DELETE /me/content — the member's signed deletion sweep at the origin (ac-5). */
   sweepMemberContent = async (req, res) => {
     return this.#delegate(res, () =>
@@ -205,6 +239,13 @@ export class ContentController {
       E_GROUP_NOT_MEMBER: 403,
       E_NOTIFICATION_NOT_MEMBER: 403,
       E_NOTIFICATION_CROSS_ORIGIN: 403,
+      E_COMMENT_NOT_FOUND: 404,
+      E_COMMENT_DELETE_NOT_PERMITTED: 403,
+      E_COMMENT_EDIT_NOT_AUTHOR: 403,
+      E_EDIT_NOT_AUTHOR: 403,
+      E_EDIT_MEDIA_IMMUTABLE: 400,
+      E_EDIT_TYPE_IMMUTABLE: 400,
+      E_EDIT_EMPTY: 400,
     };
     const status = statusByCode[error.code] ?? 500;
     const message =

@@ -17,4 +17,5 @@ export * from "./services/audit.service.js";
 export { assembleSocialModule } from "./assemble.js";
 export { createSocialRouter } from "./routes.js";
 export { MemberAdminService } from "./services/member-admin.service.js";
+export { LifecycleService } from "./services/lifecycle.service.js";
 export { OgService } from "./services/og.service.js";

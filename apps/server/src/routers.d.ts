@@ -199,9 +199,11 @@ declare module "@porchlight/social" {
     create(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ post: Record<string, unknown> }>;
     get(options?: { accessToken?: string | null; postId?: string }): Promise<{ post: Record<string, unknown> }>;
     list(options?: { accessToken?: string | null }): Promise<{ posts: Array<Record<string, unknown>> }>;
-    deletePost(options?: { accessToken?: string | null; postId?: string; signature?: string }): Promise<{ deleted: boolean; postId: string }>;
+    deletePost(options?: { accessToken?: string | null; postId?: string; signature?: string }): Promise<{ deleted: boolean; postId: string; tombstoneId: string }>;
+    /** PORCH-093 ac-4: the author's silent text/caption edit. */
+    editPost(options?: { accessToken?: string | null; postId?: string; payload?: object; signature?: string }): Promise<{ post: Record<string, unknown> }>;
     memberContentSweep(options?: { accessToken?: string | null; signature?: string }): Promise<{ sweptPosts: number }>;
-    cascadePost(post: Record<string, unknown>, options?: { actorDid?: string | null }): Promise<{ deleted: boolean; postId: string }>;
+    cascadePost(post: Record<string, unknown>, options?: { actorDid?: string | null; deletedByRole?: "author" | "owner" | "group-manager" }): Promise<{ deleted: boolean; postId: string; tombstoneId: string }>;
     recount(options?: { postId?: string; networkId?: string }): Promise<void>;
   }
   export class InteractionService {
@@ -210,6 +212,15 @@ declare module "@porchlight/social" {
     vote(options?: { accessToken?: string | null; payload?: object; signature?: string }): Promise<{ vote: Record<string, unknown> }>;
     commentThread(options?: { accessToken?: string | null; postId?: string }): Promise<{ comments: Array<Record<string, unknown>> }>;
     reactionsFor(options?: { accessToken?: string | null; postId?: string }): Promise<{ reactions: Array<Record<string, unknown>> }>;
+    /** PORCH-093 ac-1: author/owner comment delete with the reply-tree cascade. */
+    deleteComment(options?: { accessToken?: string | null; postId?: string; commentId?: string; signature?: string }): Promise<{ deleted: boolean; commentId: string; tombstoneId: string; cascadedReplies: number }>;
+    /** PORCH-093 ac-4: the author's silent text edit. */
+    editComment(options?: { accessToken?: string | null; postId?: string; commentId?: string; payload?: object; signature?: string }): Promise<{ comment: Record<string, unknown> }>;
+  }
+  /** PORCH-093: the content lifecycle — owner restore + the day-30 reaper. */
+  export class LifecycleService {
+    sweep(options?: { now?: () => Date }): Promise<{ purged: number; due: number }>;
+    restore(options?: { accessToken?: string | null; tombstoneId?: string }): Promise<{ restored: boolean; subjectType: string; subjectId: string; restoredRows: number; renditionsRegenerated: number; renditionFailures: Array<Record<string, unknown>> }>;
   }
   export class NotificationService {
     inbox(options?: { accessToken?: string | null }): Promise<{ notifications: Array<Record<string, unknown>> }>;
