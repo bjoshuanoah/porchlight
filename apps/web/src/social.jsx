@@ -1612,6 +1612,7 @@ function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved =
     );
   }}>
     <TextField
+      fullWidth
       label="Edit your post"
       value={body}
       disabled={offline}
@@ -1620,6 +1621,7 @@ function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved =
       helperText={offline ? 'Editing needs your family server. It is unreachable right now.' : undefined}
     />
     <TextField
+      fullWidth
       label="Caption"
       value={caption}
       disabled={offline}
@@ -1627,6 +1629,7 @@ function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved =
       onChange={(event) => { const next = { ...stage, caption: event.target.value }; setCaption(event.target.value); report(next); }}
     />
     <TextField
+      fullWidth
       select
       // Location in edit mode (Brian, Oct 16, 2026): the general timeline
       // plus the author's groups only — both directions ride the edit.
@@ -1669,6 +1672,7 @@ function CommentEditForm({ row, initialText, onDraft = null, onDone = null, onCa
     );
   }}>
     <TextField
+      fullWidth
       label="Edit your comment"
       value={text}
       multiline minRows={2}
@@ -2275,6 +2279,7 @@ function ReplyForm({ label, onSubmit, offline, post, actions, replyingTo = null,
     {replyingTo && <Typography variant="caption" color="text.secondary" data-testid="reply-target">{`Replying to ${replyingTo}`}</Typography>}
     <Box ref={fieldRef} sx={{ position: 'relative' }}>
       <TextField
+        fullWidth
         inputRef={(element) => { inputRef.current = element; }}
         label={label}
         value={text}
