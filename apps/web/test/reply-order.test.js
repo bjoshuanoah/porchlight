@@ -208,3 +208,45 @@ test("PORCH-086 regression: the timeline card renders — the draft map is a pla
   assert.ok(html.includes("the ruled order post"), "the rendered card carries the post body");
   assert.match(html, /Lift|data/, "the card renders its action surface (render past the old crash point)");
 });
+
+// PORCH-100 (Brian, Oct 16, 2026, verbatim: "Also the input field is too
+// narrow. It must fill the full width of the available space."): MUI's
+// TextField root is an inline-flex FormControl that shrinks to its content
+// until the fullWidth prop resolves width: 100%. Every composer TextField
+// riding the comment surfaces — the reply composer (card rail and detail
+// column) and the edit modes (post and comment) — carries fullWidth, so the
+// input ELEMENT spans the governing space, not merely its container.
+test("ac-1/ac-2: every composer field on the comment surfaces carries fullWidth", () => {
+  const fields = (slice) => slice.match(/<TextField\b/g)?.length ?? 0;
+  const fullWidthFields = (slice) => slice.match(/<TextField\b\s*\n\s*fullWidth\b/g)?.length ?? 0;
+  const form = social.slice(social.indexOf("function ReplyForm("), social.indexOf("\nfunction Reply("));
+  const postEdit = social.slice(social.indexOf("function PostEditForm("), social.indexOf("// The comment's edit composer"));
+  const commentEdit = social.slice(social.indexOf("function CommentEditForm("), social.indexOf("\n/**\n * A comment row's lifecycle overflow"));
+  for (const [name, slice] of [["ReplyForm", form], ["PostEditForm", postEdit], ["CommentEditForm", commentEdit]]) {
+    assert.ok(fields(slice) > 0, `${name} renders a TextField`);
+    assert.equal(fields(slice), fullWidthFields(slice), `every ${name} TextField carries fullWidth`);
+  }
+  // No width cap anywhere in the composer internals (the shrunken variant
+  // the report showed): no maxWidth, no fixed width, no size="small".
+  for (const [name, slice] of [["ReplyForm", form], ["PostEditForm", postEdit], ["CommentEditForm", commentEdit]]) {
+    assert.doesNotMatch(slice, /\bmaxWidth:|\bwidth: ['"]?\d|size=["']small["']/, `${name} carries no width cap`);
+  }
+});
+
+test("ac-1/ac-2: the rendered composer field element is a full-width FormControl and input", async () => {
+  const { ReplySliceBlock } = await surfaces();
+  const roots = [
+    { _id: "r1", authorDid: "dB", authorName: "Ben", body: "threaded-one", createdAt: ts(1), responseCount: 0 },
+    { _id: "r3", authorDid: "dE", authorName: "Eli", body: "late-b", createdAt: ts(13), responseCount: 0 },
+  ];
+  const post6 = { _id: "p1", replySlice: roots, replyTotal: 2, origin: "https://hub" };
+  // Reply mode: the composer's FormControl and input root carry the
+  // fullWidth classes the styled chain resolves width: 100% from.
+  const reply = renderToString(React.createElement(ReplySliceBlock, { post: post6, slice: { replies: roots, total: 2 }, data, actions: {}, offline: false, origin: "https://hub", navigate: null, composerFor: "r3" }));
+  assert.match(reply, /MuiFormControl-fullWidth/, "the composer FormControl renders fullWidth");
+  assert.match(reply, /MuiInputBase-fullWidth/, "the composer input root renders fullWidth");
+  // Edit mode: the comment edit field is the same full-width styled chain.
+  const edit = renderToString(React.createElement(ReplySliceBlock, { post: post6, slice: { replies: roots, total: 2 }, data, actions: {}, offline: false, origin: "https://hub", navigate: null, editFor: "r3" }));
+  assert.match(edit, /MuiFormControl-fullWidth/, "the comment edit FormControl renders fullWidth");
+  assert.match(edit, /MuiInputBase-fullWidth/, "the comment edit input root renders fullWidth");
+});
