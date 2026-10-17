@@ -107,6 +107,12 @@ export const socialModels = {
       emoji: { type: "string" },
       deviceSignature: { type: "string" },
       createdAt: { type: "string" },
+      /** Reaction subject (PORCH-098, Brian Oct 16 2026): post | comment.
+       *  Additive only — rows predating the field resolve as post subjects
+       *  by default (no rewrite, no migration, no new collection). */
+      subjectType: { type: "string", enum: ["post", "comment"] },
+      /** The comment's id on a comment-subject row; null on post rows. */
+      commentId: { type: ["string", "null"] },
     },
   },
   /**

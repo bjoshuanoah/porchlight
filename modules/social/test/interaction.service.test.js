@@ -331,7 +331,10 @@ test("ac-4: interaction views carry no vote material", async () => {
   const commentView = (await interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
   assert.deepEqual(
     Object.keys(commentView).sort(),
-    ["_id", "authorAvatar", "authorDid", "authorName", "body", "createdAt", "mentionNames", "mentions", "parentId", "postId", "previewId"],
+    ["_id", "authorAvatar", "authorDid", "authorName", "body", "createdAt", "mentionNames", "mentions", "parentId", "postId", "previewId", "reactionRows"],
+    // PORCH-098: every served comment view carries its reaction rows (the
+    // empty additive default) — the arriving reply renders as-given, the
+    // same shape the REST slice row carries.
   );
   // Mention names resolve at read time alongside the author name
   // (PORCH-037): one name per mention, aligned by position (null here
@@ -497,4 +500,204 @@ test("PORCH-085 ac-3: containment precedes the sort; no vote-bearing field or en
     view.replySlice.length,
     "responseCount is the only number a slice row carries",
   );
+});
+
+test("PORCH-098 ac-1: a comment reaction rides the signed path with the subject — comment and parent post are separate reactions", async () => {
+  const audits = [];
+  const base = fixture({ networkIds: [FAMILY, OTHER], audit: async (action, payload) => audits.push({ action, payload }) });
+  const dev = device("dev_s");
+  const juneDev = device("dev_j");
+  const familyToken = (await base.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
+  const juneToken = (await base.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
+  const post = (await base.posts.create({ accessToken: familyToken, payload: { type: "text", body: "root post" }, signature: dev.signPayload({ type: "text", body: "root post" }) })).post;
+  const commentPayload = { postId: post._id, body: "a reply" };
+  const comment = (await base.interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
+  const interactions = base.interactions;
+  const collections = base.collections;
+
+  // Susan reacts to the comment — picker and chip are the same add path.
+  const subjectPayload = { postId: post._id, emoji: "🎉", subjectType: "comment", commentId: comment._id };
+  const written = (await interactions.react({ accessToken: familyToken, payload: subjectPayload, signature: dev.signPayload(subjectPayload) })).reaction;
+  assert.equal(written.emoji, "🎉");
+
+  // The stored row carries the subject and stays member-signed + contained.
+  const row = await collections.reactions.findOne({ _id: written._id });
+  assert.equal(row.subjectType, "comment");
+  assert.equal(row.commentId, comment._id);
+  assert.equal(row.networkId, FAMILY);
+  assert.equal(row.postId, post._id);
+  assert.equal(row.deviceSignature, dev.signPayload(subjectPayload));
+
+  // The same emoji on the comment AND its parent post: two separate
+  // reactions (one row per member per emoji per SUBJECT).
+  const postPayload = { postId: post._id, emoji: "🎉" };
+  await interactions.react({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) });
+  assert.equal((await collections.reactions.find({ postId: post._id })).length, 2);
+
+  // Duplicate same-member same-emoji same-subject stays the idempotent class.
+  await assert.rejects(
+    () => interactions.react({ accessToken: familyToken, payload: subjectPayload, signature: dev.signPayload(subjectPayload) }),
+    (error) => error.code === "E_REACTION_EXISTS",
+  );
+  assert.equal((await collections.reactions.find({ postId: post._id })).length, 2);
+
+  // Malformed subject declarations refuse with plain language, zero mutation.
+  for (const broken of [
+    { postId: post._id, emoji: "🫠", subjectType: "album" },
+    { postId: post._id, emoji: "🫠", subjectType: "comment" },
+    { postId: post._id, emoji: "🫠", commentId: comment._id },
+  ]) {
+    await assert.rejects(
+      () => interactions.react({ accessToken: familyToken, payload: broken, signature: dev.signPayload(broken) }),
+      (error) => error.code === "E_REACTION_SUBJECT_INVALID",
+    );
+  }
+  assert.equal((await collections.reactions.find({ postId: post._id })).length, 2);
+
+  // The comment's row never counts toward the post's rank-input counters.
+  const stored = (await collections.posts.findOne({ _id: post._id })).interactionCounters;
+  assert.deepEqual([stored.reactionCount, stored.commentCount], [1, 1], "only the post-subject row counts toward reactionCount");
+
+  // Audited like post reactions, with the subject carried into the detail.
+  const created = audits.find((entry) => entry.action === "reaction_create" && entry.payload.detail.subjectType === "comment");
+  assert.equal(created.payload.detail.commentId, comment._id);
+  assert.equal(created.payload.did, SUSAN);
+});
+
+test("PORCH-098 ac-1: a comment-subject leave clears only the member's own row on that comment", async () => {
+  const { interactions, collections, dev, juneDev, megDev, familyToken, juneToken, megToken, post } = await contentFixture();
+  const commentPayload = { postId: post._id, body: "reactor bait" };
+  const comment = (await interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
+
+  // Three rows: Susan + Meg react to the comment; Susan also holds the
+  // parent post with the same emoji.
+  const megSubject = { postId: post._id, emoji: "🎈", subjectType: "comment", commentId: comment._id };
+  await interactions.react({ accessToken: megToken, payload: megSubject, signature: megDev.signPayload(megSubject) });
+  const susanSubject = { postId: post._id, emoji: "🎈", subjectType: "comment", commentId: comment._id };
+  const susanRow = (await interactions.react({ accessToken: familyToken, payload: susanSubject, signature: dev.signPayload(susanSubject) })).reaction;
+  const susanPost = { postId: post._id, emoji: "🎈" };
+  const susanPostRow = (await interactions.react({ accessToken: familyToken, payload: susanPost, signature: dev.signPayload(susanPost) })).reaction;
+
+  // Susan's chip leave on the comment removes only her own comment row.
+  const removed = await interactions.unreact({ accessToken: familyToken, payload: susanSubject, signature: dev.signPayload(susanSubject) });
+  assert.equal(removed.reaction._id, susanRow._id);
+  const remaining = await collections.reactions.find({ postId: post._id });
+  assert.equal(remaining.length, 2, "Meg's comment row and Susan's parent-post row survive the leave");
+  assert.ok(remaining.some((row) => row._id === susanPostRow._id), "the parent-post row is a separate subject");
+
+  // A chip already clear stays the no-op result, never an error.
+  await interactions.react({ accessToken: familyToken, payload: susanSubject, signature: dev.signPayload(susanSubject) });
+  const cleared = await interactions.unreact({ accessToken: familyToken, payload: susanSubject, signature: dev.signPayload(susanSubject) });
+  assert.equal(cleared.removed, true);
+  const again = await interactions.unreact({ accessToken: familyToken, payload: susanSubject, signature: dev.signPayload(susanSubject) });
+  assert.deepEqual(again, { removed: false, reaction: null });
+
+  // A comment row never joins the post's reaction endpoint read.
+  const postRows = (await interactions.reactionsFor({ accessToken: familyToken, postId: post._id })).reactions;
+  assert.deepEqual(postRows.map((row) => row._id), [susanPostRow._id], "reactionsFor is the post-subject read");
+});
+
+test("PORCH-098 ac-3: comment reads carry attributed reactor rows in origin order; the payload never carries a count or roster", async () => {
+  const avatarMetas = {
+    [SUSAN]: { header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "s".repeat(64) } },
+    [JUNE]: { header: { kind: "header", width: 72, height: 72, contentType: "image/webp", sha256: "j".repeat(64) } },
+  };
+  const names = { [SUSAN]: "Susan Hale", [JUNE]: "June River" };
+  const fx = fixture({
+    networkIds: [FAMILY, OTHER],
+    memberNames: async (dids) => dids.map((did) => ({ did, displayName: names[did] ?? null, avatar: avatarMetas[did] ?? null })),
+  });
+  const dev = device("dev_s");
+  const juneDev = device("dev_j");
+  const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
+  const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
+  const post = (await fx.posts.create({ accessToken: familyToken, payload: { type: "text", body: "thread home" }, signature: dev.signPayload({ type: "text", body: "thread home" }) })).post;
+  const commentPayload = { postId: post._id, body: "the subject comment" };
+  const comment = (await fx.interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
+
+  // Reacts ride the signed path in origin order: June then Susan.
+  const subject = { postId: post._id, emoji: "👏", subjectType: "comment", commentId: comment._id };
+  await fx.interactions.react({ accessToken: juneToken, payload: subject, signature: juneDev.signPayload(subject) });
+  await fx.interactions.react({ accessToken: familyToken, payload: subject, signature: dev.signPayload(subject) });
+  // A post-subject row on the SAME post never leaks onto the comment rows.
+  const postRow = { postId: post._id, emoji: "👏" };
+  await fx.interactions.react({ accessToken: juneToken, payload: postRow, signature: juneDev.signPayload(postRow) });
+
+  const rows = (await fx.interactions.commentThread({ accessToken: familyToken, postId: post._id })).comments;
+  const subjectRow = rows.find((row) => row._id === comment._id);
+  assert.deepEqual(
+    subjectRow.reactionRows.map((row) => ({ memberDid: row.memberDid, memberName: row.memberName })),
+    [
+      { memberDid: JUNE, memberName: "June River" },
+      { memberDid: SUSAN, memberName: "Susan Hale" },
+    ],
+    "reaction rows ride the origin's served order with the reactor's display name",
+  );
+  assert.deepEqual(subjectRow.reactionRows.map((row) => row.memberAvatar), [avatarMetas[JUNE], avatarMetas[SUSAN]]);
+  assert.deepEqual(
+    Object.keys(subjectRow.reactionRows[0]).sort(),
+    ["_id", "createdAt", "emoji", "memberAvatar", "memberDid", "memberName"],
+    "attribution only — no count, roster, or aggregate field rides the read",
+  );
+  // A comment nobody reacted to carries the empty additive default.
+  const rootSisterPayload = { postId: post._id, body: "unreacted" };
+  const sister = (await fx.interactions.comment({ accessToken: juneToken, payload: rootSisterPayload, signature: juneDev.signPayload(rootSisterPayload) })).comment;
+  const freshRows = (await fx.interactions.commentThread({ accessToken: familyToken, postId: post._id })).comments;
+  assert.deepEqual(freshRows.find((row) => row._id === sister._id).reactionRows, []);
+
+  // A foreign-origin row never decorates this origin's comments (the
+  // origin-scoped read keeps it off every payload, live or replayed).
+  await fx.collections.reactions.insertOne({
+    _id: "rct_foreign", postId: post._id, networkId: OTHER, memberDid: JUNE,
+    emoji: "🐍", subjectType: "comment", commentId: comment._id, createdAt: "2026-10-16T10:00:00Z",
+  });
+  const containedRows = (await fx.interactions.commentThread({ accessToken: familyToken, postId: post._id })).comments;
+  assert.equal(JSON.stringify(containedRows).includes("🐍"), false, "foreign-origin reactor rows never decorate any payload");
+
+  // Card slice: the commented card's slice row carries the same rows.
+  const feed = await ruledFeed(fx);
+  const view = (await feed.timeline({ accessToken: familyToken })).posts.find((row) => row.body === "thread home");
+  assert.equal(view.reactionRows.length, 1, "comment-subject rows never decorate the post's chips");
+  assert.deepEqual(
+    view.replySlice.find((row) => row._id === comment._id).reactionRows.map((row) => row.memberName),
+    ["June River", "Susan Hale"],
+  );
+  assert.equal(JSON.stringify(JSON.stringify(view)).includes("reactionCount"), false, "no aggregate count field exists anywhere on the card");
+});
+
+test("PORCH-098 ac-4: reaction.applied carries the subject reference on comment rows; envelopes stay content-only; catch-up replays idempotently", async () => {
+  const { interactions, dev, juneDev, familyToken, juneToken, post, realtimePlane } = await contentFixture();
+
+  const commentPayload = { postId: post._id, body: "event subject" };
+  const comment = (await interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
+
+  // A post-subject reaction keeps the shipped content exactly.
+  const postPayload = { postId: post._id, emoji: "🌟" };
+  await interactions.react({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) });
+  // A comment-subject reaction adds the subject reference.
+  const subjectPayload = { postId: post._id, emoji: "🌟", subjectType: "comment", commentId: comment._id };
+  await interactions.react({ accessToken: familyToken, payload: subjectPayload, signature: dev.signPayload(subjectPayload) });
+
+  const read = async () => (await realtimePlane.readSince(FAMILY, null)).events.filter((event) => event.type === "reaction.applied");
+  const events = await read();
+  assert.equal(events.length, 2);
+  const postContent = events.find((event) => event.postId === post._id).content;
+  assert.deepEqual(
+    Object.keys(postContent).sort(),
+    ["_id", "createdAt", "emoji", "memberDid"],
+    "post-subject content stays key-stable: member + emoji only",
+  );
+  const commentContent = events.map((event) => event.content).at(-1);
+  assert.deepEqual(Object.keys(commentContent).sort(), ["_id", "commentId", "createdAt", "emoji", "memberDid", "postId", "subjectType"]);
+  assert.equal(commentContent.commentId, comment._id);
+  assert.equal(commentContent.postId, null, "the subject reference carries the comment; no post id is duplicated into the content");
+  assert.equal(commentContent.subjectType, "comment");
+  const serialized = JSON.stringify(events.map((event) => event.content));
+  for (const forbidden of ["reactionCount", "commentCount", "roster", "memberName", "memberAvatar"]) {
+    assert.equal(serialized.includes(forbidden), false, `no count, roster, or aggregate field (${forbidden}) ever enters an envelope`);
+  }
+
+  // Catch-up replays are idempotent and content-only: the same replayed
+  // envelopes, byte-for-byte, on every reconnect read.
+  assert.deepEqual(await read(), await read());
 });

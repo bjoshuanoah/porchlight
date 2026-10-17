@@ -275,7 +275,18 @@ export class FeedService {
       commentsByPost.get(comment.postId).push(comment);
     }
     const rowsByPost = new Map();
+    // PORCH-098: comment-subject rows react to a comment inside the card's
+    // conversation — they never decorate the post's chips; they ride the
+    // comment's slice rows through the same attributed projection.
+    const rowsByComment = new Map();
     for (const row of reactions ?? []) {
+      if (row.subjectType === "comment") {
+        const commentId = row.commentId ?? "";
+        if (!commentId) continue;
+        if (!rowsByComment.has(commentId)) rowsByComment.set(commentId, []);
+        rowsByComment.get(commentId).push(InteractionService.attributedReactionView(row, names));
+        continue;
+      }
       if (!rowsByPost.has(row.postId)) rowsByPost.set(row.postId, []);
       // Reactor attribution (PORCH-091 ac-1): each chip row carries the
       // reactor's display name + avatar rendering data in the origin's
@@ -310,6 +321,10 @@ export class FeedService {
           ...InteractionService.commentView(comment),
           authorName: names.get(String(comment.authorDid))?.name ?? null,
           responseCount,
+          // PORCH-098 ac-3: the slice comment's attributed reaction rows in
+          // the origin's served order — counts derive at render, no
+          // aggregate field joins the payload.
+          reactionRows: rowsByComment.get(comment._id) ?? [],
         };
       });
       return {
