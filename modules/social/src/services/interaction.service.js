@@ -25,6 +25,34 @@ function interactionPayload(payload) {
 }
 
 /**
+ * The reaction subject (PORCH-098, comment-reactions amendment), read from
+ * the signed payload: post subjects ride the shipped shape (absence of
+ * subjectType resolves as post — the legacy default, so pre-existing
+ * payloads keep signing identically); comment subjects add subjectType:
+ * "comment" and the commentId. Comment subjects are validated against the
+ * LIVE comment in the write path (below); this helper resolves the subject
+ * declaration only — malformed declarations refuse with plain language and
+ * zero mutation.
+ */
+function reactionSubject(payload) {
+  const declared = payload.subjectType ?? "post";
+  if (declared !== "post" && declared !== "comment") {
+    throw typedError("E_REACTION_SUBJECT_INVALID", "React to the post or to one of its comments.");
+  }
+  if (declared === "comment") {
+    if (typeof payload.commentId !== "string" || payload.commentId.trim().length === 0) {
+      throw typedError("E_REACTION_SUBJECT_INVALID", "Reacting to a comment needs its comment id.");
+    }
+    return { subjectType: "comment", commentId: payload.commentId };
+  }
+  if (payload.commentId == null) {
+    // commentId is null on post rows (additive default).
+    return { subjectType: "post", commentId: null };
+  }
+  throw typedError("E_REACTION_SUBJECT_INVALID", "React to the post or to one of its comments.");
+}
+
+/**
  * Interaction service (PORCH-006 ac-3/ac-4): comments (nested replies,
  * @mentions validated against origin membership), open-vocabulary
  * reactions, and signed changeable private votes.
@@ -210,8 +238,17 @@ export class InteractionService {
       cascadeByKind[part.kind] = [...(cascadeByKind[part.kind] ?? []), ...part.rows];
     }
     const cascadedChildren = subtree.filter((row) => row._id !== comment._id);
+    // PORCH-098: comment reactions die with the comment cascade in the same
+    // atomic write — every comment-subject row keyed to the subtree (the
+    // shipped slot on the tombstone's cascade; restore re-materializes
+    // them with the comments so a restored comment accepts reactions
+    // again from the restored rows).
+    const cascadeReactions = (await this.reactions.find({ postId })).filter(
+      (row) => row.subjectType === "comment" && subtreeIds.has(row.commentId),
+    );
     const snapshot = [
       { collection: this.comments, rows: subtree },
+      { collection: this.reactions, rows: cascadeReactions },
       ...(this.notificationRows && cascadedNotifications.length
         ? [{ collection: this.notificationRows, rows: cascadedNotifications }]
         : []),
@@ -234,7 +271,7 @@ export class InteractionService {
         subject: comment,
         post: session.post,
         comments: cascadedChildren,
-        reactions: [],
+        reactions: cascadeReactions,
         votes: [],
         notifications: cascadedNotifications,
         derivedData: [],
@@ -375,13 +412,35 @@ export class InteractionService {
       // Open vocabulary: only a non-empty as-authored emoji is required.
       throw typedError("E_EMOJI_REQUIRED", "React with the emoji you want — any emoji works.");
     }
+    // PORCH-098: the subject rides the payload. A comment subject must be
+    // LIVE at this origin — a tombstoned or cascade-deleted comment is no
+    // longer in the collection, so the resolution below refuses the write
+    // with plain language and zero mutation (restored comments resolve
+    // again after the owner console re-materializes them).
+    const { subjectType, commentId } = reactionSubject(payload);
+    let comment = null;
+    if (subjectType === "comment") {
+      comment = await this.comments.findOne({ _id: commentId, postId: payload.postId });
+      if (!comment || comment.networkId !== session.networkId) {
+        throw typedError("E_COMMENT_NOT_FOUND", COMMENT_LIFECYCLE_MESSAGES.E_COMMENT_NOT_FOUND);
+      }
+    }
     const networkId = session.networkId;
-    const duplicate = await this.reactions.findOne({
+    // One row per member per emoji per SUBJECT (PORCH-098): the same emoji
+    // on a comment and on its parent post are two separate reactions, so
+    // the probe scopes by subject — absence of subjectType on a stored row
+    // resolves as post (the legacy additive default, no rewrite required).
+    const ownRows = await this.reactions.find({
       postId: payload.postId,
       networkId,
       memberDid: session.did,
       emoji,
     });
+    const duplicate = ownRows.find((row) =>
+      subjectType === "comment"
+        ? row.subjectType === "comment" && row.commentId === commentId
+        : (row.subjectType ?? "post") === "post",
+    );
     if (duplicate) {
       throw typedError("E_REACTION_EXISTS", "You already reacted with that emoji.");
     }
@@ -391,6 +450,8 @@ export class InteractionService {
       networkId,
       memberDid: session.did,
       emoji,
+      subjectType,
+      commentId,
       deviceSignature: signature,
       createdAt: new Date().toISOString(),
     };
@@ -399,32 +460,41 @@ export class InteractionService {
     await this.audit("reaction_create", {
       networkId,
       did: session.did,
-      detail: { postId: payload.postId, reactionId: reaction._id },
+      detail: { postId: payload.postId, reactionId: reaction._id, subjectType, commentId },
     });
     // PORCH-047: reaction.applied to the origin room — the as-authored emoji
     // view only (open vocabulary is content, always). The envelope carries
     // the post's group target so the delivery layer can hold the event out
     // of a private-group non-member's room and catch-up (PORCH-068).
+    // PORCH-098: comment-subject rows add the subject reference to the
+    // content (commentId present, postId null — the envelope already
+    // carries the post context); their post rows keep the shipped content
+    // exactly (the arriving subjectType keys are the additive carrier).
+    const eventContent = InteractionService.reactionEventView(reaction);
     await this.realtime?.published({
       networkId,
       type: "reaction.applied",
       postId: payload.postId,
       groupId: session.post.groupId ?? null,
-      content: InteractionService.reactionView(reaction),
+      content: eventContent,
     });
-    // PORCH-059: "reactions to your post" — the post's author gets the push
-    // through the send pipeline (live membership + settings at send time);
-    // they authored the target, so the caption/excerpt rides. The reactor
-    // never receives their own reaction. A private-group post's author
-    // holds the group membership (the write gate enforces it), so the
-    // target is never a non-member here.
+    // PORCH-059: "reactions to your post" — the target's author gets the
+    // push through the send pipeline (live membership + settings at send
+    // time); they authored the target, so the excerpt rides. PORCH-098:
+    // reacting to a comment targets the comment's author with the
+    // comment's body as the excerpt [Assumed: flag in task comment]. The
+    // reactor never receives their own reaction.
+    const pushTarget =
+      subjectType === "comment"
+        ? { targetDids: [comment.authorDid], excerpt: comment.body }
+        : { targetDids: [session.post.authorId ?? ""], excerpt: session.post.caption ?? session.post.body ?? null };
     await this.push?.notify({
       networkId,
       type: "reaction",
-      targetDids: [session.post.authorId ?? ""],
+      ...pushTarget,
       postId: payload.postId,
+      commentId: subjectType === "comment" ? commentId : null,
       actorDid: session.did,
-      excerpt: session.post.caption ?? session.post.body ?? null,
     });
     return { reaction: InteractionService.reactionView(reaction) };
   }
@@ -444,13 +514,25 @@ export class InteractionService {
     if (emoji.length === 0 || emoji.length > EMOJI_MAX_LENGTH) {
       throw typedError("E_EMOJI_REQUIRED", "React with the emoji you want — any emoji works.");
     }
+    // PORCH-098: a comment-subject leave clears only the member's own row
+    // on THAT comment (the parent post's rows and other comments' rows
+    // ride untouched); a chip the member never joined stays a no-op. The
+    // subject must have resolved validly on the same declarations the add
+    // path enforces (no live-comment gate on a leave — an empty subject
+    // resolves against zero rows and stays the no-op result).
+    const { subjectType, commentId } = reactionSubject(payload);
     const networkId = session.networkId;
-    const existing = await this.reactions.findOne({
+    const ownRows = await this.reactions.find({
       postId: payload.postId,
       networkId,
       memberDid: session.did,
       emoji,
     });
+    const existing = ownRows.find((row) =>
+      subjectType === "comment"
+        ? row.subjectType === "comment" && row.commentId === commentId
+        : (row.subjectType ?? "post") === "post",
+    );
     if (!existing) {
       return { removed: false, reaction: null };
     }
@@ -459,7 +541,7 @@ export class InteractionService {
     await this.audit("reaction_remove", {
       networkId,
       did: session.did,
-      detail: { postId: payload.postId, reactionId: existing._id },
+      detail: { postId: payload.postId, reactionId: existing._id, subjectType, commentId: existing.commentId ?? null },
     });
     return { removed: true, reaction: InteractionService.reactionView(existing) };
   }
@@ -515,11 +597,36 @@ export class InteractionService {
   async commentThread({ accessToken, postId } = {}) {
     const session = await this.#requireSession({ accessToken, postId });
     const rows = await this.comments.find({ postId, networkId: session.networkId });
+    // PORCH-098 ac-3: each comment's attributed reaction rows ride the same
+    // origin-scoped read (one find for the post's comment-subject rows,
+    // never a per-row fetch) and the SAME attribution projection the post
+    // rows carry — display name + avatar rendering data per reactor in the
+    // origin's served order. Content only: no count, no roster field.
+    const reactionRowsByComment = await this.#commentReactionRows({ postId, networkId: session.networkId });
     const views = await this.#withAttribution(
       InteractionService.orderedThread(rows).map((row) => InteractionService.commentView(row)),
       session.networkId,
+      { reactionRowsByComment },
     );
     return { comments: this.previews ? await this.previews.withViews(views, session.networkId) : views };
+  }
+
+  /**
+   * One origin-scoped read of the post's comment-subject reaction rows,
+   * grouped for the comment decorations (PORCH-098). Rows keep the
+   * collection's served order — the order of record the client renders
+   * per emoji.
+   */
+  async #commentReactionRows({ postId, networkId }) {
+    const byComment = new Map();
+    for (const row of await this.reactions.find({ postId, networkId })) {
+      if (row.subjectType !== "comment") continue;
+      const commentId = row.commentId ?? "";
+      if (!commentId) continue;
+      if (!byComment.has(commentId)) byComment.set(commentId, []);
+      byComment.get(commentId).push(row);
+    }
+    return byComment;
   }
 
   /**
@@ -566,7 +673,13 @@ export class InteractionService {
    */
   async reactionsFor({ accessToken, postId } = {}) {
     const session = await this.#requireSession({ accessToken, postId });
-    const rows = await this.reactions.find({ postId, networkId: session.networkId });
+    // PORCH-098: the post's chips read is a POST-subject read — a comment
+    // subject carries its own rows on the comment decorations, never on
+    // the post's reaction endpoint. Absence of subjectType resolves as
+    // post (the legacy additive default).
+    const rows = (await this.reactions.find({ postId, networkId: session.networkId })).filter(
+      (row) => (row.subjectType ?? "post") !== "comment",
+    );
     const names = await this.membership.attributionNames({
       networkId: session.networkId,
       dids: rows.map((row) => row.memberDid),
@@ -612,6 +725,10 @@ export class InteractionService {
       mentions: comment.mentions,
       previewId: comment.previewId ?? null,
       createdAt: comment.createdAt,
+      // PORCH-098 ac-3: every served comment view carries its reaction rows
+      // (empty until a member reacts) — the uniform additively-defaulted
+      // shape the comments' decorations compose over.
+      reactionRows: [],
     };
   }
 
@@ -638,21 +755,40 @@ export class InteractionService {
     return (await this.#withAttribution([withPreview], networkId))[0];
   }
 
-  async #withAttribution(views, networkId) {
+  async #withAttribution(views, networkId, { reactionRowsByComment = null } = {}) {
+    // The single origin-scoped names read of record: authors, mentions, and
+    // (PORCH-098) comment reactors resolve in one batch — the reactor
+    // attribution never triggers a second membership read.
     const names = await this.membership.attributionNames({
       networkId,
-      dids: views.flatMap((view) => [view.authorDid, ...(view.mentions ?? [])]),
+      dids: [
+        ...views.flatMap((view) => [view.authorDid, ...(view.mentions ?? [])]),
+        ...(reactionRowsByComment
+          ? [...reactionRowsByComment.values()].flat().map((row) => row.memberDid)
+          : []),
+      ],
     });
-    return views.map((view) => ({
-      ...view,
-      authorName: names.get(String(view.authorDid))?.name ?? null,
-      authorAvatar: names.get(String(view.authorDid))?.avatar ?? null,
-      // Mention names (PORCH-037): every comment view resolves each
-      // mentioned member's family-facing name at READ time against the
-      // origin's active membership. Clients render @Name — a mention that
-      // no longer resolves (left member) renders the plain body text.
-      mentionNames: (view.mentions ?? []).map((mentionedDid) => names.get(String(mentionedDid))?.name ?? null),
-    }));
+    return views.map((view) => {
+      const attributed = {
+        ...view,
+        authorName: names.get(String(view.authorDid))?.name ?? null,
+        authorAvatar: names.get(String(view.authorDid))?.avatar ?? null,
+        // Mention names (PORCH-037): every comment view resolves each
+        // mentioned member's family-facing name at READ time against the
+        // origin's active membership. Clients render @Name — a mention that
+        // no longer resolves (left member) renders the plain body text.
+        mentionNames: (view.mentions ?? []).map((mentionedDid) => names.get(String(mentionedDid))?.name ?? null),
+      };
+      if (reactionRowsByComment) {
+        // PORCH-098 ac-3: the comment's attributed reaction rows in the
+        // origin's served order (collection insertion order). Empty on a
+        // comment nobody reacted to — the shape stays uniform.
+        attributed.reactionRows = (reactionRowsByComment.get(view._id) ?? []).map((row) =>
+          InteractionService.attributedReactionView(row, names),
+        );
+      }
+      return attributed;
+    });
   }
 
   static reactionView(reaction) {
@@ -662,6 +798,28 @@ export class InteractionService {
       /** Rendered by clients exactly as the member authored it. */
       emoji: reaction.emoji,
       createdAt: reaction.createdAt,
+    };
+  }
+
+  /**
+   * PORCH-098 ac-4: the reaction.applied content. Post subjects keep the
+   * shipped content exactly — member + emoji, key-stable, so a client
+   * that never met a comment subject resolves the post row unchanged (the
+   * event's absent subjectType is the post default, identical to the row
+   * resolution). Comment subjects add the subject reference: commentId
+   * present, postId null (the envelope already carries the post context)
+   * — and nothing else: no count, no roster, no aggregate ever enters an
+   * envelope (payload-privacy law).
+   */
+  static reactionEventView(reaction) {
+    if ((reaction.subjectType ?? "post") !== "comment") {
+      return InteractionService.reactionView(reaction);
+    }
+    return {
+      ...InteractionService.reactionView(reaction),
+      subjectType: "comment",
+      commentId: reaction.commentId ?? null,
+      postId: null,
     };
   }
 

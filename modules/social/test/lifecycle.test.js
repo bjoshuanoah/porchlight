@@ -796,3 +796,60 @@ test("ac-2: the location target rides the SAME edit write in both directions, me
   assert.equal(updates[0].content.groupId, groupId, "the carried view carries the new target");
   assert.equal(updates[1].content.groupId ?? null, null, "the carried view clears the general-timeline target");
 });
+
+test("PORCH-098 ac-2: a tombstoned or cascade-deleted comment refuses any reaction with zero mutation; the restored comment accepts reactions again", async () => {
+  const fx = await lifecycleFixture();
+  const post = await createPost(fx, "june", { type: "text", body: "the gate post" });
+  const root = await writeComment(fx, "meg", { postId: post._id, body: "the subject" });
+  const reply = await writeComment(fx, "susan", { postId: post._id, body: "the nested subject", parentId: root._id });
+
+  const subject = { postId: post._id, emoji: "🎈", subjectType: "comment", commentId: root._id };
+  await fx.interactions.react({ accessToken: fx.tokens.susan, payload: subject, signature: fx.devs.susan.signPayload(subject) });
+
+  // A malformed subject never even resolves a comment.
+  const broken = { postId: post._id, emoji: "🎈", subjectType: "comment" };
+  await assert.rejects(
+    () => fx.interactions.react({ accessToken: fx.tokens.june, payload: broken, signature: fx.devs.june.signPayload(broken) }),
+    (error) => error.code === "E_REACTION_SUBJECT_INVALID",
+  );
+
+  // The author deletes the root: its tree (and the comment's reaction
+  // rows) cascade in the same atomic write — the tombstone captures them.
+  const deleted = await fx.interactions.deleteComment({
+    accessToken: fx.tokens.meg,
+    postId: post._id,
+    commentId: root._id,
+    signature: fx.devs.meg.signPayload({ kind: "comment-delete", postId: post._id, commentId: root._id, networkId: FAMILY }),
+  });
+  const tombstone = await tombstoneOf(fx, deleted.tombstoneId);
+  assert.deepEqual(tombstone.cascade.reactions.map((row) => row.commentId), [root._id]);
+
+  // Any reaction on the deleted comment (or its cascaded nested reply)
+  // refuses with plain language and ZERO mutation.
+  const afterDelete = (await fx.collections.reactions.find({ postId: post._id })).map((row) => row._id);
+  for (const deadSubjectId of [root._id, reply._id]) {
+    const deadSubject = { postId: post._id, emoji: "🌟", subjectType: "comment", commentId: deadSubjectId };
+    await assert.rejects(
+      () => fx.interactions.react({ accessToken: fx.tokens.susan, payload: deadSubject, signature: fx.devs.susan.signPayload(deadSubject) }),
+      (error) => error.code === "E_COMMENT_NOT_FOUND",
+    );
+    const leave = await fx.interactions.unreact({ accessToken: fx.tokens.susan, payload: deadSubject, signature: fx.devs.susan.signPayload(deadSubject) });
+    assert.deepEqual(leave, { removed: false, reaction: null }, "a leave on a dead comment stays the no-op result");
+  }
+  assert.deepEqual(
+    (await fx.collections.reactions.find({ postId: post._id })).map((row) => row._id),
+    afterDelete,
+    "the refusals wrote nothing",
+  );
+
+  // The owner restore re-materializes the tree AND its reaction rows; the
+  // restored comment accepts reactions again.
+  assert.equal(await fx.collections.reactions.findOne({ commentId: root._id }), null, "the comment's rows left with the cascade");
+  const restored = await fx.lifecycle.restore({ accessToken: fx.tokens.susan, tombstoneId: deleted.tombstoneId });
+  assert.equal(restored.restored, true);
+  const restoredRows = (await fx.collections.reactions.find({ postId: post._id })).filter((row) => row.subjectType === "comment");
+  assert.equal(restoredRows.length, 1, "the restore re-materializes the captured reaction; it never fabricates state");
+  await fx.interactions.react({ accessToken: fx.tokens.june, payload: subject, signature: fx.devs.june.signPayload(subject) });
+  const revived = (await fx.collections.reactions.find({ postId: post._id })).filter((row) => row.subjectType === "comment");
+  assert.equal(revived.length, 2, "the restored comment accepts reactions again");
+});

@@ -72,9 +72,14 @@ const ZERO_COUNTERS = Object.freeze({
 /**
  * Rank-input counters (feed-ranking contract): vote volume and up/down
  * ratio plus interaction volume, computed from the live rows. Consumed only
- * by the ranking module; read surfaces strip them.
+ * by the ranking module; read surfaces strip them. Reaction rows are
+ * POST-subject rows only (PORCH-098): a comment-subject row reacts to a
+ * comment inside the post's conversation, never to the post itself, so it
+ * never counts toward the post's reaction counter — absence of subjectType
+ * resolves as post (the legacy additive default).
  */
 export function computeCounters({ comments, reactions, votes }) {
+  const postReactions = (reactions ?? []).filter((row) => (row.subjectType ?? "post") !== "comment");
   const up = votes.filter((row) => row.value === "up").length;
   const volume = votes.length;
   return {
@@ -83,7 +88,7 @@ export function computeCounters({ comments, reactions, votes }) {
     voteVolume: volume,
     voteRatio: volume === 0 ? 0 : up / volume,
     commentCount: comments.length,
-    reactionCount: reactions.length,
+    reactionCount: postReactions.length,
   };
 }
 
