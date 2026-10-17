@@ -36,7 +36,7 @@ import {
 } from './group-settings.js';
 import { dateOf, relativeTime } from './time.js';
 import { identityOf, originOf, networkId, originName, visibleAtOrigin, postKey, visibleFeedPosts } from './feed-filter.js';
-import { sliceDisplay, expanderCount, reconcileConfirmed, repliesByParent, ruledOrder, pendingReply, conversationOf } from './slice.js';
+import { sliceDisplay, expanderCount, reconcileConfirmed, reconcileNestedRows, rootAncestorId, repliesByParent, ruledOrder, pendingReply, conversationOf } from './slice.js';
 import { LinkPreviewBlock, LinkedBody } from './link-preview.jsx';
 import { firstUrlIn, previewOrigin } from './link-preview.js';
 import { sharePost } from './share.js';
@@ -1723,6 +1723,14 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
   const [expandedRoots, setExpandedRoots] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // PORCH-099: the freshly written tree rows — a reply to a comment lands
+  // inside ITS parent's tree at the child position in the same frame the
+  // write starts (optimistic pending row), swaps for the confirmed server
+  // row, and a failed write reverts exactly. A confirmed row keeps
+  // rendering inside the tree until a read carries its id (reconciled by
+  // the slice reads below — never rendered twice, never remounted).
+  const [treeRows, setTreeRows] = useState(() => ({ pending: [], confirmed: [] }));
+  const treeCountRef = useRef(0);
   const signature = `${slice.total}:${slice.replies.map((row) => `${identityOf(row)}:${row.responseCount ?? 0}`).join('|')}`;
   const scoped = (comments) => comments.filter((row) =>
     (!row.postId || String(row.postId) === identityOf(post))
@@ -1736,6 +1744,7 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
       if (!Array.isArray(result?.comments)) throw new Error('The family server did not return this conversation.');
       const comments = scoped(result.comments);
       setLoaded(comments);
+      setTreeRows((current) => reconcileNestedRows(current, comments));
       return comments;
     } catch (failure) {
       setError(messageOf(failure));
@@ -1750,12 +1759,21 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
     if (!loaded || offline) return undefined;
     let active = true;
     Promise.resolve().then(() => invoke(actions, 'loadComments', post)).then((result) => {
-      if (active && Array.isArray(result?.comments)) setLoaded(scoped(result.comments));
+      if (active && Array.isArray(result?.comments)) {
+        const comments = scoped(result.comments);
+        setLoaded(comments);
+        setTreeRows((current) => reconcileNestedRows(current, comments));
+      }
     }).catch(() => {});
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only a changed decorated slice refreshes an open thread
   }, [signature]);
-  const byParent = repliesByParent(loaded ?? []);
+  // The rendered tree mounts the served rows PLUS the freshly written ones
+  // (PORCH-099): the optimistic pending and the confirmed row render at the
+  // child position of the row they answer. renderRow's seen-set dedupes by
+  // id where a read already carries a confirmed row.
+  const freshRows = [...treeRows.confirmed, ...treeRows.pending];
+  const byParent = repliesByParent([...(loaded ?? []), ...freshRows]);
   // The member's removed comment rows (and the subtrees hanging under them)
   // leave the slice live: a removed id never renders, in any state (ac-3).
   const isRemoved = (row) => Boolean(removedIds?.has?.(identityOf(row)));
@@ -1771,12 +1789,43 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
     if (id) setExpandedRoots((current) => new Set(current).add(id));
     else setShowAll(true);
   };
+  // A reply to a comment (root or nested) lands inside ITS parent's tree at
+  // the child position in the same frame the write starts: the parent's tree
+  // opens (keyed by the row's depth-0 ancestor per the render law — never
+  // beside unrelated roots), the closed context loads if the render has
+  // never read the tree, the optimistic pending row renders, and the
+  // confirmed server row keeps rendering in place until a read carries it
+  // (reconciled by id). A failed write reverts exactly (PORCH-099).
+  const targetRows = () => [...(loaded ?? []), ...freshRows, ...slice.replies];
   const submitNested = async (body, parentId, mentions) => {
-    const result = await onReply(body, parentId, mentions);
-    if (result?.comment && scoped([result.comment]).length) {
-      setLoaded((current) => current ? [...current, result.comment] : current);
-    }
-    return result;
+    const localId = `local:nested-${Date.now()}-${(treeCountRef.current += 1)}`;
+    setExpandedRoots((current) => new Set(current).add(rootAncestorId(String(parentId), targetRows())));
+    if (!loaded) void load();
+    const optimistic = pendingReply(post, body, {
+      did: data.identity ? String(data.identity.id) : null,
+      name: data.identity?.name ?? 'You',
+      localId,
+      parentId,
+    });
+    setTreeRows((current) => ({ ...current, pending: [...current.pending, optimistic] }));
+    const revert = () => setTreeRows((current) => ({
+      ...current,
+      pending: current.pending.filter((row) => row._id !== localId),
+    }));
+    return Promise.resolve()
+      .then(() => onReply(body, parentId, mentions))
+      .then((result) => {
+        if (!result?.comment || !identityOf(result.comment) || !scoped([result.comment]).length) {
+          revert();
+          throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
+        }
+        setTreeRows((current) => ({
+          pending: current.pending.filter((row) => row._id !== localId),
+          confirmed: [...current.confirmed.filter((row) => identityOf(row) !== identityOf(result.comment)),
+            { ...result.comment, postId: result.comment.postId ?? identityOf(post) }],
+        }));
+        return result;
+      }, (failure) => { revert(); throw failure; });
   };
   // Comment edit (PORCH-094 ac-4): text only, the ruled composer in edit
   // mode — the river merge the action performs re-renders rows served in

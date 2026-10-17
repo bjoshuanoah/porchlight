@@ -88,18 +88,59 @@ export function expanderCount(total) {
 }
 
 // A confirmed root stays local until a feed read includes its quantity.
+// A confirmed NESTED reply (a tree row, never a windowed root — PORCH-099)
+// stays local until a read carries ITS id: reconcileNestedRows.
 export function reconcileConfirmed(confirmed, serverTotal) {
   return (confirmed ?? []).filter(
     (entry) => !Number.isFinite(serverTotal) || serverTotal < entry.basis + 1,
   );
 }
 
-/** An optimistic reply render: the row joins the slice immediately (ac-2). */
-export function pendingReply(post, body, { did, name, localId }) {
+/**
+ * The rendered tree's depth-0 ancestor for an id (PORCH-099): a tree opens
+ * keyed by the ancestor the render law expands under (the card's expansion
+ * set holds depth-0 ids), so a freshly written reply mounts inside its
+ * parent's tree at the child position — never beside unrelated roots and
+ * never re-homed. The rows may be any mix carrying the chain: the served
+ * slice roots, the loaded tree, pending and confirmed tree rows. An id with
+ * no known chain resolves to itself.
+ */
+export function rootAncestorId(id, rows) {
+  const key = String(id ?? '');
+  const byId = new Map((rows ?? []).filter((row) => replyKey(row)).map((row) => [replyKey(row), row]));
+  let current = byId.get(key);
+  let guard = 0;
+  while (current?.parentId && guard < 32) {
+    const parent = byId.get(current.parentId);
+    if (!parent || parent === current) break;
+    current = parent;
+    guard += 1;
+  }
+  return current ? replyKey(current) : key;
+}
+
+/**
+ * Retire the local tree rows a read now carries, by id (never-rendered-twice
+ * law) — the confirmed row retires when the read serving it arrives; a
+ * pending row (local `local:` id) survives any read: its own write lifecycle
+ * swaps it for the confirmed row or reverts it.
+ */
+export function reconcileNestedRows(rows, served) {
+  const servedIds = new Set((Array.isArray(served) ? served : []).map((row) => replyKey(row)).filter(Boolean));
+  return {
+    pending: (rows?.pending ?? []).filter((row) => !servedIds.has(replyKey(row))),
+    confirmed: (rows?.confirmed ?? []).filter((row) => !servedIds.has(replyKey(row))),
+  };
+}
+
+/** An optimistic reply render: the row joins the slice immediately (ac-2).
+ * A nested reply carries its attach target so the tree mounts the pending
+ * row at the child position (PORCH-099); root rows keep parentId null. */
+export function pendingReply(post, body, { did, name, localId, parentId = null }) {
   return {
     _id: localId,
     postId: post?._id ?? post?.id ?? null,
-    parentId: null,
+    parentId,
     authorDid: did ?? null,
     authorName: name ?? null,
     body,
