@@ -55,6 +55,29 @@ export async function unpublishReaction(connection, post, emoji) {
   }, "DELETE");
 }
 
+// Comment-subject reactions (PORCH-101, rendering PORCH-098's subject
+// contract): the SAME signed reaction route declares its subject — the
+// payload adds subjectType "comment" and the commentId, so a chip on a
+// comment and a chip on its parent post are two separate reactions of one
+// member. The leave clears only the member's own row on THAT comment.
+export async function publishCommentReaction(connection, post, comment, emoji) {
+  return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`, {
+    postId: post._id || post.id,
+    emoji,
+    subjectType: "comment",
+    commentId: comment._id || comment.id,
+  });
+}
+
+export async function unpublishCommentReaction(connection, post, comment, emoji) {
+  return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`, {
+    postId: post._id || post.id,
+    emoji,
+    subjectType: "comment",
+    commentId: comment._id || comment.id,
+  }, "DELETE");
+}
+
 export async function publishVote(connection, post, value) {
   return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/votes`, {
     postId: post._id || post.id, value,
