@@ -123,9 +123,15 @@ test("ac-3: no composer by default; open renders one full-rail composer naming i
   // mirror — the one composer is one form: exactly one target caption.
   assert.equal((open.match(/data-testid="reply-target"/g) || []).length, 1, "exactly one composer renders for the open target");
   assert.ok((open.match(/<(input|textarea)/g) || []).length >= 1, "a field renders for the open composer");
-  // The composer renders at the block's foot (after every row and the
-  // expander), full-rail — never a small input inside an indented row.
-  assert.ok(htmlAfter(open, "View 48 more comments", "Replying to Eli"), "the composer sits at the rail's foot");
+  // PORCH-099 (Brian, Oct 18, verbatim: "The reply input text area is
+  // showing up at the bottom of the whole comment tree. I'm not seeing
+  // this is in the right context."): the reply composer mounts in context —
+  // directly beneath the comment it answers (row r3, "late-b"), ahead of
+  // the rows that follow — never at the block's foot.
+  assert.ok(htmlAfter(open, "late-b", "Replying to Eli"), "the composer renders beneath the comment it answers");
+  assert.ok(open.indexOf("Replying to Eli") < open.indexOf("late-c")
+    && open.indexOf("Replying to Eli") < open.indexOf("View 48 more comments"),
+    "the composer mounts inside the tree context, not at the rail's foot");
 });
 
 const htmlAfter = (haystack, first, then) => haystack.indexOf(first) >= 0 && haystack.indexOf(first) < haystack.indexOf(then);
@@ -146,10 +152,15 @@ test("ac-3/ac-4: surfaces hold one composer state with per-target drafts and ful
   assert.match(social, /initialText=\{readDraft\(/);
   assert.match(social, /onDraft=\{\(text\) => holdDraft\(/);
   assert.match(social, /onDone=\{\(\) => \{ setComposerFor\(null\); holdDraft\(/);
-  // Detail: the composer renders on demand only, full column width; the
-  // post-level Reply trigger lives beside the heading.
+  // Detail: the post-target composer renders on demand beside the heading
+  // and the comment-target composer mounts in the thread beneath the row it
+  // answers (PORCH-099, Brian, Oct 18) — one composer state, never a
+  // bottom-of-column mount.
   assert.match(detail, /data-testid="detail-reply"/);
-  assert.match(detail, /\{!data\.offline && composerFor && <ReplyForm/);
+  assert.match(detail, /\{!data\.offline && composerFor === 'post' && <ReplyForm/);
+  assert.match(detail, /composerSlot=\{composerSlot\}/);
+  assert.match(social, /composerSlot\?\.\(id\)/, "the thread's rows mount the composer slot beneath the answered row");
+  assert.doesNotMatch(detail, /\{!data\.offline && composerFor && <ReplyForm/);
   assert.doesNotMatch(detail, /composerFor === null/);
   // Card: the on-demand post composer rides the full CardContent text rail.
   const card = social.slice(social.indexOf("function PostCard("), social.indexOf("function Heading("));

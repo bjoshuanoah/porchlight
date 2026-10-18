@@ -1877,6 +1877,24 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
             <CommentOverflow row={reply} data={data} offline={offline}
               onEdit={(r) => onEditTarget?.(r)} onDelete={(r) => onDeleteComment?.(r)} />
           </Stack>}
+          {/* PORCH-099 (Brian, Oct 18): the reply composer mounts in context —
+              directly beneath the comment it answers, one rung into that
+              comment's tree, never at the bottom of the whole conversation.
+              Surface law holds: one composer state per surface, keyed by the
+              answered comment id (no remount on the open composer), with the
+              draft held per target. */}
+          {!offline && composerFor === id && <Box sx={{ ml: { xs: 2, lg: 3.5 }, pl: 1, borderLeft: '1px solid', borderColor: 'divider' }}><ReplyForm
+            key={composerTarget}
+            label="Your reply"
+            replyingTo={reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)}
+            offline={offline}
+            post={post}
+            actions={actions}
+            initialText={readDraft?.(composerTarget) ?? ''}
+            onDraft={(text) => onDraftDone?.(composerTarget, text)}
+            onDone={() => { onComposerClosed?.(); onDraftDone?.(composerTarget, ''); }}
+            onSubmit={(body, mentions) => submitNested(body, composerTarget, mentions)}
+          /></Box>}
           {!open && count > 0 && <Button size="small" disabled={offline || busy}
             onClick={() => expand(id)} sx={{ display: 'block', px: 0, minWidth: 0, color: 'secondary.main' }}>
             {`View ${count} more responses`}
@@ -1888,18 +1906,9 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
   };
   const composerTarget = composerFor && composerFor !== 'post' ? composerFor : null;
   const editTarget = editFor && editFor !== 'post' ? editFor : null;
-  const targetRow = composerTarget
-    ? (slice?.replies ?? []).find((row) => identityOf(row) === composerTarget)
-      ?? (loaded ?? []).find((row) => identityOf(row) === composerTarget)
-    : null;
   const editRow = editTarget
     ? (slice?.replies ?? []).find((row) => identityOf(row) === editTarget)
       ?? (loaded ?? []).find((row) => identityOf(row) === editTarget)
-    : null;
-  // The open target stays legible: the composer names the comment it answers
-  // (the post-target composer sits beside the post it answers).
-  const replyTargetName = targetRow
-    ? targetRow.author?.name ?? targetRow.authorName ?? memberName(targetRow.authorDid, data)
     : null;
   return <Box sx={{ mt: photoFirst.spacing.reactionsSlice / 8, borderTop: '1px solid', borderColor: photoFirst.dividerColor, pt: 1.25 }}>
     <Stack spacing={1}>{visibleRoots.map((reply) => renderRow(reply))}</Stack>
@@ -1907,22 +1916,6 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
       sx={{ mt: 1, px: 0, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'secondary.main' }}>
       {`View ${more} more comments`}
     </Button>}
-    {composerTarget && !offline && <ReplyForm
-      key={composerTarget}
-      label="Your reply"
-      replyingTo={replyTargetName ?? 'this comment'}
-      offline={offline}
-      post={post}
-      actions={actions}
-      initialText={readDraft?.(composerTarget) ?? ''}
-      onDraft={(text) => onDraftDone?.(composerTarget, text)}
-      onDone={() => { onComposerClosed?.(); onDraftDone?.(composerTarget, ''); }}
-      onSubmit={(body, mentions) => submitNested(body, composerTarget, mentions)}
-    />}
-    {/* The comment's edit mode (PORCH-094 ac-4): the same composer family in
-        edit mode, pre-filled with the row's current text, full rail width,
-        one composer per surface — opening it closed the reply composer in
-        the same frame. */}
     {editTarget && !offline && <CommentEditForm
       key={`edit:${editTarget}`}
       row={editRow}
@@ -1947,8 +1940,10 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
 // newest-first with threaded roots ahead (ruledOrder), replies chronological
 // inside each tree (repliesByParent) — so the detail column and the card
 // slice agree with the served order between fetches. The rows carry no
-// composer of their own: the column owns the one on-demand composer.
-export function ReplyThread({ comments, post, data, actions, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null }) {
+// composer of their own: the column owns the one on-demand composer. Its
+// mount rides the answered row (PORCH-099, Brian, Oct 18): composerSlot
+// renders the composer beneath the row it answers.
+export function ReplyThread({ comments, post, data, actions, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null, composerSlot = null }) {
   const byParent = repliesByParent(comments);
   // The root's threaded-ness for the ruled sort: the tree the read returned,
   // or the server's decorated count when the tree is not (yet) loaded.
@@ -1964,7 +1959,7 @@ export function ReplyThread({ comments, post, data, actions, navigate, composerF
       .map((reply, index) => {
         const nextSeen = new Set(seen);
         nextSeen.add(identityOf(reply));
-        return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} data={data} post={post} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={onReplyTarget} rowLifecycle={rowLifecycle}>{render(identityOf(reply), depth + 1, nextSeen)}</Reply>;
+        return <Reply key={identityOf(reply) || index} reply={reply} depth={depth} data={data} post={post} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={onReplyTarget} rowLifecycle={rowLifecycle} composerSlot={composerSlot}>{render(identityOf(reply), depth + 1, nextSeen)}</Reply>;
       });
   };
   return <>{render()}</>;
@@ -2314,14 +2309,17 @@ function ReplyForm({ label, onSubmit, offline, post, actions, replyingTo = null,
   </Stack>;
 }
 
-function Reply({ reply, depth, children, data, post, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null }) {
+function Reply({ reply, depth, children, data, post, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null, composerSlot = null }) {
   const id = identityOf(reply);
+  const composer = composerSlot?.(id) ?? null;
   return <Box sx={{ ml: { xs: Math.min(depth, 3) * 1.5, sm: Math.min(depth, 4) * 3 }, pl: 2, py: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}>
     <Typography variant="subtitle2">{reply.author?.name ?? reply.authorName ?? memberName(reply.authorDid, data)} <Typography component="span" variant="caption" color="text.secondary">{dateOf(reply.createdAt)}</Typography></Typography>
     <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
     {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={previewOrigin(post, data)} />}
     {/* PORCH-084: the row's Reply action points the column's one composer at
-        this comment; no inline input renders inside the indented row.
+        this comment. PORCH-099 (Brian, Oct 18): that one composer mounts in
+        context — beneath the row it answers, one rung into this row's tree
+        — never at the bottom of the conversation.
         PORCH-094: the row's own overflow carries its lifecycle affordances,
         authority-gated exactly as the card slice renders them. */}
     {depth < 8 && <Stack direction="row" spacing={0.5} alignItems="center">
@@ -2329,6 +2327,7 @@ function Reply({ reply, depth, children, data, post, navigate, composerFor = nul
       {rowLifecycle && <CommentOverflow row={reply} data={data}
         onEdit={rowLifecycle.onEdit ?? null} onDelete={rowLifecycle.onDelete ?? null} />}
     </Stack>}
+    {composer && <Box sx={{ ml: { xs: 1.5, sm: 3 }, pl: 2 }}>{composer}</Box>}
     {children}
   </Box>;
 }
@@ -2408,6 +2407,23 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   const composerTargetName = composerTargetReply
     ? composerTargetReply.author?.name ?? composerTargetReply.authorName ?? memberName(composerTargetReply.authorDid, data)
     : 'this comment';
+  // PORCH-099 (Brian, Oct 18): a reply to a comment composes in context —
+  // the one on-demand composer mounts directly beneath the comment it
+  // answers, one rung into that comment's tree (the thread's composerSlot),
+  // never at the bottom of the conversation. Surface law holds: one
+  // composer state per column, keyed by the answered comment id, drafts
+  // per target.
+  const composerSlot = (rowId) => composerFor === rowId ? <ReplyForm
+    key={composerFor}
+    label="Your reply"
+    replyingTo={composerTargetName}
+    post={post}
+    actions={actions}
+    initialText={readDraft(composerFor)}
+    onDraft={(text) => holdDraft(composerFor, text)}
+    onDone={() => { setComposerFor(null); holdDraft(composerFor, ''); }}
+    onSubmit={(body, mentions) => submit(body, composerFor, mentions)}
+  /> : null;
   const submit = async (body, parentId, mentions) => {
     const result = await invoke(actions, 'submitReply', post, body, parentId, mentions);
     if (!result?.comment || identityOf(result.comment) === '' || result.comment.postId !== identityOf(post)) throw new Error('The family server did not confirm this reply. Reload the conversation before trying again.');
@@ -2478,16 +2494,34 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
           <Typography variant="h6">Replies</Typography>
           {!data.offline && <Button size="small" data-testid="detail-reply" onClick={() => { setEditFor(null); openComposer('post'); }}>Reply</Button>}
         </Stack>
-        {!data.offline && (replies.length ? <ReplyThread comments={replies} post={post} data={data} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={openComposer}
+        {/* PORCH-084 (ac-3/ac-4): the on-demand composer rides the full
+            conversation column width — never an always-visible input, and
+            nothing shrunken renders anywhere on the surface.
+            PORCH-099 (Brian, Oct 18): the post-target composer mounts here,
+            beside the post it answers; the comment-target composer mounts
+            in the thread beneath the row it answers (composerSlot) — never
+            at the conversation's bottom. One composer per surface. */}
+        {!data.offline && composerFor === 'post' && <ReplyForm
+          key={composerFor}
+          label="Write a reply"
+          replyingTo="this post"
+          post={post}
+          actions={actions}
+          initialText={readDraft(composerFor)}
+          onDraft={(text) => holdDraft(composerFor, text)}
+          onDone={() => { setComposerFor(null); holdDraft(composerFor, ''); }}
+          onSubmit={(body, mentions) => submit(body, null, mentions)}
+        />}
+        {!data.offline && (replies.length ? <ReplyThread comments={replies} post={post} data={data} actions={actions} navigate={navigate} composerFor={composerFor} onReplyTarget={openComposer} composerSlot={composerSlot}
           rowLifecycle={{
             onEdit: editThatComment,
             onDelete: (row) => setCommentDelete(row),
           }} /> : <Typography color="text.secondary">Be the first to reply.</Typography>)}
-        {/* PORCH-084 (ac-3/ac-4): the on-demand composer rides the full
-            conversation column width — never an always-visible inline input,
-            and nothing shrunken renders anywhere on the surface. The
-            composer renders for a reply target or, in edit mode (PORCH-094),
-            for the comment being edited — one composer per surface. */}
+        {/* PORCH-084/PORCH-094: this block is the comment's edit mode — one
+            composer per surface. The reply composers mount in context
+            (PORCH-099): the post target beside the heading (above), the
+            comment targets beneath the rows they answer (composerSlot),
+            never at the conversation's bottom. */}
         {editFor && !data.offline && (() => {
           const editRow = replies.find((reply) => identityOf(reply) === editFor);
           return <CommentEditForm
@@ -2503,17 +2537,6 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
             onSubmit={(body) => submitThatCommentEdit(editRow, body)}
           />;
         })()}
-        {!data.offline && composerFor && <ReplyForm
-          key={composerFor}
-          label={composerFor === 'post' ? 'Write a reply' : 'Your reply'}
-          replyingTo={composerFor === 'post' ? 'this post' : composerTargetName}
-          post={post}
-          actions={actions}
-          initialText={readDraft(composerFor)}
-          onDraft={(text) => holdDraft(composerFor, text)}
-          onDone={() => { setComposerFor(null); holdDraft(composerFor, ''); }}
-          onSubmit={(body, mentions) => submit(body, composerFor === 'post' ? null : composerFor, mentions)}
-        />}
       </Box>
       {/* The comment's one delete confirmation (PORCH-094 ac-3), identical on
           the detail column and the card slice: ruled question, cascade note,
