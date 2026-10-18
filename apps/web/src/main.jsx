@@ -27,6 +27,10 @@ import { firstUrlIn } from "./link-preview.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { applyEvent, readEventCursor, saveEventCursor, catchUpSince } from "./live.js";
 import { openEventStream } from "./realtime.js";
+// PORCH-102: the bounded freshness-note auto-recovery driver — the
+// beyond-window catch-up re-serves fresh over REST by itself, event-driven
+// on reconnect, bounded retries with exponential backoff, never a cadence.
+import { runStaleRecovery } from "./stale-recovery.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
@@ -340,12 +344,17 @@ function App() {
     }
   }, [identity]);
   const reload = useCallback(async () => {
-    if (!identity?.id) return;
+    // PORCH-102: reload resolves true exactly when the feeds read served
+    // fresh — the same condition applyFeeds uses to clear the freshness
+    // note — so the auto-recovery driver knows when recovery is done.
+    // A signed-out identity or a missing connection is a failed attempt.
+    if (!identity?.id) return false;
     const live = readConnections(stored, origin);
     const liveActive = live.find((item) => item.identity?.id === identity.id) || null;
-    if (!liveActive) return;
+    if (!liveActive) return false;
     const identityConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
     const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], failures: [] };
+    const feedsServed = !result.failures.length;
     applyFeeds(result, { notice: "Your family server is unreachable. Showing saved moments where available." });
     const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult, mediaRootResult, reauthResult] = await Promise.allSettled([
       // Member-plane groups (PORCH-030): the Groups page reads the group
@@ -393,6 +402,7 @@ function App() {
       },
     });
     if (deviceResult.status === "fulfilled") observeDevices(deviceResult.value.registrations || [], liveActive);
+    return feedsServed;
   }, [identity, observeDevices, applyFeeds]);
   useEffect(() => {
     // First load waits for the silent renewal: an expired access token must
@@ -414,6 +424,33 @@ function App() {
     window.addEventListener("online", online);
     return () => window.removeEventListener("online", online);
   }, [reload]);
+  // PORCH-102: the freshness-note auto-recovery. The trigger is the
+  // reconnect replay resolving beyond the server's retained window (the
+  // stale event in catchUpOrigin) — event-driven, exactly the trigger class
+  // PORCH-081 ac-1 mandates; a bounded backoff chain while recovery is
+  // active is not a cadence, nothing here re-arms after exhausting, and no
+  // interval exists on this path. reload is read through a ref (the
+  // renewRef pattern) so recovery never waits out a stale closure, and a
+  // second concurrent stale event never stacks a second driver run.
+  const reloadRef = useRef(null);
+  useEffect(() => { reloadRef.current = reload; }, [reload]);
+  const staleRecoveryBusy = useRef(false);
+  const startStaleRecovery = useCallback(() => {
+    if (staleRecoveryBusy.current) return;
+    staleRecoveryBusy.current = true;
+    void (async () => {
+      try {
+        // One attempt = the exact refetch the Check again CTA runs today
+        // (actions.refreshFeeds); success means fresh state landed, which
+        // clears the note in applyFeeds. A thrown attempt is a failed
+        // attempt in the driver. Past the bound the note and its Check
+        // again CTA persist as the manual path — no unbounded loop.
+        await runStaleRecovery({ attempt: () => reloadRef.current?.() });
+      } finally {
+        staleRecoveryBusy.current = false;
+      }
+    })();
+  }, []);
   // Live consumption (PORCH-081 ac-1): the socket feed replaces the deleted
   // fixed-interval degrade cadence. One app-scope subscription per live
   // origin connection of the open identity — websocket-only transport with
@@ -440,6 +477,8 @@ function App() {
   // with the stored per-origin cursor; the replayed envelopes apply through
   // the same idempotent in-place merge, the returned cursor is stored, and
   // a beyond-the-window replay renders the REST catch-up note (behind).
+  // PORCH-102: that beyond-window resolve is also the event that closes the
+  // note — the auto-recovery re-serves fresh over REST without the tap.
   const catchUpOrigin = useCallback(async (eventUrl, identityId) => {
     const live = readConnections(stored, origin);
     const connection = live.find((item) => item.identity?.id === identityId
@@ -465,6 +504,12 @@ function App() {
       }
       saveEventCursor(stored, origin, result.cursor);
       setBehind(result.stale);
+      // PORCH-102: beyond the retained window the member never has to tap —
+      // the recovery re-serves fresh over REST automatically (bounded, see
+      // startStaleRecovery); fresh state landing clears the note in
+      // applyFeeds. Past the recovery bound the note and its Check again CTA
+      // persist as the manual path.
+      if (result.stale) startStaleRecovery();
       setOffline(false);
     } catch {
       // Named outage class: the delta could not be resolved; the alert
@@ -472,7 +517,7 @@ function App() {
       setOffline(true);
     }
     if (before) requestAnimationFrame(() => applyFeedCompensation(before, captureFeedAnchor()));
-  }, []);
+  }, [startStaleRecovery]);
   const liveSig = identityConnections
     .map((connection) => `${new URL(connection.url).origin}#${connection.networkId ?? ""}`)
     .join("|");
