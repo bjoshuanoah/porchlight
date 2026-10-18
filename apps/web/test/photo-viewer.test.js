@@ -164,7 +164,13 @@ test('PORCH-082 ac-4: the end-card is the last slide of the paged surface and bo
   assert.match(viewer, /actions\?\.bulkOriginals/);
   assert.match(main, /bulkOriginals: async \(post\)/);
   assert.match(main, /bulkPostOriginals\(connectionForPost\(post\), post\)/);
-  assert.match(actions, /posts\/\$\{encodeURIComponent\(postId\)\}\/media\/originals\.zip/);
+  // The wire shape is the served route of record: /api/social with no
+  // network segment (the membership token IS the origin — PORCH-013
+  // convention). A network-segmented URL 404s on every hub (PORCH-083 Oct
+  // 18 field report).
+  assert.match(actions,
+    /\/api\/social\/posts\/\$\{encodeURIComponent\(postId\)\}\/media\/originals\.zip/);
+  assert.doesNotMatch(actions, /\/posts\/\$\{encodeURIComponent\(member\.networkId\)\}/);
   // Back-swipe never blocks browsing: the card is an ordinary slide.
   assert.match(viewer, /viewerTotalCount/);
 });
