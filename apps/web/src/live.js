@@ -187,6 +187,32 @@ function mergeNewReaction(posts, envelope) {
   if (!row?.emoji || !postId) return posts;
   const index = (posts ?? []).findIndex((post) => identityOf(post) === postId && sameOrigin(post, envelope));
   if (index < 0) return posts;
+  // PORCH-101: a comment-subject arrival (commentId present, postId null on
+  // the content — PORCH-098's envelope shape) merges into THAT comment row's
+  // chips in place, never the post's. The bar's key is the comment id, so
+  // the merge re-renders the row's chips and no open reveal or composer.
+  // A comment the card does not currently render — past the top-four slice
+  // window or inside a closed tree — is a no-op merge; the read that
+  // includes the comment carries its rows.
+  if (String(row.subjectType ?? "post") === "comment") {
+    const commentId = String(row.commentId ?? "");
+    if (!commentId) return posts;
+    const slice = Array.isArray(posts[index].replySlice) ? posts[index].replySlice : [];
+    let merged = false;
+    const nextSlice = slice.map((entry) => {
+      if (identityOf(entry) !== commentId) return entry;
+      const entryRows = Array.isArray(entry.reactionRows) ? entry.reactionRows : [];
+      const duplicate = entryRows.some((candidate) => identityOf(candidate) === identityOf(row)
+        || (candidate.emoji === row.emoji && String(candidate.memberDid ?? "") === String(row.memberDid ?? "")));
+      if (duplicate) return entry;
+      merged = true;
+      return { ...entry, reactionRows: [...entryRows, row] };
+    });
+    if (!merged) return posts;
+    const next = posts.slice();
+    next[index] = { ...posts[index], replySlice: nextSlice };
+    return next;
+  }
   const rows = Array.isArray(posts[index].reactionRows) ? posts[index].reactionRows : [];
   const duplicate = rows.some((candidate) => identityOf(candidate) === identityOf(row)
     || (candidate.emoji === row.emoji && String(candidate.memberDid ?? "") === String(row.memberDid ?? "")));

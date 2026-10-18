@@ -155,7 +155,13 @@ export function applyPostDeletedRow(posts, postId, editedOrigin = null) {
 
 /**
  * The comment edit's river merge (ac-4): the row's text swaps in place by
- * id — order, response counts, and every other row untouched.
+ * id — order, response counts, and every other row untouched. PORCH-101:
+ * the served comment view's `reactionRows` is the additive empty default on
+ * every comment.updated (PORCH-098's commentView hard-codes the empty list;
+ * the event never carries authoritative rows), so a row the merge touches
+ * keeps its decorated rows in place — an edit never blinks the chips, and a
+ * restored comment's captured rows survive until the read that decorates
+ * them (the rows themselves re-materialize server-side with the restore).
  */
 export function applyCommentEditedRow(posts, { postId, networkId: editedOrigin = null, comment }) {
   const index = (posts ?? []).findIndex((post) => sameRiverRow(post, postId, editedOrigin));
@@ -164,7 +170,9 @@ export function applyCommentEditedRow(posts, { postId, networkId: editedOrigin =
   const slice = Array.isArray(post.replySlice) ? post.replySlice : [];
   const rowId = rowKeyOf(comment);
   if (!slice.some((row) => rowKeyOf(row) === rowId)) return posts;
-  const nextSlice = slice.map((row) => (rowKeyOf(row) === rowId ? { ...row, ...comment } : row));
+  const nextSlice = slice.map((row) => (rowKeyOf(row) === rowId
+    ? { ...row, ...comment, reactionRows: Array.isArray(row.reactionRows) ? row.reactionRows : (comment.reactionRows ?? []) }
+    : row));
   const next = posts.slice();
   next[index] = { ...post, replySlice: nextSlice };
   return next;

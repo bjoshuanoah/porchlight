@@ -18,7 +18,7 @@ import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage, signDevicePayload } from "./device.js";
 import { sha256Hex } from "./device-crypto.js";
 import { resolveStoredNames } from "./name-heal.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost, editPost as sendPostEdit, deletePost as sendPostDelete, editComment as sendCommentEdit, deleteComment as sendCommentDelete } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishCommentReaction, unpublishCommentReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost, editPost as sendPostEdit, deletePost as sendPostDelete, editComment as sendCommentEdit, deleteComment as sendCommentDelete } from "./member-actions.js";
 import {
   snapshotPostRow, applyPostEditedRow, revertPostEditedRow,
   applyCommentEditedRow, applyCommentDeletedRows,
@@ -1101,6 +1101,12 @@ function App() {
     vote: async (post, value) => { const result = await publishVote(connectionForPost(post), post, value); await reload(); return result; },
     react: async (post, emoji) => publishReaction(connectionForPost(post), post, emoji),
     unreact: async (post, emoji) => unpublishReaction(connectionForPost(post), post, emoji),
+    // Comment-subject reactions (PORCH-101): the same optimistic-discipline
+    // write contract as the post reactions — no reload cycle; the bar's rows
+    // settle from the write's confirm and every later read. The subject
+    // rides the payload per PORCH-098.
+    reactComment: async (post, comment, emoji) => publishCommentReaction(connectionForPost(post), post, comment, emoji),
+    unreactComment: async (post, comment, emoji) => unpublishCommentReaction(connectionForPost(post), post, comment, emoji),
     submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
     // Post + comment lifecycle (PORCH-094): the edit merges the changed
     // fields into the river optimistically (same instance, stable key — the

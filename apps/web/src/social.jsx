@@ -661,18 +661,30 @@ export function ReactionReveal({ chip, ownDid, data, post, actions }) {
 // (desktop) / long-press (touch) reveals that emoji's reactors — the vote
 // surfaces carry nothing new and expander/media quantities stay separate
 // rules.
-export function PresentReactions({ post, data, actions, reactionState, spacingY = 2, actionBar = null }) {
+// Amended PORCH-101 (Brian, Oct 16, 2026 — the comment-reactions ruling):
+// the SAME bar family rides comment rows. Passing `comment` switches the
+// bar to the comment subject — its rows seed from that comment's
+// `reactionRows` (PORCH-098 serves the decorated shapes), the toggle writes
+// through `reactComment`/`unreactComment` (the comment-subject signed
+// payload), and the row keys its bar by comment id; every gesture, chip,
+// count, and reveal rule is the shipped post-bar contract, no second
+// implementation.
+export function PresentReactions({ post, comment = null, data, actions, reactionState, spacingY = 2, actionBar = null }) {
   // Controlled mode (PORCH-041 ac-4): the detail card and the conversation
   // column reflect ONE origin conversation — when reactionState is provided
   // both bars render the PostDetail owner's rows and every toggle lands in
-  // both columns from the same routine.
+  // both columns from the same routine. Comment bars always own their rows
+  // locally: each row keys its bar by comment id (PORCH-101), so the
+  // controlled owner state never bridges a comment surface.
+  const subject = comment ?? post;
   const [internalRows, setInternalRows] = useState(() =>
     // Decorated cards seed synchronously from the feed read (first paint
     // carries arriving reactions; no loader fetch rides them). The
     // controlled detail surface stays null until its own load runs.
-    reactionState ? null : reactionRowsOf(post?.reactionRows));
-  const rows = reactionState?.rows ?? internalRows;
-  const setRows = reactionState?.setRows ?? setInternalRows;
+    comment ? reactionRowsOf(subject?.reactionRows)
+      : reactionState ? null : reactionRowsOf(post?.reactionRows));
+  const rows = comment ? internalRows : (reactionState?.rows ?? internalRows);
+  const setRows = comment ? setInternalRows : (reactionState?.setRows ?? setInternalRows);
   const [anchor, setAnchor] = useState(null);
   const operation = useOperation();
   const ownDid = data.identity ? String(data.identity.id) : '';
@@ -682,12 +694,16 @@ export function PresentReactions({ post, data, actions, reactionState, spacingY 
   // changed — another member's reaction arriving — replaces the rows in
   // place while no own write is in flight. A row the own optimistic toggle
   // already reflected keeps its local copy until the read that includes it
-  // (the optimistic row is idempotent, never a duplicate).
-  const serverRows = reactionRowsOf(post?.reactionRows);
+  // (the optimistic row is idempotent, never a duplicate). Comment rows
+  // (PORCH-101) reflect the same way from the comment's decorated rows —
+  // the card slice and thread read both serve them (PORCH-098), a
+  // reaction.applied merge swaps the row in place, and the bar's key never
+  // moves so an open reveal or composer survives every arrival.
+  const serverRows = reactionRowsOf(subject?.reactionRows);
   const serverSignature = serverRows.map((row) => `${row.emoji}:${row.memberDid ?? ''}:${row._id ?? ''}`).join('|');
   const lastServerRef = useRef(null);
   useEffect(() => {
-    if (!Object.prototype.hasOwnProperty.call(post ?? {}, 'reactionRows')) return;
+    if (!Object.prototype.hasOwnProperty.call(subject ?? {}, 'reactionRows')) return;
     if (lastServerRef.current === serverSignature) return;
     lastServerRef.current = serverSignature;
     setRows(serverRows);
@@ -696,6 +712,15 @@ export function PresentReactions({ post, data, actions, reactionState, spacingY 
   }, [serverSignature]);
 
   useEffect(() => {
+    // Comment subjects (PORCH-101): every served comment view decorates its
+    // rows additively (PORCH-098) and no per-comment reactions read exists,
+    // so an undecorated row — a PORCH-099 optimistic pending row or a live
+    // arrival that lands before its read — resolves as an empty set until
+    // the read that includes it. No loader fetch ever rides a comment.
+    if (comment) {
+      if (!Object.prototype.hasOwnProperty.call(comment, 'reactionRows')) setRows(reactionRowsOf(null));
+      return undefined;
+    }
     // Undecorated surfaces (the post detail read) keep the PORCH-036 loader.
     if (Object.prototype.hasOwnProperty.call(post ?? {}, 'reactionRows')) return undefined;
     let current = true;
@@ -704,8 +729,8 @@ export function PresentReactions({ post, data, actions, reactionState, spacingY 
       .then((value) => { if (current) setRows(reactionRowsOf(value)); })
       .catch(() => { if (current) setRows([]); });
     return () => { current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one load per surfaced post
-  }, [identityOf(post)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one load per surfaced subject
+  }, [identityOf(subject)]);
   const own = ownEmojiRows(rows, ownDid);
   const toggle = (emoji, isOwn) => {
     setAnchor(null);
@@ -713,10 +738,15 @@ export function PresentReactions({ post, data, actions, reactionState, spacingY 
     // Optimistic first (ac-2): the row renders immediately, in the one pure
     // step both surfaces share; the failure path rolls back to the exact
     // prior rows; success swaps the local copy for the confirmed row.
+    // PORCH-101: the subject decides the write — comment rows sign the
+    // comment-subject payload (PORCH-098) through reactComment/unreactComment,
+    // post rows keep the shipped write; the reflection routine is one.
     const before = rows;
     setRows(optimisticToggle(rows ?? [], { emoji, ownDid, isOwn }));
     operation.run(
-      () => invoke(actions, isOwn ? 'unreact' : 'react', post, emoji),
+      () => comment
+        ? invoke(actions, isOwn ? 'unreactComment' : 'reactComment', post, comment, emoji)
+        : invoke(actions, isOwn ? 'unreact' : 'react', post, emoji),
       (result) => {
         if (result?.reaction && !isOwn) {
           setRows((current) => reflectReaction(current ?? [], {
@@ -1877,6 +1907,13 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
             <CommentOverflow row={reply} data={data} offline={offline}
               onEdit={(r) => onEditTarget?.(r)} onDelete={(r) => onDeleteComment?.(r)} />
           </Stack>}
+          {/* PORCH-101 (Brian, Oct 16): every rendered comment row carries
+              the SAME reaction affordance class as the post bar — the smile
+              control opening the picker (PORCH-036, open vocabulary) plus
+              this row's rendered chips. The shared component keys its rows
+              by comment id; the row's chips stay quiet beside it, exactly
+              like the post's, on both comment surfaces. */}
+          <PresentReactions post={post} comment={reply} data={data} actions={actions} spacingY={1} />
           {/* PORCH-099 (Brian, Oct 18): the reply composer mounts in context —
               directly beneath the comment it answers, one rung into that
               comment's tree, never at the bottom of the whole conversation.
@@ -2309,7 +2346,7 @@ function ReplyForm({ label, onSubmit, offline, post, actions, replyingTo = null,
   </Stack>;
 }
 
-function Reply({ reply, depth, children, data, post, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null, composerSlot = null }) {
+function Reply({ reply, depth, children, data, post, actions, navigate, composerFor = null, onReplyTarget = null, rowLifecycle = null, composerSlot = null }) {
   const id = identityOf(reply);
   const composer = composerSlot?.(id) ?? null;
   return <Box sx={{ ml: { xs: Math.min(depth, 3) * 1.5, sm: Math.min(depth, 4) * 3 }, pl: 2, py: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}>
@@ -2327,6 +2364,10 @@ function Reply({ reply, depth, children, data, post, navigate, composerFor = nul
       {rowLifecycle && <CommentOverflow row={reply} data={data}
         onEdit={rowLifecycle.onEdit ?? null} onDelete={rowLifecycle.onDelete ?? null} />}
     </Stack>}
+    {/* PORCH-101 (Brian, Oct 16): the row's reaction bar — the shared bar
+        family, keyed by this comment's id, chips quiet beside the row; the
+        toggle writes the comment-subject signed payload. */}
+    <PresentReactions post={post} comment={reply} data={data} actions={actions} spacingY={1} />
     {composer && <Box sx={{ ml: { xs: 1.5, sm: 3 }, pl: 2 }}>{composer}</Box>}
     {children}
   </Box>;
