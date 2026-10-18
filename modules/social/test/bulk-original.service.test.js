@@ -295,6 +295,35 @@ test("ac-1: the post's originals.zip carries exactly that post's photos; cross-p
   }
 });
 
+// The route of record carries no origin segment (the PORCH-013 family
+// convention: the membership token IS the origin — no route carries the
+// origin). The PRD's :originNetworkId wording is not the served shape; a
+// network-segmented URL reads "doesn't exist here" while the served shape
+// streams (PORCH-083 Oct 18 field report: the SPA built the segmented
+// shape and got its 404).
+test("ac-1: the bulk zip URLs carry no origin segment — the segmented shape never composes, the served shape does", async () => {
+  const fx = bulkFixture();
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const mediaRefs = [];
+  for (const png of [await pngFor(0), await pngFor(1)]) {
+    mediaRefs.push((await upload(fx.mediaService, susan, png)).mediaId);
+  }
+  const post = await createPost(fx, susan, mediaRefs);
+  const { base, close } = await startServer(fx);
+  try {
+    const segmented = await getZip(
+      base,
+      `/${FAMILY}/posts/${post._id}/media/originals.zip`,
+      susan.token,
+    );
+    assert.equal(segmented.status, 404);
+    const served = await getZip(base, `/posts/${post._id}/media/originals.zip`, susan.token);
+    assert.equal(served.status, 200);
+  } finally {
+    close();
+  }
+});
+
 /* ------------------------- ac-2: streaming composition ------------------ */
 
 test("ac-2: a several-hundred-original set streams flat — one read per original, one entry held at a time, no staging file", async () => {

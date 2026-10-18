@@ -293,12 +293,14 @@ export async function exportOriginals(connection) {
 }
 
 // Bulk original download (PORCH-082 end-card, route per PORCH-083's build
-// contract): one GET of the set-scoped zip at the post's own origin network,
-// the same audited-path authentication shape the archive export carries
-// (member token + device signature in the query). The zip streams to the
-// browser whole; the caller only receives the blob to hand to a download
-// link. One-at-a-time original saves stay the per-photo path on mobile —
-// this is the bulk path only.
+// contract): one GET of the set-scoped zip — the same audited-path
+// authentication shape the archive export carries (member token + device
+// signature in the query). The URL is the served route shape: /api/social
+// carries no network segment (the membership token IS the origin — the
+// PORCH-013 family convention); a network-segmented URL 404s. The zip
+// streams to the browser whole; the caller only receives the blob to hand
+// to a download link. One-at-a-time original saves stay the per-photo path
+// on mobile — this is the bulk path only.
 export async function bulkPostOriginals(connection, post) {
   const member = device(connection);
   const postId = post?._id || post?.id;
@@ -308,7 +310,7 @@ export async function bulkPostOriginals(connection, post) {
   const signature = await signDevicePayload(new URL(member.url).origin, member.identity.id, member.deviceId,
     { scope: "bulk-originals", networkId: member.networkId, postId });
   const target = new URL(
-    `/api/social/${encodeURIComponent(member.networkId)}/posts/${encodeURIComponent(postId)}/media/originals.zip`,
+    `/api/social/posts/${encodeURIComponent(postId)}/media/originals.zip`,
     member.url,
   );
   target.searchParams.set("signature", signature);
