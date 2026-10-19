@@ -357,33 +357,37 @@ test("device notifications, deployed-hub stage 2: every push route + every send 
     assert.ok([200, 201].includes(transientReact.status));
     assert.equal(captured.filter((c) => c.endpoint === "/push/flaky").length, 2, "exactly the one bounded retry");
 
-    // Group posts: the member-controlled toggle gates through the routes.
+    // Group posts: the shipped default-ON toggle (PORCH-108, Brian Oct 19,
+    // 2026) delivers through the routes; the member's explicit OFF gates
+    // them again.
     const group = (await runStep("Linda creates a group", call("/groups", memberToken, { name: "Picnic", members: [ownerDid, memberDid] }))).body.group;
-    await runStep("group post, toggles default off", (async () => {
+    // The /flaky row died of the bounded-retry drop; re-registration
+    // replaces it with a live one (the same walked flow the client runs).
+    await runStep("owner re-registers (relay /ok)", register(ownerToken, okEndpoint, { p256dh: ownerKeys.p256dh, auth: ownerKeys.auth }));
+    await runStep("group post rides the shipped default ON", (async () => {
       const res = await call("/posts", memberToken, {
         payload: { type: "text", groupId: group._id, body: "Picnic planning" },
         signature: signPayload(memberPrivJwk, { type: "text", groupId: group._id, body: "Picnic planning" }),
       });
       assert.ok([200, 201].includes(res.status), JSON.stringify(res.body));
+      // The owner enabled with no per-event write: the absent groupPost
+      // key resolved the shipped ON default — no toggle leg was needed.
+      const okCaptures = captured.filter((c) => c.endpoint === "/push/ok");
+      assert.equal(okCaptures.length, 2, "the groupPost push landed beside the earlier reaction push");
+      const groupPlaintext = decryptRecord(ownerKeys.client, ownerKeys.p256dh, ownerKeys.auth, okCaptures[1].body);
+      assert.equal(groupPlaintext.type, "groupPost");
+      assert.equal(groupPlaintext.networkName, "Family");
+      assert.deepEqual(Object.keys(groupPlaintext).sort(), ["authorName", "commentId", "excerpt", "networkName", "postId", "type"], "content-only envelope, no counts anywhere");
     })());
-    const ownerOn = await runStep("owner toggles groupPost on", call("/push/settings", ownerToken, { enabled: true, events: { groupPost: true } }, "PUT"));
-    assert.ok([200, 201].includes(ownerOn.status));
-    // The /flaky row died of the bounded-retry drop; re-registration
-    // replaces it with a live one (the same walked flow the client runs).
-    await runStep("owner re-registers (relay /ok)", register(ownerToken, okEndpoint, { p256dh: ownerKeys.p256dh, auth: ownerKeys.auth }));
-    await runStep("group post to the toggled-on member", (async () => {
+    await runStep("owner toggles groupPost off", call("/push/settings", ownerToken, { enabled: true, events: { groupPost: false } }, "PUT"));
+    await runStep("group post at the toggled-off member", (async () => {
       const res = await call("/posts", memberToken, {
         payload: { type: "text", groupId: group._id, body: "Potluck list" },
         signature: signPayload(memberPrivJwk, { type: "text", groupId: group._id, body: "Potluck list" }),
       });
       assert.ok([200, 201].includes(res.status), JSON.stringify(res.body));
+      assert.equal(captured.filter((c) => c.endpoint === "/push/ok").length, 2, "the explicit OFF produced no further push");
     })());
-    const okCaptures = captured.filter((c) => c.endpoint === "/push/ok");
-    assert.equal(okCaptures.length, 2, "the groupPost push landed beside the reaction push");
-    const groupPlaintext = decryptRecord(ownerKeys.client, ownerKeys.p256dh, ownerKeys.auth, okCaptures[1].body);
-    assert.equal(groupPlaintext.type, "groupPost");
-    assert.equal(groupPlaintext.networkName, "Family");
-    assert.deepEqual(Object.keys(groupPlaintext).sort(), ["authorName", "commentId", "excerpt", "networkName", "postId", "type"], "content-only envelope, no counts anywhere");
 
     // DELETE: the device retracts its registration; the next Linda-targeted
     // trigger skips with no_subscription and no relay call.
