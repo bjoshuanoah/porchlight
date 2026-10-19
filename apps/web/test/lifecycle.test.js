@@ -376,7 +376,7 @@ test("ac-4: the detail column rides the same actions and the same one-composer r
   // ids, and the detail column filters the removed subtree from its rows.
   assert.match(sliceBlock, /isRemoved\(reply\)/);
   assert.match(postDetail, /removedTreeIds/);
-  assert.match(reply, /rowLifecycle && <CommentOverflow/);
+  assert.match(reply, /depth < 8 && rowLifecycle \? <CommentOverflow/);
 });
 
 test("ac-4: the deleted rows' expander counts recompute on the next served read — the count derives from live totals", () => {
