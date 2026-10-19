@@ -187,6 +187,60 @@ export async function enablePush({ pushManager, vapidPublicKey, register }) {
   return register({ endpoint: descriptor.endpoint, keys: descriptor.keys });
 }
 
+/**
+ * The off-to-on walked enable flow (PORCH-109): THE single enable path —
+ * the settings card's master toggle and the installed-app banner's Turn on
+ * action both run this exact sequence, no second implementation (the Oct
+ * 19 banner ruling: "the same off-to-on sequence"). Inputs are injected;
+ * the order is binding (Brian, Oct 13, 2026): the off-to-on settings write
+ * persists enabled=true through the route FIRST, then the same tap fires
+ * the prompt (pushManager.subscribe inside the injected enable), then the
+ * authoritative row is read back fresh. Any failure after the first save
+ * reverts the route-persisted row to enabled=false — which also expires
+ * any subscription the attempt registered — so a denial never leaves an
+ * enabled row behind a failed prompt, and rethrows the original cause.
+ */
+export async function walkedEnable({ load, save, enable } = {}) {
+  if (typeof load !== "function" || typeof save !== "function" || typeof enable !== "function") {
+    throw new Error("The walked enable flow needs its hub reads and writes.");
+  }
+  const row = normalizeSettings((await load())?.settings ?? null);
+  const saved = await save(withMaster(row, true));
+  const persisted = normalizeSettings(saved?.settings ?? null);
+  if (!persisted.enabled) throw new Error("The hub could not turn notifications on.");
+  try {
+    await enable();
+  } catch (cause) {
+    try { await save(withMaster(row, false)); } catch { /* the rollback write never masks the real cause */ }
+    throw cause;
+  }
+  try {
+    const settled = await load();
+    return normalizeSettings(settled?.settings ?? persisted);
+  } catch (cause) {
+    try { await save(withMaster(row, false)); } catch { /* the rollback write never masks the real cause */ }
+    throw cause;
+  }
+}
+
+/**
+ * The installed-context banner's visibility gate (PORCH-109, Brian Oct 19,
+ * 2026). Three inputs, nothing else:
+ *   - installed context: the display-mode standalone fact;
+ *   - an open identity session on this device;
+ *   - notifications not enabled — the Oct 13 state machine's two inputs:
+ *     the persisted row is off OR the real permission is not granted.
+ * Any input fails: no banner. An unreadable or unreturned row (the hub
+ * read failed) is an unknown state, not a silent off: the gate never nags
+ * on a guess, so the unknown row hides the banner until the next fresh
+ * read.
+ */
+export function notificationsBannerVisible({ standalone = false, sessionOpen = false, settings = null, permission = null, suppressed = false } = {}) {
+  if (!standalone || !sessionOpen || suppressed) return false;
+  if (!settings) return false;
+  return settings.enabled !== true || permission !== "granted";
+}
+
 /** Whitelisted push envelope — the same content-only fields the hub's
  * pipeline composes (PORCH-059). Everything else is dropped on the floor. */
 export const PUSH_FIELDS = Object.freeze(["type", "postId", "commentId", "authorName", "networkName", "excerpt"]);

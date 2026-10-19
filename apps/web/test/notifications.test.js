@@ -188,21 +188,28 @@ test("PORCH-060 ac-3: the browser permission prompt fires only from the explicit
   const install = await src("src/install.js");
   assert.doesNotMatch(install, /requestPermission/);
   const card = await src("src/notifications.jsx");
-  // The master toggle is the only explicit-tap surface that runs the
-  // walked flow, and a promptable (default) permission or an off row
-  // stays silent at load — the quiet refresh runs only when the
-  // permission is already granted AND the persisted row is enabled
-  // (PORCH-063).
+  // A promptable (default) permission or an off row stays silent at load —
+  // the quiet refresh runs only when the permission is already granted AND
+  // the persisted row is enabled (PORCH-063).
   assert.match(card, /if \(capability\.permission !== "granted"\) \{ setDeviceOn\(false\); return undefined; \}/);
   assert.match(card, /if \(settings\?\.enabled !== true\) \{ setDeviceOn\(false\); return undefined; \}/);
   assert.match(card, /toggleMaster/);
-  // The walked flow's order: the off-to-on settings write lands BEFORE
-  // the tap's subscribe runs, and a failed prompt reverts the route-
+  // The walked flow's order is pinned on the ONE shared implementation
+  // (PORCH-109): the settings card's master toggle and the installed-app
+  // banner's Turn on tap both run the same walkedEnable — no separate
+  // enable path exists anywhere.
+  const pure = await src("src/notifications.js");
+  // The off-to-on settings write lands BEFORE the tap's subscribe runs,
+  // and a failed prompt (or a failed settled read) reverts the route-
   // persisted row to enabled=false (which also expires any subscription).
-  assert.match(card, /const saved = await actions\.saveNotificationSettings\(withMaster\(previousSettings, true\)\);/);
-  assert.match(card, /if \(!persisted\.enabled\) throw new Error\("The hub could not turn notifications on\."\);/);
-  assert.match(card, /await actions\.enableNotifications\(\);/);
-  assert.match(card, /await actions\.saveNotificationSettings\(withMaster\(previousSettings, false\)\);/);
+  assert.match(pure, /const saved = await save\(withMaster\(row, true\)\);/);
+  assert.match(pure, /if \(!persisted\.enabled\) throw new Error\("The hub could not turn notifications on\."\);/);
+  assert.match(pure, /await enable\(\);/);
+  assert.match(pure, /await save\(withMaster\(row, false\)\);/);
+  assert.match(card, /const settled = await walkedEnable\(\{/);
+  assert.match(card, /load: actions\.loadNotificationSettings/);
+  assert.match(card, /save: actions\.saveNotificationSettings/);
+  assert.match(card, /enable: actions\.enableNotifications/);
 });
 
 test("PORCH-060 ac-3: denial mirrors the real permission and renders platform-appropriate re-enable guidance", async () => {
