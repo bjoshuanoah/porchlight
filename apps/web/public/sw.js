@@ -25,12 +25,77 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       for (const name of await caches.keys()) {
-        if (name !== CACHE_NAME) await caches.delete(name);
+        // The share-target staging store (PORCH-105) persists across worker
+        // updates like the rendition store itself: a staged share waits
+        // through this sweep and is retrieved after the launch lands.
+        if (name !== CACHE_NAME && name !== STAGE_CACHE) await caches.delete(name);
       }
       await self.clients.claim();
     })(),
   );
 });
+
+/* Share target (PORCH-105 ac-1, ac-5): the manifest's share_target POSTs its
+ * payload to /share — a launch surface, not an API surface. The worker
+ * stages the shared files and text into a dedicated store and redirects the
+ * launch into the app; the app retrieves the staging over the message
+ * channel (requestStagedShare) and clears it once compose has taken the
+ * payload. The staging store never holds an /api/** request and never serves
+ * one: the boundary below stands untouched, and share-target staging never
+ * enters the rendition cache. */
+const STAGE_CACHE = "porchlight-share-staging";
+const SHARE_TARGET_PATH = "/share";
+
+// The in-flight staging of the current share-target launch, if any; reads
+// wait for it so a fast boot never answers before the writes settle.
+let shareStagingFlight = null;
+
+const stageKey = (name) => new Request(`${SHARE_TARGET_PATH}/${name}`, { method: "GET" });
+
+async function stageShareTarget(request) {
+  try {
+    const cache = await caches.open(STAGE_CACHE);
+    // One share at a time: the newest supersedes earlier staging wholesale.
+    for (const key of await cache.keys()) await cache.delete(key);
+    const form = await request.formData();
+    const files = form.getAll("media").filter((file) => file instanceof Blob || file instanceof File);
+    const textOf = (field) => (typeof field === "string" ? field : "");
+    await cache.put(stageKey("manifest"), new Response(JSON.stringify({
+      title: textOf(form.get("title")), text: textOf(form.get("text")),
+      url: textOf(form.get("url")), files: files.length, at: Date.now(),
+    }), { headers: { "content-type": "application/json" } }));
+    await Promise.all(files.map((file, index) => cache.put(stageKey(`file-${index}`), new Response(file, {
+      headers: {
+        "content-type": file.type || "application/octet-stream",
+        "x-porchlight-share-name": encodeURIComponent(file.name || `Shared ${index + 1}`),
+      },
+    }))));
+  } catch { /* an unparseable share payload leaves no staging; the launch still opens the app */ }
+  return Response.redirect(new URL("/?", request.url).href, 303);
+}
+
+async function readStagedShare() {
+  try {
+    if (shareStagingFlight) await shareStagingFlight;
+    const cache = await caches.open(STAGE_CACHE);
+    const manifest = await cache.match(stageKey("manifest"));
+    const meta = manifest ? await manifest.json() : null;
+    if (!meta) return { title: "", text: "", url: "", files: [] };
+    const files = [];
+    for (let index = 0; index < Number(meta.files ?? 0); index += 1) {
+      const staged = await cache.match(stageKey(`file-${index}`));
+      if (!staged) continue;
+      const blob = await staged.blob();
+      const named = staged.headers.get("x-porchlight-share-name");
+      files.push({
+        name: named ? decodeURIComponent(named) : `Shared ${files.length + 1}`,
+        type: blob.type || "application/octet-stream",
+        blob,
+      });
+    }
+    return { title: meta.title ?? "", text: meta.text ?? "", url: meta.url ?? "", files };
+  } catch { return { title: "", text: "", url: "", files: [] }; }
+}
 
 /* Token relay: the app posts { type: "media-auth", tokensByOrigin } on boot,
  * on connection changes, and on every token renewal. First-load rendition
@@ -66,6 +131,21 @@ self.addEventListener("message", (event) => {
       relayWaiters = [];
       for (const wake of relays) wake();
     }
+  } else if (event.data?.type === "share-staged-request") {
+    // PORCH-105: the app's staged-share retrieval — the staging and the
+    // staged bytes hand to the requesting client over the channel port. No
+    // /api/** request rides this path; the staging clears only on the app's
+    // explicit share-staged-clear (compose has taken the payload).
+    event.waitUntil((async () => {
+      const payload = await readStagedShare();
+      event.source?.postMessage({ type: "share-staged", payload });
+    })());
+  } else if (event.data?.type === "share-staged-clear") {
+    event.waitUntil((async () => {
+      const cache = await caches.open(STAGE_CACHE);
+      for (const key of await cache.keys()) await cache.delete(key);
+      event.source?.postMessage({ type: "share-staged-cleared" });
+    })());
   }
 });
 
@@ -124,6 +204,19 @@ function authedRequest(request, token) {
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
+  // Share target launch first (PORCH-105): the platform's POST to /share is
+  // a launch surface the worker answers itself — staged, then redirected
+  // into the app. It never reaches the rendition filter and never the
+  // network (the hub has no /share route; the launch surface lives here).
+  if (request.method === "POST" && new URL(request.url).pathname === SHARE_TARGET_PATH) {
+    const flight = stageShareTarget(request);
+    // The app's boot can race the staging writes (the launch navigation and
+    // the page's staged-share request can both land immediately); a read
+    // waits for the in-flight staging instead of answering empty.
+    shareStagingFlight = flight.finally(() => { shareStagingFlight = null; });
+    event.respondWith(flight);
+    return;
+  }
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   // Renditions FIRST (the PORCH-051 /api repair, Brian's PORCH-052 report:

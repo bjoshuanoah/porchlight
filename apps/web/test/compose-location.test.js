@@ -67,7 +67,7 @@ test("ac-1: the pre-set resolver carries a context group the author belongs to, 
 
 test("ac-1: the compose card pre-sets the staged target on every open, never mid-open", () => {
   assert.match(composeSlice, /presetRef\.current = composePresetLocationId\(target, groups, data\.identity\?\.id\)/);
-  assert.match(composeSlice, /if \(open && !lastOpenRef\.current\) setGroupId\(presetRef\.current\)/,
+  assert.match(composeSlice, /if \(open && !lastOpenRef\.current\) \{\n\s*setGroupId\(presetRef\.current\);[\s\S]*?\n\s*\}\n\s*lastOpenRef\.current = open;/,
     "the open transition pre-populates the location control from context");
 });
 
@@ -77,9 +77,9 @@ test("ac-1: the shell derives the context target from the surface — a group ro
   assert.match(shell, /setComposeTarget\(composeTargetOfRoute\(window\.location\.pathname\)\)/,
     "the /compose navigation captures the surface it opened from");
   assert.match(shell, /const openCompose = \(\) => \{ setComposeTarget\(composeTargetOfRoute\(route\)\); setComposeOpen\(true\); \}/,
-    "the shell compose controls (AppBar, bottom nav) open from the current surface");
-  assert.match(shell, /<Compose open=\{composeOpen\} onClose=\{\(\) => setComposeOpen\(false\)\} target=\{composeTarget\} \{\.\.\.props\} \/>/,
-    "the staged context target rides the compose mount");
+    "the shell compose controls open from the current surface");
+  assert.match(shell, /<Compose open=\{composeOpen\} onClose=\{\(\) => \{ setComposeOpen\(false\); setComposeStaging\(null\); \}\} target=\{composeTarget\} staged=\{composeStaging\} \{\.\.\.props\} \/>/,
+    "the staged context target rides the compose mount; closing compose discards staged share content");
 });
 
 test("ac-1: the group surface carries the '+ New post' compose entry riding the pre-populated control", async () => {

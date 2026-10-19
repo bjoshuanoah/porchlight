@@ -23,6 +23,7 @@ import {
 } from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
+import { overlayOriginalAction, shareOriginal } from './share-matrix.js';
 // PORCH-070: faces (post header, reply rows) ride the one avatar-face code
 // path — authorized rung fetch through the identity-keyed blob cache,
 // initials stay the metas-less fallback.
@@ -368,7 +369,15 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
     {loadError && <Alert severity="error" sx={slideRailSx}>{loadError}</Alert>}
     {operation.error && <Alert severity="error" sx={slideRailSx}>{operation.error}</Alert>}
     {(post.type === 'photo' || post.type === 'video') && (directImg || directVideo || resource)
-      ? <MediaOverlay shown={overlayShown} downloadBusy={operation.busy}
+      ? (() => {
+          // PORCH-105 (Oct 19 ruling): on touch surfaces the per-media action
+          // is Share — the full-resolution original hands to the native
+          // sheet (Save to my Photos one tap away); where the platform
+          // refused the share (sizes ceiling, capability), the plain
+          // download behavior answers inside shareOriginal. Desktop keeps
+          // the ruled Oct 15 download control exactly as it was.
+          const shareOriginalHere = overlayOriginalAction() === 'share';
+          return <MediaOverlay shown={overlayShown} downloadBusy={operation.busy}
         onDownload={() => operation.run(async () => {
           const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
           if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
@@ -379,7 +388,13 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
           anchor.click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         })}
-        onExpand={post.type === 'photo' && onExpand ? () => onExpand(index) : undefined} />
+        shareAction={shareOriginalHere ? { busy: operation.busy, run: () => operation.run(async () => {
+          const blob = resource?.blob ?? await invoke(actions, 'getMedia', id, 'original', origin);
+          if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
+          await shareOriginal(blob, mediaFileName(id, blob));
+        }) } : null}
+        onExpand={post.type === 'photo' && onExpand ? () => onExpand(index) : undefined} />;
+        })()
       : null}
   </Box>;
 }
@@ -2703,7 +2718,7 @@ function mediaIds(result) {
   return values.map((entry) => typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id).filter(Boolean);
 }
 
-export function Compose({ open, onClose, data = {}, actions = {}, target = null }) {
+export function Compose({ open, onClose, data = {}, actions = {}, target = null, staged = null }) {
   const [type, setType] = useState('text');
   const [body, setBody] = useState('');
   const [caption, setCaption] = useState('');
@@ -2736,11 +2751,27 @@ export function Compose({ open, onClose, data = {}, actions = {}, target = null 
   // what the control never offers.
   const presetRef = useRef(composePresetLocationId(target, groups, data.identity?.id));
   presetRef.current = composePresetLocationId(target, groups, data.identity?.id);
+  // PORCH-105: the staged share (the share-target launch's pre-populated
+  // content) rides a ref so the open transition never races the prop.
+  const stagedRef = useRef(staged);
+  stagedRef.current = staged;
   const lastOpenRef = useRef(false);
   useEffect(() => {
     // Only the open transition pre-sets: a staged choice never loses to a
     // roster refresh that re-renders the preset while the card is open.
-    if (open && !lastOpenRef.current) setGroupId(presetRef.current);
+    if (open && !lastOpenRef.current) {
+      setGroupId(presetRef.current);
+      // PORCH-105 (share target, ac-4): a staged share pre-populates the
+      // matching composer's content — exactly the mode the shared payload
+      // opens, text in the area (or caption for a set of shared photos).
+      const shareStaging = stagedRef.current;
+      if (shareStaging) {
+        setType(shareStaging.type || 'text');
+        setFiles(Array.isArray(shareStaging.files) ? shareStaging.files : []);
+        setBody(shareStaging.body || '');
+        setCaption(shareStaging.caption || '');
+      }
+    }
     lastOpenRef.current = open;
   }, [open]);
   // Debounce-tolerant detection: one resolve per distinct URL once typing
@@ -2789,6 +2820,9 @@ export function Compose({ open, onClose, data = {}, actions = {}, target = null 
             pre-set before any send, even when the author holds no groups
             (the general timeline is the only row). */}
         <FormControl fullWidth><InputLabel id="post-location-label">Post to</InputLabel><Select labelId="post-location-label" label="Post to" data-testid="compose-location" value={groupId} onChange={(event) => setGroupId(event.target.value)}><MenuItem value="">General timeline</MenuItem>{groups.map((group) => <MenuItem key={identityOf(group)} value={identityOf(group)}>{group.name}</MenuItem>)}</Select></FormControl>
+        {/* PORCH-105: the staged share's plain copy — what was staged and
+            what was left out (never a broken dialog, never a silent drop). */}
+        {staged?.notice && <Alert severity="info">{staged.notice}</Alert>}
         {mediaType ? <><Button variant="outlined" component="label">Choose {type}<input hidden type="file" accept={type === 'photo' ? 'image/*' : `${type}/*`} multiple={type === 'photo'} onChange={(event) => { setFiles(Array.from(event.target.files || [])); event.target.value = ''; }} /></Button><Typography variant="body2" color="text.secondary">{files.length ? files.map((file) => file.name).join(', ') : 'Choose an original file to upload before publishing.'}</Typography>
         {type === 'photo' && <ComposerPreviewCarousel files={files} />}
         <TextField label="Caption (optional)" multiline minRows={2} value={caption} onChange={(event) => setCaption(event.target.value)} /></> : <>

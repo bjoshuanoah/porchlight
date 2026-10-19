@@ -286,9 +286,10 @@ test("PORCH-060 ac-5: the single worker carries push delivery and tap-through, a
   const worker = await src("public/sw.js");
   assert.match(worker, /self\.addEventListener\("push"/);
   assert.match(worker, /self\.addEventListener\("notificationclick"/);
-  // The push handler intercepts NOTHING: the worker still has exactly one
-  // respondWith (the rendition fetch boundary), untouched by these listeners.
-  assert.equal(worker.match(/respondWith/g).length, 1);
+  // The push handler intercepts NOTHING: the worker's respondWith calls stay
+  // the rendition fetch boundary plus the share-target launch surface's own
+  // POST answer (PORCH-105) — both /api/**-free; no badge machinery exists.
+  assert.equal(worker.match(/respondWith/g).length, 2);
   // Tap-through: focus the existing client (and hand it the target), or
   // open the post target so the SPA's standard open flow runs.
   assert.match(worker, /self\.clients\.matchAll\(\{ type: "window", includeUncontrolled: true \}\)/);
