@@ -55,6 +55,12 @@ export const lightTokens = {
   amberHover: "#C87918",
   amberSoft: "#F7E8CE",
   amberGlow: "#FFBE57",
+  // Vote arrows (PORCH-104, second round, Brian Oct 19, 2026): green for
+  // Lift, red for Lower, shown on hover or when the viewer has taken that
+  // action — per-mode values picked for contrast on the mode's own surface;
+  // the resting arrow keeps the action bar's default ink.
+  voteUp: "#2E7D32",
+  voteDown: "#B3261E",
   timelineDivider: "#ECE8E1",
   shadowCard: "0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)",
   shadowModal: "0 20px 60px rgba(18,32,51,.18)",
@@ -83,6 +89,9 @@ export const darkTokens = {
   amberHover: "#F0B365",
   amberSoft: "#3D2E1C",
   amberGlow: "#FFBE57",
+  // Lifted steps of the same two arrow accents (contrast on charcoal).
+  voteUp: "#81C784",
+  voteDown: "#E57373",
   timelineDivider: "#38302A",
   shadowCard: "0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.28)",
   shadowModal: "0 20px 60px rgba(0,0,0,.5)",
@@ -157,6 +166,7 @@ function paletteFor(tokens) {
       page: tokens.page, subtle: tokens.subtle, warm: tokens.warm,
       border: tokens.border, borderStrong: tokens.borderStrong,
       muted: tokens.text.muted, amberSoft: tokens.amberSoft, amberGlow: tokens.amberGlow,
+      voteUp: tokens.voteUp, voteDown: tokens.voteDown,
     },
   };
 }
@@ -278,6 +288,7 @@ const CSS_VAR_NAMES = [
   ["textPrimary", "text-primary"], ["textSecondary", "text-secondary"],
   ["textMuted", "text-muted"], ["textInverse", "text-inverse"],
   ["amber", "amber"], ["amberHover", "amber-hover"], ["amberSoft", "amber-soft"], ["amberGlow", "amber-glow"],
+  ["voteUp", "vote-up"], ["voteDown", "vote-down"],
   ["timelineDivider", "timeline-divider"],
   ["shadowCard", "shadow-card"], ["shadowModal", "shadow-modal"], ["shadowCompose", "shadow-compose"],
   ["appbarBg", "appbar-bg"], ["lampGlow", "lamp-glow"], ["lampGlowSoft", "lamp-glow-soft"],
