@@ -1150,7 +1150,11 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
   const compactIconSx = { width: 36, height: 36, p: 0, '&::after': { content: '""', position: 'absolute', inset: -4 } };
   // Vote display (PORCH-104): the count and the highlight derive from the
   // served two values, with the write's optimistic shadow on top while the
-  // signed write is in flight.
+  // signed write is in flight. The highlight is Brian's second-round
+  // rendering (Oct 19, 2026): no circle background marks my action — the
+  // arrow itself takes the color, green for Lift and red for Lower, and it
+  // shows only on hover or when the viewer has taken that action; the
+  // resting arrow keeps the action bar's default ink.
   const servedVote = ownVoteOf(post?.myVote);
   const servedUpCount = upCountOf(post?.upCount);
   const effectiveVote = voteOverride ? voteOverride.vote : servedVote;
@@ -1176,17 +1180,26 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
       () => setVoteOverride(null),
     );
   };
-  const voteButton = (direction, label, Icon) => <Tooltip title={label}><span>
-    <IconButton
-      aria-label={label} disabled={operation.busy || data.offline}
-      sx={{ ...compactIconSx, ...(effectiveVote === direction ? { bgcolor: 'porchlight.amberSoft', color: 'primary.main' } : {}) }}
-      data-testid={`vote-${direction}`}
-      onClick={() => castVote(direction)}
-    >
-      <Icon fontSize="small" />
-      {direction === 'up' && upCount > 0 && <Typography component="span" sx={{ fontSize: 13, lineHeight: 1, fontWeight: 600, color: 'porchlight.muted', ml: 0.5 }}>{upCount}</Typography>}
-    </IconButton>
-  </span></Tooltip>;
+  const voteButton = (direction, label, Icon) => {
+    const taken = effectiveVote === direction;
+    const accent = direction === 'up' ? 'porchlight.voteUp' : 'porchlight.voteDown';
+    return <Tooltip title={label}><span>
+      <IconButton
+        aria-label={label} disabled={operation.busy || data.offline}
+        sx={{ ...compactIconSx,
+          // My action marks the arrow persistently; a hover touches the
+          // same arrow in that button's own accent either way.
+          ...(taken ? { '& svg': { color: accent } } : {}),
+          '&:hover svg': { color: accent },
+        }}
+        data-testid={`vote-${direction}`}
+        onClick={() => castVote(direction)}
+      >
+        <Icon fontSize="small" />
+        {direction === 'up' && upCount > 0 && <Typography component="span" sx={{ fontSize: 13, lineHeight: 1, fontWeight: 600, color: 'porchlight.muted', ml: 0.5 }}>{upCount}</Typography>}
+      </IconButton>
+    </span></Tooltip>;
+  };
   // The feed-entry anchor (PORCH-046 ac-1): a stable per-post measurement
   // point for the reading-place compensation during live arrival.
   return <Card sx={cardSx} data-feed-entry={postKey(post) || undefined}>

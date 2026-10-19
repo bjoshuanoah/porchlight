@@ -1,11 +1,13 @@
 // Vote display (PORCH-104, UI half of the Oct 19 ruling, Brian): the Lift
 // button carries the post's up-vote count (small, quiet, quantity-class;
 // zero renders no number), Lower never carries a number in any state, and
-// the member's own effective vote renders as the pressed state on the
-// corresponding button — data-driven from the served two values, never
-// inferred from prior taps. The pure vote model and the live-arrival merge
-// are pinned in unit tests; the rendered surfaces are swept with the REAL
-// MUI under a real Porchlight theme (the house sweep shape).
+// the member's own effective vote colors the corresponding arrow — green
+// for Lift, red for Lower, shown on hover or when the viewer has taken
+// that action (Brian's second-round rendering, Oct 19, 2026),
+// data-driven from the served two values, never inferred from prior
+// taps. The pure vote model and the live-arrival merge are pinned in unit
+// tests; the rendered surfaces are swept with the REAL MUI under a real
+// Porchlight theme (the house sweep shape).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFile, rm, mkdir } from "node:fs/promises";
@@ -45,10 +47,21 @@ after(async () => { await rm(outDir, { recursive: true, force: true }); });
 
 const ME = "did:porch:me";
 const HOME = "https://family.example";
-// The pressed-state treatments, per mode (the chips' amberSoft pressed
-// tokens, shared naturally — the ruled "otherwise share the pressed-state
-// treatment" branch).
-const PRESSED_HEX = { light: "#F7E8CE", dark: "#3D2E1C" };
+// The vote-arrow accents, per mode (Brian's second-round rendering, Oct
+// 19, 2026): green for Lift, red for Lower, shown on hover or when the
+// viewer has taken that action; the resting arrow keeps the action bar's
+// ink. The retired pressed treatment (the chips' amberSoft circle) is the
+// no-regression witness below.
+const VOTE_HEX = {
+  light: { up: "#2E7D32", down: "#B3261E" },
+  dark: { up: "#81C784", down: "#E57373" },
+};
+const AMBER_PRESSED = { light: "#F7E8CE", dark: "#3D2E1C" };
+// The serialized rule shapes: the taken arrow's persistent rule reads
+// `...-root svg{color:<hex>}`, a hover touch reads `...:hover svg{...}` —
+// the hover rule never contains `root svg{`, so the two disambiguate.
+const persistentRule = (hex) => new RegExp(`root svg\\{color:${hex};`);
+const hoverRule = (hex) => new RegExp(`:hover svg\\{color:${hex};`);
 
 const basePost = (extra = {}) => ({
   _id: "p1", type: "text", body: "The lake was flat all day.",
@@ -118,23 +131,30 @@ test("ac-1: the Lift button carries the count beside the icon; zero renders no n
 test("ac-2: Lower never carries a number in any state (five-down fixture shape)", async () => {
   // The five down-votes live server-side; the wire serves the viewer's own
   // value alone (PORCH-103's payload audits), so the rendered surface can
-  // only ever see myVote: "down" — pressed, and bare of any number.
+  // only ever see myVote: "down" — Lower's arrow carries its red, and
+  // Lower stays bare of any number.
   const html = await renderCard(basePost({ upCount: 2, myVote: "down" }));
   const lower = voteButton(html, "Lower");
   assert.doesNotMatch(lower, />\d</, "no digit, tally, or quantity of any kind renders on Lower");
-  assert.match(lower, /<svg[\s\S]*<\/svg>/, "the pressed Lower renders as a state, not a number");
+  assert.match(lower, /<svg[\s\S]*<\/svg>/, "the taken Lower renders as an arrow state, not a number");
 });
 
-test("ac-3: the served self-state highlights — up presses Lift, down presses Lower, none rests", async () => {
+test("ac-3: the served self-state colors the arrow — up greens Lift, down reds Lower, none rests", async () => {
   const up = await renderCard(basePost({ upCount: 1, myVote: "up" }));
-  assert.match(voteButton(up, "Lift"), new RegExp(PRESSED_HEX.light), "the pressed state rides the warm pressed treatment");
-  assert.doesNotMatch(voteButton(up, "Lower"), new RegExp(PRESSED_HEX.light), "Lower rests when the vote is up");
+  assert.match(voteButton(up, "Lift"), persistentRule(VOTE_HEX.light.up), "the taken Lift arrow carries its green persistently");
+  assert.match(voteButton(up, "Lift"), hoverRule(VOTE_HEX.light.up), "and on hover — the same green");
+  assert.doesNotMatch(voteButton(up, "Lift"), new RegExp(AMBER_PRESSED.light), "no circle background marks the vote — the arrow alone");
+  assert.doesNotMatch(voteButton(up, "Lift"), persistentRule(VOTE_HEX.light.down), "Lift never carries Lower's red persistently");
+  assert.doesNotMatch(voteButton(up, "Lower"), persistentRule(VOTE_HEX.light.down), "Lower rests when the vote is up — its red waits for a hover");
+  assert.doesNotMatch(voteButton(up, "Lower"), new RegExp(AMBER_PRESSED.light), "and no circle background on Lower either");
   const down = await renderCard(basePost({ upCount: 1, myVote: "down" }));
-  assert.doesNotMatch(voteButton(down, "Lift"), new RegExp(PRESSED_HEX.light), "Lift rests when the vote is down");
-  assert.match(voteButton(down, "Lower"), new RegExp(PRESSED_HEX.light), "Lower carries the pressed state when the vote is down");
+  assert.match(voteButton(down, "Lower"), persistentRule(VOTE_HEX.light.down), "Lower carries its red when the vote is down");
+  assert.doesNotMatch(voteButton(down, "Lift"), persistentRule(VOTE_HEX.light.up), "Lift rests when the vote is down — its green waits for a hover");
   const none = await renderCard(basePost({ upCount: 0, myVote: null }));
-  assert.doesNotMatch(voteButton(none, "Lift"), new RegExp(PRESSED_HEX.light), "no self-state, no highlight");
-  assert.doesNotMatch(voteButton(none, "Lower"), new RegExp(PRESSED_HEX.light), "no self-state, no highlight");
+  assert.doesNotMatch(voteButton(none, "Lift"), persistentRule(VOTE_HEX.light.up), "no self-state, no persistent arrow color");
+  assert.doesNotMatch(voteButton(none, "Lower"), persistentRule(VOTE_HEX.light.down), "no self-state, no persistent arrow color");
+  assert.match(voteButton(none, "Lift"), hoverRule(VOTE_HEX.light.up), "a hover still previews Lift's green");
+  assert.doesNotMatch(voteButton(none, "Lift"), new RegExp(AMBER_PRESSED.light), "the resting surface carries no pressed circle");
 });
 
 test("ac-1: the detail surface carries the same render as the card", async () => {
@@ -142,9 +162,10 @@ test("ac-1: the detail surface carries the same render as the card", async () =>
   const lift = voteButton(html, "Lift");
   const lower = voteButton(html, "Lower");
   assert.match(lift, />3</);
-  assert.match(lift, new RegExp(PRESSED_HEX.light));
+  assert.match(lift, persistentRule(VOTE_HEX.light.up), "the detail's taken Lift arrow carries its green like the card");
   assert.doesNotMatch(lower, />\d</);
-  assert.doesNotMatch(lower, new RegExp(PRESSED_HEX.light));
+  assert.doesNotMatch(lower, persistentRule(VOTE_HEX.light.down), "the resting Lower colors only on hover");
+  assert.doesNotMatch(lift, new RegExp(AMBER_PRESSED.light), "no circle background on the detail's vote either");
 });
 
 /* ---- source sweeps: one derivation, one write, no other vote data -------- */
@@ -222,7 +243,7 @@ test("ac-3: the optimistic shadow and the rollback wiring ride the card's write"
   assert.match(postCard, /result\?\.vote\?\.effective/);
 });
 
-test("ac-5: count and highlight carry both display modes identically", async () => {
+test("ac-5: count and arrow accent carry both display modes identically", async () => {
   const post = basePost({ upCount: 3, myVote: "up" });
   const light = await renderCard(post, { mode: "light" });
   const dark = await renderCard(post, { mode: "dark" });
@@ -231,7 +252,9 @@ test("ac-5: count and highlight carry both display modes identically", async () 
     const lower = voteButton(html, "Lower");
     assert.match(lift, />3</, "the count survives the mode switch unchanged");
     assert.doesNotMatch(lower, />\d</, "Lower stays bare in both modes");
+    assert.doesNotMatch(lift, new RegExp(AMBER_PRESSED.light), "no circle background in either mode");
   }
-  assert.match(voteButton(light, "Lift"), new RegExp(PRESSED_HEX.light));
-  assert.match(voteButton(dark, "Lift"), new RegExp(PRESSED_HEX.dark), "the dark pressed treatment rides the dark token set");
+  assert.match(voteButton(light, "Lift"), persistentRule(VOTE_HEX.light.up), "the light treatment rides the light token set");
+  assert.match(voteButton(dark, "Lift"), persistentRule(VOTE_HEX.dark.up), "the lifted green rides the dark token set");
+  assert.doesNotMatch(voteButton(dark, "Lift"), persistentRule(VOTE_HEX.light.up), "the dark set never serves the light green");
 });
