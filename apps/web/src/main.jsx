@@ -51,6 +51,9 @@ import { InstallCta } from "./install.jsx";
 // shell; the push subscription flow (explicit Enable tap → VAPID-scoped
 // subscribe → hub-side registration) rides the pure module's injected flow.
 import { enablePush } from "./notifications.js";
+// PORCH-109: the installed-context turn-on-notifications banner rides the
+// shell's content surface; its tap is the same walked enable flow.
+import { NotificationsBanner } from "./notifications.jsx";
 
 // PORCH-042: both modes' custom properties land in one static <style> block
 // before the first render — component CSS resolves from the token layer with
@@ -165,6 +168,10 @@ function App() {
   // and display-mode capability — never a server write.
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installDismissedAt, setInstallDismissedAt] = useState(() => readLocal(stored, origin, "install-dismissed-at", 0));
+  // PORCH-109: the banner's own dismissal key — the same established
+  // suppression window class, keyed separately from the install surfaces
+  // (a banner "Not now" never hides the install CTA or the iOS handoff).
+  const [bannerDismissedAt, setBannerDismissedAt] = useState(() => readLocal(stored, origin, "notifications-banner-dismissed-at", 0));
   const [standaloneLaunch, setStandaloneLaunch] = useState(() => isStandaloneLaunch({
     navigatorStandalone: window.navigator.standalone,
     standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
@@ -1483,6 +1490,14 @@ function App() {
       writeLocal(stored, origin, "install-dismissed-at", dismissedAt);
       setInstallDismissedAt(dismissedAt);
     },
+    // PORCH-109: the installed-context banner's dismissal window — the
+    // established class (14 days), client-local, its own key.
+    notificationsBannerDismissed: () => installSuppressed(readLocal(stored, origin, "notifications-banner-dismissed-at", 0)),
+    dismissNotificationsBanner: () => {
+      const dismissedAt = Date.now();
+      writeLocal(stored, origin, "notifications-banner-dismissed-at", dismissedAt);
+      setBannerDismissedAt(dismissedAt);
+    },
     // Rendition transport readiness (PORCH-044): true once the auth-relaying
     // rendition worker is live — surfaces then load rendition URLs directly
     // (srcset/sizes, video poster/src) and the browser cache answers repeats.
@@ -1658,6 +1673,10 @@ function App() {
         This device's connection ended. Saved moments remain on this device. Ask your family's owner for a device link — opening it here reconnects this device.
       </Alert>}
       {!frontDoor && networkLoaded && !network && identity && <Alert severity="info" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate("/setup")}>Continue</Button>}>Porch setup is not finished on this hub yet.</Alert>}
+      {/* PORCH-109: the installed-context banner rides the content surface;
+          its own gate (installed context, open session, notifications off)
+          renders it or nothing. */}
+      {!frontDoor && <NotificationsBanner {...props} />}
       {page}
     </Container>
     {!frontDoor && <Paper elevation={0} sx={{ display: { xs: "block", lg: "none" }, position: "fixed", left: 0, bottom: 0, right: 0, zIndex: 10, borderTop: "1px solid", borderColor: "divider", pb: "env(safe-area-inset-bottom)" }}>

@@ -10,6 +10,7 @@ import {
   Alert, Button, Card, CardContent, List, ListItem, ListItemText, Stack,
   Switch, Typography,
 } from "@mui/material";
+import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
 import IosShareOutlined from "@mui/icons-material/IosShareOutlined";
 import { webkitClass } from "./install.js";
 import {
@@ -22,8 +23,10 @@ import {
   normalizeSettings,
   notificationCapability,
   notificationSection,
+  notificationsBannerVisible,
   reenableGuidance,
   receivesOwnerEvents,
+  walkedEnable,
   withEvent,
   withMaster,
   withMute,
@@ -161,36 +164,31 @@ export function NotificationSettings({ data, actions }) {
       await saveOptimistic(withMaster(previousSettings, true));
       return;
     }
-    // The walked enable flow (ac-2): the off-to-on tap IS the only prompt
-    // path. The hub's registration gate accepts only enabled identities,
-    // so the off-to-on write persists enabled=true through the settings
-    // route FIRST, then this same tap runs the prompt — pushManager
-    // .subscribe fires from here and nowhere else, never at load and
-    // never on navigation.
+    // The walked enable flow (ac-2; PORCH-109): the off-to-on tap IS the
+    // only prompt path. THE single enable path — the installed-app banner's
+    // Turn on action runs the same shared walkedEnable: the off-to-on
+    // settings write persists enabled=true through the settings route
+    // FIRST, then this same tap runs the prompt — pushManager.subscribe
+    // fires from the enable action and nowhere else, never at load and
+    // never on navigation. Any failure after the write (a failed prompt
+    // included) reverts the route-persisted row to enabled=false, which
+    // also expires any subscription the attempt registered.
     setBusy(true);
     try {
-      const saved = await actions.saveNotificationSettings(withMaster(previousSettings, true));
-      const persisted = normalizeSettings(saved?.settings ?? null);
-      setSettings(persisted);
-      if (!persisted.enabled) throw new Error("The hub could not turn notifications on.");
-      await actions.enableNotifications();
+      const settled = await walkedEnable({
+        load: actions.loadNotificationSettings,
+        save: actions.saveNotificationSettings,
+        enable: actions.enableNotifications,
+      });
+      setSettings(settled);
       setDeviceOn(true);
       setDenied(false);
-      // The authoritative row is the hub's state after the walked flow.
-      const settled = await actions.loadNotificationSettings();
-      setSettings(normalizeSettings(settled?.settings ?? persisted));
     } catch (cause) {
-      // The walked flow never leaves an enabled row behind a failed
-      // prompt: the revert write restores enabled=false through the
-      // route — which also expires any subscription the enable attempt
-      // registered — and enabled stays false on denial.
+      // The walked flow never leaves an enabled row behind a failed prompt:
+      // walkedEnable already reverted the hub-side row; the local state
+      // rolls back to the previous (off) row.
       setSettings(previousSettings);
       setDeviceOn(false);
-      try {
-        await actions.saveNotificationSettings(withMaster(previousSettings, false));
-      } catch {
-        // The local rollback stands; the next authoritative load corrects.
-      }
       const refused = cause && cause.name === "NotAllowedError";
       if (refused) setDenied(true);
       setError(refused ? reenableGuidance(capability.webkit) : (cause?.message || "The hub could not complete this action."));
@@ -288,4 +286,115 @@ export function NotificationSettings({ data, actions }) {
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
     </CardContent>
   </Card>;
+}
+// The installed-context banner (PORCH-109, Brian Oct 19, 2026): a small
+// turn-on-notifications affordance riding the app's content surface while
+// the installed app runs with an open identity session and notifications
+// not enabled. Visibility reads exactly the three inputs of the pure gate
+// (notificationsBannerVisible) — installed context (the display-mode
+// standalone fact, injected from the shell), the open session, and the
+// Oct 13 state machine's two "off" inputs; the hub row arrives through
+// the actions the shell already wires. It never prompts by itself: the
+// Turn on tap is the walked enable flow's explicit member action (THE
+// shared walkedEnable), so the zero-ambient-prompt law carries fully.
+// An unreadable row, a suppressed dismissal, a plain browser tab, or an
+// enabled identity each render nothing.
+const bannerIconSx = { color: "var(--porch-amber)" };
+
+export function NotificationsBanner({ data, actions }) {
+  const standalone = Boolean(data?.standalone);
+  const identity = data?.identity;
+  // The gate's hub input: the open identity's settings row, read once in
+  // installed context with an open session — a plain browser tab fetches
+  // nothing here and touches no push API. A failed read leaves the row
+  // unknown: the gate rides an authoritative read, never a guess.
+  const [row, setRow] = useState(null);
+  // The real permission is read as a fact (a status read, never a prompt —
+  // window.Notification.permission asks nothing); refreshed on the tap's
+  // resolution so the gate and the guidance mirror what the browser said.
+  const [permission, setPermission] = useState(null);
+  const [denied, setDenied] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  // The dismissal window (ac-4) rides the established suppression class —
+  // client-local, per origin, keyed separately from the install surfaces.
+  const [hiddenByDismissal, setHiddenByDismissal] = useState(
+    () => (typeof actions?.notificationsBannerDismissed === "function" ? actions.notificationsBannerDismissed() : false),
+  );
+
+  const gateFetchable = Boolean(standalone) && Boolean(identity?.id)
+    && typeof actions?.loadNotificationSettings === "function";
+  useEffect(() => {
+    if (!gateFetchable) return undefined;
+    if (typeof window.Notification === "function") setPermission(window.Notification.permission);
+    let stale = false;
+    void (async () => {
+      try {
+        const result = await actions.loadNotificationSettings();
+        if (!stale) setRow(normalizeSettings(result?.settings ?? null));
+      } catch {
+        if (!stale) setRow(null);
+      }
+    })();
+    return () => { stale = true; };
+  }, [gateFetchable, identity?.id]);
+
+  // The enable retires the banner immediately (the gate reads the settled
+  // row and the refreshed permission); a denial keeps it visible while the
+  // off state holds — enabled=false is exactly what the walked flow reverted
+  // to, so no extra state pretends here.
+  const visible = notificationsBannerVisible({
+    standalone,
+    sessionOpen: Boolean(identity?.id),
+    settings: row,
+    permission,
+    suppressed: hiddenByDismissal,
+  });
+  if (!visible) return null;
+
+  const webkit = webkitClass(window.navigator.userAgent);
+
+  async function turnOn() {
+    setError("");
+    setBusy(true);
+    try {
+      // THE walked enable flow (ac-2): the shared implementation with the
+      // settings card's master toggle — enabled=true persists first, the
+      // prompt fires on this tap, the subscription registers, the settled
+      // row and the real permission re-derive the gate.
+      const settled = await walkedEnable({
+        load: actions.loadNotificationSettings,
+        save: actions.saveNotificationSettings,
+        enable: actions.enableNotifications,
+      });
+      setRow(settled);
+      setPermission(typeof window.Notification === "function" ? window.Notification.permission : null);
+    } catch (cause) {
+      const refused = cause && cause.name === "NotAllowedError";
+      if (refused) {
+        setDenied(true);
+        setPermission(typeof window.Notification === "function" ? window.Notification.permission : "denied");
+      }
+      // Denied: enabled=false held (the walked flow reverted), no
+      // subscription, and the banner stays visible with the platform's
+      // re-enable guidance (ac-3) — still off, still truthful.
+      setError(refused ? reenableGuidance(webkit) : (cause?.message || "The hub could not complete this action."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Alert severity="info" sx={{ mb: 2 }} icon={<NotificationsOutlined sx={bannerIconSx} />}
+    action={<Stack direction="row" spacing={1}>
+      <Button color="inherit" size="small" disabled={busy}
+        onClick={() => void turnOn()} data-testid="notifications-banner-turn-on">Turn on</Button>
+      <Button color="inherit" size="small" disabled={busy}
+        onClick={() => { if (typeof actions?.dismissNotificationsBanner === "function") { actions.dismissNotificationsBanner(); setHiddenByDismissal(true); } }}
+        data-testid="notifications-banner-dismiss">Not now</Button>
+    </Stack>}
+    data-testid="notifications-banner">
+    <Typography variant="body2">Turn on notifications to hear when family moments arrive.</Typography>
+    {denied && <Typography variant="body2" sx={{ mt: 1 }}>{reenableGuidance(webkit)}</Typography>}
+    {error && !denied && <Typography variant="body2" sx={{ mt: 1 }}>{error}</Typography>}
+  </Alert>;
 }
