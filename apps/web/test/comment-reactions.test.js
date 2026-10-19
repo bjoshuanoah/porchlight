@@ -70,8 +70,16 @@ test("ac-1: the card slice row renders the smile control and its chips — the s
   assert.match(html, /aria-label="Add a reaction"/, "every rendered comment row carries the smile control opening the picker");
   assert.match(html, /aria-pressed="true"/, "the member's joined chip renders as a toggle");
   assert.match(html, /Reaction /, "the row's reaction chips render beside the row");
-  assert.match(socialSource, /<PresentReactions post=\{post\} comment=\{reply\} data=\{data\} actions=\{actions\} spacingY=\{1\} \/>/,
-    "the card slice row mounts the SHARED bar — no second implementation");
+  assert.match(socialSource, /<PresentReactions post=\{post\} comment=\{reply\} data=\{data\} actions=\{actions\} spacingY=\{1\}\s*\n\s*actionRow=\{<>/,
+    "the card slice row mounts the SHARED bar with the row's Reply action in the same section — no second implementation");
+  // Brian's Oct 19 ruling: the smile control rides the SAME section as
+  // Reply and the "···" overflow menu, and the dashed circle is gone —
+  // compact like the row's own buttons (32, matching CommentOverflow).
+  const smileAt = html.indexOf('aria-label="Add a reaction"');
+  const replyAction = html.indexOf('>Reply</');
+  assert.ok(replyAction > -1 && smileAt > replyAction, "the smile control renders in the Reply action section, not a detached row");
+  assert.match(html, /aria-label="Add a reaction"[\s\S]*?aria-label="Reactions from your family"/, "the row's chips render quiet in the line below the action section");
+  assert.match(socialSource, /actionRow \|\| comment\s*\? \{ width: 32, height: 32, p: 0, color: 'text\.secondary'/, "the comment smile control is compact — the oversized dashed circle is gone");
 });
 
 test("ac-1: the detail column row renders the same shared bar", async () => {
@@ -81,6 +89,13 @@ test("ac-1: the detail column row renders the same shared bar", async () => {
   }));
   assert.match(html, /aria-label="Add a reaction"/, "the conversation column row carries the smile control");
   assert.match(html, /aria-pressed="true"/, "the joined chip renders on the detail column too");
+  // Brian's Oct 19 ruling: the smile control rides the SAME section as the
+  // row's Reply action (compact, dashed circle gone); the chips render in
+  // the quiet line below.
+  const smileAt = html.indexOf('aria-label="Add a reaction"');
+  const replyAction = html.indexOf('>Reply</');
+  assert.ok(replyAction > -1 && smileAt > replyAction, "the detail column row carries the smile control in the Reply action section");
+  assert.match(html, /aria-label="Add a reaction"[\s\S]*?aria-label="Reactions from your family"/, "the detail column row's chips render in the line below");
   // The bar mounts inside the Reply row component — one mount site, keyed by
   // the row's identity (the ReplyThread render keys rows by identityOf).
   const replyBody = socialSource.slice(socialSource.indexOf("function Reply("));

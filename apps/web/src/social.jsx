@@ -669,7 +669,13 @@ export function ReactionReveal({ chip, ownDid, data, post, actions }) {
 // payload), and the row keys its bar by comment id; every gesture, chip,
 // count, and reveal rule is the shipped post-bar contract, no second
 // implementation.
-export function PresentReactions({ post, comment = null, data, actions, reactionState, spacingY = 2, actionBar = null }) {
+// Amended PORCH-101 (Brian, Oct 19, 2026 — from live use of the shipped
+// chips): the comment row's smile control rides the SAME section as the
+// row's Reply action and its "···" overflow menu — pass those as
+// `actionRow` and the control joins them inline; and the dashed circle is
+// gone from every comment bar — the control renders at the row's own
+// compact icon size (32, matching the overflow button), no decoration.
+export function PresentReactions({ post, comment = null, data, actions, reactionState, spacingY = 2, actionBar = null, actionRow = null }) {
   // Controlled mode (PORCH-041 ac-4): the detail card and the conversation
   // column reflect ONE origin conversation — when reactionState is provided
   // both bars render the PostDetail owner's rows and every toggle lands in
@@ -842,19 +848,23 @@ export function PresentReactions({ post, comment = null, data, actions, reaction
       }} />;
   });
   return <>
-    <Stack direction="row" spacing={actionBar ? 0 : 1} alignItems="center" flexWrap="wrap"
-      sx={{ mt: spacingY, ...(actionBar ? { justifyContent: 'flex-start', gap: '8px' } : {}) }}
-      aria-label={actionBar ? 'Post actions' : 'Reactions from your family'}>
+    <Stack direction="row" spacing={actionBar || actionRow ? 0 : 1} alignItems="center" flexWrap="wrap"
+      sx={{ ...(actionBar ? { justifyContent: 'flex-start', gap: '8px' } : { ...(actionRow ? { justifyContent: 'flex-start', gap: '4px' } : {}) }), mt: spacingY }}
+      aria-label={actionBar ? 'Post actions' : actionRow ? 'Comment actions' : 'Reactions from your family'}>
       {actionBar}
-      {!actionBar && chipList}
+      {actionRow}
+      {!actionBar && !actionRow && chipList}
       <Tooltip title="React"><span><IconButton aria-label={actionBar ? 'React' : 'Add a reaction'}
         aria-haspopup="dialog" disabled={operation.busy || Boolean(data?.offline)}
         onClick={(event) => setAnchor(event.currentTarget)}
-        sx={actionBar ? { width: 36, height: 36, p: 0, '&::after': { content: '""', position: 'absolute', inset: -4 } } : { width: 40, height: 40, border: `1px dashed ${cssVars.borderStrong}` }}>
-        <AddReactionOutlined fontSize="small" />
+        sx={actionBar ? { width: 36, height: 36, p: 0, '&::after': { content: '""', position: 'absolute', inset: -4 } }
+          : actionRow || comment
+            ? { width: 32, height: 32, p: 0, color: 'text.secondary', '&::after': { content: '""', position: 'absolute', inset: -4 } }
+            : { width: 40, height: 40, border: `1px dashed ${cssVars.borderStrong}` }}>
+        <AddReactionOutlined fontSize="small" sx={(!actionBar && (actionRow || comment)) ? { fontSize: 18 } : undefined} />
       </IconButton></span></Tooltip>
     </Stack>
-    {actionBar && chipList.length > 0 && <Stack direction="row" spacing={1} flexWrap="wrap"
+    {(actionBar || actionRow) && chipList.length > 0 && <Stack direction="row" spacing={1} flexWrap="wrap"
       aria-label="Reactions from your family" sx={{ mt: photoFirst.spacing.actionsReactions / 8 }}>{chipList}</Stack>}
     {anchor && <Suspense fallback={<LanternLoader size={20} label="Your reaction picker" />}>
       <EmojiPicker open anchorEl={anchor} onClose={() => setAnchor(null)} own={own} onToggle={toggle} busy={operation.busy} />
@@ -1901,19 +1911,23 @@ export function ReplySliceBlock({ post, slice, data, actions, offline, origin, o
           </Typography>
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{renderReplyBody(reply, data, navigate)}</Typography>
           {reply.preview && <LinkPreviewBlock preview={reply.preview} origin={origin ?? previewOrigin(reply, data)} compact />}
-          {!offline && depth < 8 && <Stack direction="row" spacing={0.5} alignItems="center">
-            <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}
-              sx={{ px: 0, minWidth: 0 }}>Reply</Button>
-            <CommentOverflow row={reply} data={data} offline={offline}
-              onEdit={(r) => onEditTarget?.(r)} onDelete={(r) => onDeleteComment?.(r)} />
-          </Stack>}
-          {/* PORCH-101 (Brian, Oct 16): every rendered comment row carries
-              the SAME reaction affordance class as the post bar — the smile
-              control opening the picker (PORCH-036, open vocabulary) plus
-              this row's rendered chips. The shared component keys its rows
-              by comment id; the row's chips stay quiet beside it, exactly
-              like the post's, on both comment surfaces. */}
-          <PresentReactions post={post} comment={reply} data={data} actions={actions} spacingY={1} />
+          {!offline && depth < 8 ? <PresentReactions post={post} comment={reply} data={data} actions={actions} spacingY={1}
+            actionRow={<>
+              <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}
+                sx={{ px: 0, minWidth: 0 }}>Reply</Button>
+              <CommentOverflow row={reply} data={data} offline={offline}
+                onEdit={(r) => onEditTarget?.(r)} onDelete={(r) => onDeleteComment?.(r)} />
+            </>} />
+            : <PresentReactions post={post} comment={reply} data={data} actions={actions} spacingY={1} />}
+          {/* PORCH-101 (Brian, Oct 16, amended Oct 19): every rendered comment
+              row carries the SAME reaction affordance class as the post bar —
+              the smile control opening the picker (PORCH-036, open
+              vocabulary) plus this row's rendered chips. Brian's Oct 19
+              ruling: the smile control rides the SAME section as the row's
+              Reply action and its "···" overflow menu (passed inline as
+              actionRow, dashed circle gone, compact like the menu button),
+              with the row's chips quiet in the line below. The shared
+              component keys its rows by comment id. */}
           {/* PORCH-099 (Brian, Oct 18): the reply composer mounts in context —
               directly beneath the comment it answers, one rung into that
               comment's tree, never at the bottom of the whole conversation.
@@ -2358,16 +2372,19 @@ function Reply({ reply, depth, children, data, post, actions, navigate, composer
         context — beneath the row it answers, one rung into this row's tree
         — never at the bottom of the conversation.
         PORCH-094: the row's own overflow carries its lifecycle affordances,
-        authority-gated exactly as the card slice renders them. */}
-    {depth < 8 && <Stack direction="row" spacing={0.5} alignItems="center">
-      <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}>Reply</Button>
-      {rowLifecycle && <CommentOverflow row={reply} data={data}
-        onEdit={rowLifecycle.onEdit ?? null} onDelete={rowLifecycle.onDelete ?? null} />}
-    </Stack>}
-    {/* PORCH-101 (Brian, Oct 16): the row's reaction bar — the shared bar
-        family, keyed by this comment's id, chips quiet beside the row; the
-        toggle writes the comment-subject signed payload. */}
-    <PresentReactions post={post} comment={reply} data={data} actions={actions} spacingY={1} />
+        authority-gated exactly as the card slice renders them.
+        PORCH-101 (Brian, Oct 19): the row's smile control rides the SAME
+        section as Reply and the overflow menu — passed inline as the bar's
+        actionRow, dashed circle gone, compact like the menu button. */}
+    <PresentReactions post={post} comment={reply} data={data} actions={actions} spacingY={1}
+      actionRow={depth < 8 ? <>
+        <Button size="small" onClick={() => onReplyTarget?.(id === composerFor ? null : id)}>Reply</Button>
+        {rowLifecycle && <CommentOverflow row={reply} data={data}
+          onEdit={rowLifecycle.onEdit ?? null} onDelete={rowLifecycle.onDelete ?? null} />}
+      </> : null} />
+    {/* The bar mounts keyed by this comment's id — the shared bar family
+        (PORCH-101), chips quiet below the action line; the toggle writes
+        the comment-subject signed payload. */}
     {composer && <Box sx={{ ml: { xs: 1.5, sm: 3 }, pl: 2 }}>{composer}</Box>}
     {children}
   </Box>;
