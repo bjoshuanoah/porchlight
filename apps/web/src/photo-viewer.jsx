@@ -8,11 +8,12 @@
 // the established 140–220ms ease, and no counts and no engagement surface.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, IconButton, Stack, Typography } from '@mui/material';
-import { CloseOutlined, OpenInFullOutlined, PhotoLibraryOutlined } from '@mui/icons-material';
+import { CloseOutlined, OpenInFullOutlined, PhotoLibraryOutlined, ShareOutlined } from '@mui/icons-material';
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 import { carouselIndex } from './photo-first.js';
 import { mediaFileName, renditionSrc, rungKindForViewport, stampedAspect } from './media-rung.js';
 import { originOf } from './feed-filter.js';
+import { endCardPlan, overlayOriginalAction, shareDeviceClass, shareFileCapable, shareOriginal } from './share-matrix.js';
 import {
   DEFAULT_ZOOM, DOUBLE_TAP_MS, FADE_MS, POSITION_HOLD_MS, motion, viewerTokens,
   fitDimensions, needsOriginal, panBounds, pinchTo, viewerTotalCount, wheelZoom, zoomTo,
@@ -35,12 +36,17 @@ const settleSx = {
 
 // ac-1: the fading overlay control. One instance per media element, top-
 // right, inside the media bounds: a translucent dark scrim behind a
-// glass-strength blur carrying exactly two actions — "↓ Original" and the
-// expand icon. Revealed by hover (pointer devices) or tap (touch), it fades
-// with the media chrome on the established easing, and while faded its hit
-// area is disabled (pointer-events: none) so swipes and page gestures pass
-// through untouched. Share is absent by contract: it rides the ··· menus.
-export function MediaOverlay({ shown, onDownload, onExpand, downloadBusy = false }) {
+// glass-strength blur carrying two actions and the expand icon. Revealed by
+// hover (pointer devices) or tap (touch), it fades with the media chrome on
+// the established easing, and while faded its hit area is disabled
+// (pointer-events: none) so swipes and page gestures pass through
+// untouched. The action follows the Oct 19 ruling: on touch devices the
+// control is Share (the original's bytes hand to the native sheet; the
+// caller's run resolves to the same plain download behavior where the
+// platform refused); on desktop the control stays the ruled "↓ Original"
+// download. The ··· overflow share (PORCH-078) composes: a card share and
+// a media-original share are different targets, both legal.
+export function MediaOverlay({ shown, onDownload, onExpand, downloadBusy = false, shareAction = null }) {
   return <Stack
     aria-label="Media overlay"
     onClick={(event) => event.stopPropagation()}
@@ -54,8 +60,13 @@ export function MediaOverlay({ shown, onDownload, onExpand, downloadBusy = false
       opacity: shown ? 1 : 0, pointerEvents: shown ? 'auto' : 'none',
       ...fade(),
     }}>
-    <Button size="small" disabled={downloadBusy} onClick={onDownload}
-      sx={{ px: 0.75, minWidth: 0, fontSize: 14, fontWeight: 600, color: viewerTokens.text }}>↓ Original</Button>
+    {shareAction
+      ? <Button size="small" disabled={shareAction.busy} onClick={shareAction.run}
+          sx={{ px: 0.75, minWidth: 0, fontSize: 14, fontWeight: 600, color: viewerTokens.text }}>
+          <ShareOutlined fontSize="small" sx={{ mr: 0.5 }} /> Share
+        </Button>
+      : <Button size="small" disabled={downloadBusy} onClick={onDownload}
+          sx={{ px: 0.75, minWidth: 0, fontSize: 14, fontWeight: 600, color: viewerTokens.text }}>↓ Original</Button>}
     {onExpand && <IconButton size="small" aria-label="View full screen" onClick={onExpand}
       sx={{ color: viewerTokens.text }}><OpenInFullOutlined fontSize="small" /></IconButton>}
   </Stack>;
@@ -117,13 +128,24 @@ function PluralImages(count) {
   return `${count} full-resolution image${count === 1 ? '' : 's'}`;
 }
 
-// ac-4: the branded end-card, rendered as the sequence's LAST SLIDE inside
+// ac-3: the branded end-card, rendered as the sequence's LAST SLIDE inside
 // the paged surface (never a popup): thumbnail-stack icon, heading, the
 // quantity line, and the strong amber primary button (48px class). Tapping
-// it fetches the set zip via the bulk-original archive route and hands the
-// download to the browser; in-flight state is plain language and failures
-// name their state with a clean retry on the same button.
-function EndCardSlide({ count, onBulk }) {
+// it books the platform matrix (Oct 19 ruling): iOS fetches the set zip and
+// hands it to the native sheet; Android shares up to 10 full-resolution
+// photos as the set, and beyond 10 rides the bulk zip route — the shipped
+// archive route, reused, never rebuilt; desktop keeps the zip download
+// exactly as ruled Oct 15. In-flight state is plain language named per path
+// (sharing / fetching); failures name their state with a clean retry on the
+// same button.
+const endCardCopy = {
+  'share-zip': { heading: 'Share all originals', busy: 'Sharing your originals…' },
+  'share-files': { heading: 'Share all originals', busy: 'Sharing your originals…' },
+  'zip-download': { heading: 'Download all originals', busy: 'Fetching your originals…' },
+};
+
+function EndCardSlide({ count, onBulk, plan }) {
+  const copy = endCardCopy[plan.kind] ?? endCardCopy['zip-download'];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const run = async () => {
@@ -138,12 +160,12 @@ function EndCardSlide({ count, onBulk }) {
       display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}>
     <Stack spacing={2} alignItems="center" sx={{ maxWidth: 420, textAlign: 'center' }}>
       <PhotoLibraryOutlined sx={{ fontSize: 44, color: viewerTokens.amber }} />
-      <Typography variant="h3" sx={{ color: viewerTokens.text }}>Download all originals</Typography>
+      <Typography variant="h3" sx={{ color: viewerTokens.text }}>{copy.heading}</Typography>
       <Typography variant="body2" sx={{ color: viewerTokens.textSecondary }}>{PluralImages(count)}</Typography>
       <Button variant="contained" disabled={busy} onClick={run}
         sx={{ height: 48, px: 3, borderRadius: 9999, minWidth: 220, bgcolor: viewerTokens.amber,
           '&:hover': { bgcolor: viewerTokens.amberHover }, color: viewerTokens.amberInk }}>
-        {busy ? 'Fetching your originals…' : 'Download all originals'}
+        {busy ? copy.busy : copy.heading}
       </Button>
       {error && <Alert severity="error" sx={{ width: '100%' }}>{error}</Alert>}
     </Stack>
@@ -163,6 +185,12 @@ export function PhotoViewer({ post, ids, actions, startIndex = 0, onClose }) {
   const photos = (Array.isArray(ids) ? ids : []).filter(Boolean);
   const origin = post?.origin ?? originOf(post);
   const total = viewerTotalCount(photos.length);
+  // Oct 19 ruling: touch surfaces move originals by share — the viewer's
+  // per-media control shares the active photo's original through the native
+  // sheet (the plain download behavior answers where the platform refused);
+  // desktop keeps the ruled Oct 15 download. The end-card books the
+  // platform matrix for the bulk action.
+  const shareActive = overlayOriginalAction() === 'share';
   const [position, setPosition] = useState(Math.min(Math.max(startIndex, 0), Math.max(0, photos.length - 1)));
   const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
   const [chromeUp, setChromeUp] = useState(true);
@@ -465,11 +493,25 @@ export function PhotoViewer({ post, ids, actions, startIndex = 0, onClose }) {
   };
 
   const [downloadError, setDownloadError] = useState('');
-  const downloadOriginal = async () => {
-    if (!activeId) return;
+  const fetchOriginal = async () => {
+    if (!activeId) return null;
     if (typeof actions?.getMedia !== 'function') throw new Error('Media is not available here yet.');
     const blob = await actions.getMedia(activeId, 'original', origin, null);
     if (!(blob instanceof Blob)) throw new Error('Your hub did not return the original.');
+    return blob;
+  };
+  // Oct 19 ruling: on touch the control shares the original through the
+  // native sheet; where the platform refused (or the share failed), the
+  // plain download behavior answers inside shareOriginal — never an error
+  // path family, never the retired mobile download control.
+  const shareFromViewer = async () => {
+    const blob = await fetchOriginal();
+    if (!blob) return;
+    await shareOriginal(blob, mediaFileName(activeId, blob));
+  };
+  const downloadOriginal = async () => {
+    if (!activeId) return;
+    const blob = await fetchOriginal();
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -480,6 +522,11 @@ export function PhotoViewer({ post, ids, actions, startIndex = 0, onClose }) {
   const downloadActive = () => {
     setDownloadError('');
     return downloadOriginal().catch((failure) => setDownloadError(failure?.message || 'That did not work. Please try again.'));
+  };
+  const shareOrDownload = () => {
+    setDownloadError('');
+    const run = shareActive ? shareFromViewer : downloadOriginal;
+    return run().catch((failure) => setDownloadError(failure?.message || 'That did not work. Please try again.'));
   };
 
   const chips = {
@@ -508,7 +555,9 @@ export function PhotoViewer({ post, ids, actions, startIndex = 0, onClose }) {
             originalUrl={originalFor} active={!onEndCard} zoom={zoom} fit={fit} />
         </Box>
       ))}
-      {photos.length > 0 && <EndCardSlide count={photos.length} onBulk={async () => {
+      {photos.length > 0 && <EndCardSlide count={photos.length}
+        plan={endCardPlan({ deviceClass: shareActive ? shareDeviceClass() : 'desktop', photos: photos.length, shareCapable: shareFileCapable() })}
+        onBulk={async () => {
         if (typeof actions?.bulkOriginals !== 'function') throw new Error('Bulk download is not available here yet.');
         await actions.bulkOriginals(post);
       }} />}
@@ -520,8 +569,10 @@ export function PhotoViewer({ post, ids, actions, startIndex = 0, onClose }) {
         borderRadius: 9999, px: 0.75, py: 0.25, boxShadow: 2,
         opacity: chromeUp ? 1 : 0, pointerEvents: chromeUp ? 'auto' : 'none', ...fade(),
       }}>
-      {activeId && <Button size="small" onClick={() => downloadActive()}
-        sx={{ px: 0.75, minWidth: 0, fontSize: 14, fontWeight: 600, color: viewerTokens.text }}>↓ Original</Button>}
+      {activeId && <Button size="small" onClick={() => shareOrDownload()}
+        sx={{ px: 0.75, minWidth: 0, fontSize: 14, fontWeight: 600, color: viewerTokens.text }}>
+        {shareActive ? <><ShareOutlined fontSize="small" sx={{ mr: 0.5 }} /> Share</> : <>↓ Original</>}
+      </Button>}
       <IconButton size="small" aria-label="Close" onClick={closeViewer} sx={{ color: viewerTokens.text }}><CloseOutlined fontSize="small" /></IconButton>
     </Stack>
     {downloadError && <Alert severity="error" sx={{

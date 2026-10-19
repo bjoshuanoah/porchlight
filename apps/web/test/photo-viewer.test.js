@@ -24,7 +24,10 @@ const main = readFileSync(here('../src/main.jsx'), 'utf8');
 const actions = readFileSync(here('../src/member-actions.js'), 'utf8');
 
 // ac-1 — retirement sweep: no per-image download text control outside the
-// overlay renders anywhere (DOM-sweep equivalent: repo source scan).
+// overlay renders anywhere (DOM-sweep equivalent: repo source scan). Amended
+// by PORCH-105 (Oct 19, 2026): on touch surfaces the overlay's per-media
+// action is Share — the retired per-media download row stays retired, and
+// the overlay's own desktop branch keeps the ruled ↓ Original.
 test('PORCH-082 ac-1: the per-image download and share text link retires on every media surface', () => {
   // The Get original / Share row is gone from the one code path every
   // media surface renders through (post detail media, timeline card media,
@@ -32,21 +35,19 @@ test('PORCH-082 ac-1: the per-image download and share text link retires on ever
   assert.doesNotMatch(social, />Get original<\/Button>/);
   assert.doesNotMatch(social, />Share<\/Button>/);
   assert.doesNotMatch(social, /aria-label="Media actions"/);
-  // The share sheet machinery of the retired row (clipboard fallback, file
-  // naming for share) leaves with it.
-  assert.doesNotMatch(social, /navigator\.canShare/);
-  assert.doesNotMatch(social, /shareMedia/);
-  // The overlay control renders per media element: the top-right chip with
-  // exactly two actions — "↓ Original" and the expand icon (accessible name
-  // "View full screen"); share is absent from it (it rides the ··· menus).
+  // The overlay renders per media element: the top-right chip carries the
+  // action of record — Share on touch (PORCH-105) or "↓ Original" on
+  // desktop — plus the expand icon (accessible name "View full screen").
+  // The ··· overflow share (PORCH-078) is untouched and composes.
   assert.match(viewer, /function MediaOverlay/);
   assert.match(viewer, />↓ Original<\/Button>/);
+  assert.match(viewer, /ShareOutlined fontSize="small" sx=\{\{ mr: 0\.5 \}\} \/> Share/);
   assert.match(viewer, /aria-label="View full screen"/);
-  assert.doesNotMatch(viewer, /aria-label="Share"|>Share</);
+  assert.match(viewer, /shareAction\s*\?\s*<Button size="small" disabled=\{shareAction\.busy\}/,
+    "the touch branch renders the share control, never a download control");
   // MediaItem renders the overlay for photo and video frames.
   assert.match(social, /<MediaOverlay shown=\{overlayShown\}/);
   // Carousel and the single-media stack both wire the overlay expand.
-  assert.match(social, /index=\{index\} onExpand=\{onExpand\}/);
   assert.match(social, /index=\{index\} onExpand=\{onExpand\}/);
 });
 
@@ -163,7 +164,8 @@ test('PORCH-082 ac-4: the end-card is the last slide of the paged surface and bo
   // contract), composed at the post's own origin network.
   assert.match(viewer, /actions\?\.bulkOriginals/);
   assert.match(main, /bulkOriginals: async \(post\)/);
-  assert.match(main, /bulkPostOriginals\(connectionForPost\(post\), post\)/);
+  assert.match(main, /bulkPostOriginals\(connection, post\)/,
+    "every zip path fetches through the shipped archive route (PORCH-083)");
   // The wire shape is the served route of record: /api/social with no
   // network segment (the membership token IS the origin — PORCH-013
   // convention). A network-segmented URL 404s on every hub (PORCH-083 Oct

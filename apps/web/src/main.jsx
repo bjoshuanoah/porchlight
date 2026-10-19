@@ -24,6 +24,9 @@ import {
   applyCommentEditedRow, applyCommentDeletedRows,
 } from "./lifecycle.js";
 import { firstUrlIn } from "./link-preview.js";
+import { requestStagedShare, clearStagedShare, classifyStagedShare } from "./share-target.js";
+import { endCardPlan, shareDeviceClass, shareFileCapable, shareFileSet, downloadBlob } from "./share-matrix.js";
+import { mediaFileName } from "./media-rung.js";
 import { waitUntilHubHealthy } from "./update.js";
 import { applyEvent, readEventCursor, saveEventCursor, catchUpSince } from "./live.js";
 import { openEventStream } from "./realtime.js";
@@ -77,6 +80,14 @@ const localIdentities = [...new Set(initialConnections.map((item) => item.identi
 const primary = ["/timeline", "/groups", "/compose", "/settings"];
 const labels = ["Timeline", "Groups", "Compose", "Settings"];
 const icons = [<HomeOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />];
+
+/** A photo post's media ids — the same id-extraction the share surfaces use. */
+function mediaRefIds(post) {
+  const refs = Array.isArray(post?.mediaRefs) ? post.mediaRefs : [];
+  return refs
+    .map((ref) => (typeof ref === "string" ? ref : ref?.mediaId ?? ref?._id ?? ref?.id))
+    .filter(Boolean);
+}
 
 function routeOf() {
   const next = bootRoute({
@@ -584,6 +595,33 @@ function App() {
   useEffect(() => {
     void registerMediaTransport().then((ready) => setMediaTransport(ready));
   }, []);
+  // PORCH-105 (share target, ac-1): a share-target launch leaves its staged
+  // payload in the worker's own staging store. Compose opens pre-populated
+  // the moment an identity is open — a launch with a session already open
+  // stages straight into the dialog; a front-state launch waits behind the
+  // WhoIsHere flow (join or face tap) and resumes after the member opens.
+  // Identity gates everything: a share never bypasses the session model,
+  // and the boundary stands — no /api request is ever served from or
+  // written to a cache on this path.
+  const [composeStaging, setComposeStaging] = useState(null);
+  useEffect(() => {
+    if (!mediaTransport || !identity) return undefined;
+    let live = true;
+    void requestStagedShare(workerRegistration()).then(async (payload) => {
+      if (!live || !payload) return;
+      const staged = classifyStagedShare(payload);
+      if (Array.isArray(staged.files)) {
+        // Staged bytes arrive as blobs from the worker; the composer uploads
+        // Files (the same objects the photo chooser produces).
+        staged.files = staged.files.map((row) => new File([row.blob], row.name, { type: row.type }));
+      }
+      setComposeTarget('');
+      setComposeStaging(staged);
+      setComposeOpen(true);
+      await clearStagedShare(workerRegistration());
+    }).catch(() => { /* app behaves as a plain launch: nothing broke */ });
+    return () => { live = false; };
+  }, [identity, mediaTransport]);
   // The token set rides every renewal: relay it to the rendition worker so
   // its authenticated cache never presents a superseded token (a stale
   // token just 401s into the next relay, the rendition set is untouched).
@@ -1125,19 +1163,48 @@ function App() {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       return blob;
     },
-    // Bulk original download (PORCH-082 end-card): one zip of the viewed
-    // set's full-resolution originals via the bulk-original archive route,
-    // composed at the post's own origin network. The browser download is
-    // the destination (the desktop saves the zip; mobile saves per its
-    // platform path) — no viewer-side byte handling anywhere.
+    // Bulk original hand-off (PORCH-105 ac-3, the Oct 19 platform matrix) —
+    // the shipped bulk-original archive route (PORCH-083) is the only zip
+    // carrier: every zip path fetches it via bulkPostOriginals, untouched;
+    // zero new zip machinery and zero new endpoints ever exist.
+    //   - Android, ≤10 photos: the set shares through the native sheet as
+    //     individual full-resolution files;
+    //   - iOS (any Android beyond 10): the zip rides the shipped route and
+    //     hands to the sheet — never saved to Files unless the member
+    //     chooses it there;
+    //   - desktop: the zip downloads exactly as ruled Oct 15.
+    // A platform refusal (a sheet that cannot take the payload or the set's
+    // sizes) falls back to the plain download behavior — never an error
+    // path family.
     bulkOriginals: async (post) => {
-      const blob = await bulkPostOriginals(connectionForPost(post), post);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `porchlight-originals-${post._id || post.id}.zip`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const connection = connectionForPost(post);
+      if (!connection?.token) throw new Error("Connect to that family server to see this moment.");
+      const plan = endCardPlan({
+        deviceClass: shareDeviceClass(),
+        photos: mediaRefIds(post).length,
+        shareCapable: shareFileCapable(),
+      });
+      const zipName = `porchlight-originals-${post._id || post.id}.zip`;
+      const fetchOriginal = async (mediaId) => {
+        const target = new URL(`/api/social/media/${encodeURIComponent(mediaId)}/original`, connection.url);
+        const response = await fetch(target, { headers: { authorization: `Bearer ${connection.token}` } });
+        if (!response.ok) throw new Error(`This moment could not be shared (${response.status}).`);
+        return response.blob();
+      };
+      if (plan.kind === "share-files") {
+        const ids = mediaRefIds(post);
+        const blobs = [];
+        for (const mediaId of ids) blobs.push(await fetchOriginal(mediaId));
+        const result = await shareFileSet(blobs, { names: ids.map((mediaId, index) => mediaFileName(mediaId, blobs[index])) });
+        if (result.mode === "shared" || result.mode === "shared-dismissed") return result;
+        // The set refused: the zip carrier answers instead.
+      }
+      const blob = await bulkPostOriginals(connection, post);
+      if (plan.kind !== "zip-download") {
+        const result = await shareFileSet([blob], { names: [zipName] });
+        if (result.mode === "shared" || result.mode === "shared-dismissed") return result;
+      }
+      downloadBlob(blob, zipName);
       return blob;
     },
     pair: (code) => bindDevice("identity/pair", code),
@@ -1601,7 +1668,7 @@ function App() {
             : { minWidth: 44 }), ...(route.startsWith(path) ? { "&::before": { content: '""', position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", width: 24, height: 2, borderRadius: 1, bgcolor: "secondary.main" } } : {}) }} />)}
       </BottomNavigation>
     </Paper>}
-    <Compose open={composeOpen} onClose={() => setComposeOpen(false)} target={composeTarget} {...props} />
+    <Compose open={composeOpen} onClose={() => { setComposeOpen(false); setComposeStaging(null); }} target={composeTarget} staged={composeStaging} {...props} />
     <Dialog open={newDevices.length > 0 && newDevices[0]?.did === identity?.id} onClose={() => setNewDevices((pending) => pending.slice(1))}>
       <DialogTitle>A new device was just connected</DialogTitle>
       <DialogContent><Typography>{newDevices[0]?.label || "A device"} was connected to your place in this family. If you do not recognize it, remove it now.</Typography></DialogContent>
