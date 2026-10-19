@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { typedError, newestFirstByActivity, postView } from "./post.service.js";
+import { typedError, newestFirstByActivity, postView, withViewerVotes } from "./post.service.js";
 import { postVisibleToViewer, canSeeGroup } from "./group.service.js";
 import { socialModels } from "../models.js";
 
@@ -61,9 +61,13 @@ export class AlbumService {
    *   borrowed only for the shared transactional cascade mechanism.
    * @param {import("@porchlight/shared").CollectionLike} [deps.groups]
    *   PORCH-068: the group collection behind the private-group album filter.
-   * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
-   */
-  constructor({ derivedData, posts, membership, media, postsService, audit, groups = null }) {
+ * @param {import("@porchlight/shared").CollectionLike} [deps.votes]
+ *   PORCH-103 (vote-display ruling): the votes collection behind the
+ *   album card's `myVote` (the viewer's own effective vote). Null
+ *   assemblies omit the field.
+ * @param {(action: string, payload?: object) => Promise<void>} [deps.audit]
+ */
+  constructor({ derivedData, posts, membership, media, postsService, audit, groups = null, votes = null }) {
     this.derivedData = derivedData;
     this.posts = posts;
     this.membership = membership;
@@ -71,6 +75,8 @@ export class AlbumService {
     this.postsService = postsService;
     this.audit = audit ?? (async () => {});
     this.groups = groups;
+    // PORCH-103: the votes collection behind the viewer's own vote.
+    this.votes = votes;
     this.models = socialModels;
   }
 
@@ -117,9 +123,15 @@ export class AlbumService {
     return {
       album: { name: normalized, itemCount: items.length },
       // Album item views ride the same member-view plane as the timeline:
-      // attribution + hydrated mediaMeta (PORCH-044), one code path.
+      // attribution + hydrated mediaMeta (PORCH-044), one code path — and
+      // the viewer's own effective vote (PORCH-103, vote-display ruling:
+      // the album card carries upCount and `myVote` exactly as a timeline
+      // card does).
       posts: await this.media.withMediaMeta(
-        await this.#withAttribution(items.map((post) => postView(post)), session.networkId),
+        await withViewerVotes(
+          await this.#withAttribution(items.map((post) => postView(post)), session.networkId),
+          { votes: this.votes, networkId: session.networkId, did: session.did },
+        ),
         session.networkId,
       ),
       did: session.did,
