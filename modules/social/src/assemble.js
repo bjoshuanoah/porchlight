@@ -347,6 +347,9 @@ export function assembleSocialModule(store, options = {}) {
     media: mediaService,
     comments,
     reactions,
+    // PORCH-103: the votes collection behind the viewer's own effective
+    // vote (`myVote`) on every feed-served card.
+    votes,
     previews: linkPreviewService,
   });
   const postService = new PostService({
@@ -437,6 +440,8 @@ export function assembleSocialModule(store, options = {}) {
     derivedData,
     posts,
     membership: membershipService,
+    // PORCH-103: the votes collection behind the album card's `myVote`.
+    votes,
     media: mediaService,
     postsService: postService,
     audit,

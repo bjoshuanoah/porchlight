@@ -189,9 +189,11 @@ export class PostService {
     // the latest-four conversation slice, mediaMeta geometry stamps
     // (PORCH-044), and the attach-time preview — so the arriving post
     // renders as-given and its card never needs a follow-up read (the
-    // per-card loader path never fires on arrival). No count-bearing field
-    // rides any of it (the privacy assert still holds); feed-less test
-    // wiring falls back to the plain member view.
+    // per-card loader path never fires on arrival). The one ruled vote
+    // quantity rides it: `upCount` (vote-display ruling, Brian, Oct 19,
+    // 2026); no per-viewer `myVote` enters a broadcast envelope, and the
+    // privacy assert enforces exactly that. Feed-less test wiring falls
+    // back to the plain member view.
     const [eventView] = this.feed
       ? await this.feed.eventViews([post], networkId)
       : await this.memberViews([post], networkId);
@@ -224,10 +226,12 @@ export class PostService {
         excerpt: post.caption ?? post.body ?? null,
       });
     }
-    return { post: (await this.memberViews([post], networkId))[0], did: session.did };
+    return { post: (await this.memberViews([post], networkId, session.did))[0], did: session.did };
   }
 
-  /** Read one post as a member view (no counters, no vote data). A
+  /** Read one post as a member view (card/detail payload: carries upCount
+   *  and the viewer's own effective vote, vote-display ruling Oct 19 2026;
+   *  no rank inputs, no down-count, no other member's vote). A
    *  private-group post resolves only for members of that group (PORCH-068
    *  ac-2): for a non-member the read is refused exactly as a post of
    *  another origin — it simply does not exist here. */
@@ -239,7 +243,7 @@ export class PostService {
       // a private-group post a non-member asks for reads the same way.
       throw typedError("E_POST_NOT_FOUND", POST_MESSAGES.E_POST_NOT_FOUND);
     }
-    return { post: (await this.memberViews([post], session.networkId))[0], did: session.did };
+    return { post: (await this.memberViews([post], session.networkId, session.did))[0], did: session.did };
   }
 
   /**
@@ -268,7 +272,7 @@ export class PostService {
     // Base timeline ordering (PORCH-007): newest first by latest activity;
     // reverse-chron pagination only — this read never re-sorts by rank.
     newestFirstByActivity(rows);
-    return { posts: await this.memberViews(await this.#deliverableRowsOf(session.networkId, session.did, rows), session.networkId), did: session.did };
+    return { posts: await this.memberViews(await this.#deliverableRowsOf(session.networkId, session.did, rows), session.networkId, session.did), did: session.did };
   }
 
   /** The visibility gate for one post document against one viewer did. */
@@ -288,10 +292,15 @@ export class PostService {
     );
   }
 
-  /** Member views with attribution, mediaMeta (PORCH-044), and previews (PORCH-052). */
-  async memberViews(postRows, networkId) {
+  /** Member views with attribution, mediaMeta (PORCH-044), previews
+   *  (PORCH-052), and — when the card/detail read knows its viewer (ac-2,
+   *  vote-display ruling) — the viewer's own effective vote (`myVote`).
+   *  Event-view shaping calls this did-less (a broadcast envelope carries
+   *  no per-viewer field) and omits `myVote`. */
+  async memberViews(postRows, networkId, did = null) {
     const attributed = await this.#withAttribution(postRows.map((post) => this.view(post)), networkId);
-    const withMeta = await this.media.withMediaMeta(attributed, networkId);
+    const voted = await withViewerVotes(attributed, { votes: this.votes, networkId, did });
+    const withMeta = await this.media.withMediaMeta(voted, networkId);
     return this.previews ? await this.previews.withViews(withMeta, networkId) : withMeta;
   }
 
@@ -609,7 +618,7 @@ export class PostService {
       did: session.did,
       detail: { postId: post._id, fields: Object.keys(set) },
     });
-    return { post: (await this.memberViews([updated], session.networkId))[0], did: session.did };
+    return { post: (await this.memberViews([updated], session.networkId, session.did))[0], did: session.did };
   }
 
   /**
@@ -785,8 +794,9 @@ export class PostService {
   }
 
   /**
-   * Member post view — delegation to the shared postView (vote privacy
-   * contract: rank inputs never reach a client through this view).
+   * Member post view — delegation to the shared postView (the vote-display
+   * ruling shapes what rides it: upCount only; rank inputs never reach a
+   * client through this view).
    */
   view(post) {
     return postView(post);
@@ -914,9 +924,16 @@ export class PostService {
 export default PostService;
 
 /**
- * Member view (vote privacy contract) shared with the feed assembly: rank
- * inputs (interactionCounters) and actor signatures are internal; no count,
- * ratio, or per-member vote record ever reaches a client through this view.
+ * Member view (vote privacy contract, amended by the vote-display ruling,
+ * Brian, Oct 19, 2026) shared with the feed assembly: rank inputs
+ * (interactionCounters beyond upCount) and actor signatures are internal;
+ * no ratio, no down-count, and no per-member vote record ever reaches a
+ * client through this view. The vote-display ruling puts exactly one vote
+ * quantity on the payload — `upCount` (the post's up-vote count, read from
+ * the stored recount aggregate) — beside the viewer's own effective vote
+ * (`myVote`), which the member-read decorations attach per viewer
+ * (withViewerVotes); upCount is viewer-independent, so it rides the shared
+ * view and therefore the post event payloads (cards update live).
  */
 export function postView(post) {
   if (!post) return null;
@@ -933,5 +950,29 @@ export function postView(post) {
     visibility: post.visibility,
     displayHint: post.displayHint,
     createdAt: post.createdAt,
+    // Vote-display ruling (Brian, Oct 19, 2026): the ONE public vote
+    // quantity — the post's up-vote count, read from the stored recount
+    // aggregate (interactionCounters.upVolume; #recount recomputes it on
+    // every vote write). No down-count, ratio, or per-member field joins
+    // the view here; the viewer's own vote is attached per read via
+    // withViewerVotes.
+    upCount: post.interactionCounters?.upVolume ?? 0,
   };
+}
+
+/**
+ * PORCH-103 (vote-display ruling, Brian, Oct 19, 2026): attach the VIEWER'S
+ * OWN effective vote (`myVote`: "up" | "down", null when they hold none) to
+ * member post views. One origin-scoped read of the votes collection keyed
+ * to the viewer's did resolves every view in the batch — the member's own
+ * vote row is the only per-member vote data any payload may carry (ac-2);
+ * no other member's row is read or served (ac-3). `votes` (the collection)
+ * is injected by the calling service; assemblies without one (event view
+ * shaping rides the broadcast plane) skip the decoration and the field.
+ */
+export async function withViewerVotes(views, { votes, networkId, did } = {}) {
+  if (!Array.isArray(views) || views.length === 0 || !votes || !did) return views;
+  const mine = await votes.find({ networkId: String(networkId), memberDid: did });
+  const byPost = new Map(mine.map((row) => [row.postId, row.value]));
+  return views.map((view) => ({ ...view, myVote: byPost.get(view._id) ?? null }));
 }

@@ -5,8 +5,10 @@
  * controllers must not perform domain operations.
  *
  * No route here (or anywhere on the social surface) accepts or returns
- * hidden-list state (ac-4: client-local by contract) or any vote record,
- * count, or ratio (ac-3: vote privacy by contract).
+ * hidden-list state (ac-4: client-local by contract), a ratio, or vote data
+ * beyond the vote-display ruling (Brian, Oct 19, 2026): payloads carry the
+ * post's up-vote count (`upCount`) and the viewer's own effective vote
+ * (`myVote`) — never a down-count or another member's vote.
  */
 export class FeedController {
   /**

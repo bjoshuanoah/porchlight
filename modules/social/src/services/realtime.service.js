@@ -16,9 +16,13 @@
  * event vocabulary is closed (post.created, reply.created,
  * reaction.applied, media.attached — no vote type exists), and every
  * envelope is checked against the no-counts, no-vote-records, no-aggregates
- * contract before it is appended anywhere. Envelopes carry content only,
- * shaped with the shared member views (postView / commentView /
- * reactionView) that already strip rank inputs and actor signatures.
+ * contract before it is appended anywhere. The one amendment (vote-display
+ * ruling, Brian, Oct 19, 2026): a post payload carries the post's up-vote
+ * count (`upCount`); the viewer's own vote (`myVote`) never enters a
+ * broadcast envelope — the client's refetch fallback resolves it. Envelopes
+ * carry content only beyond that, shaped with the shared member views
+ * (postView / commentView / reactionView) that already strip rank inputs
+ * and actor signatures.
  */
 /** Payload privacy module import (PORCH-068 group gate helpers). */
 import { groupDeliversTo } from "./group.service.js";
@@ -41,7 +45,12 @@ export const EVENT_TYPES = Object.freeze([
 /** The removal events whose post row is gone by construction — catch-up replays them (they are exactly how a client learns the removal). */
 const REMOVAL_EVENT_TYPES = new Set(["post.deleted", "comment.deleted"]);
 
-/** Field names that must NEVER appear on an event envelope (payload-privacy contract). */
+/** Field names that must NEVER appear on an event envelope (payload-privacy
+ *  contract, amended by the vote-display ruling, Brian, Oct 19, 2026: a
+ *  post payload may carry the post's up-vote count `upCount` — the one
+ *  ruled public quantity — beside nothing else vote-derived; a broadcast
+ *  envelope is viewer-independent, so the per-viewer `myVote` field never
+ *  rides one and the client's refetch fallback resolves it). */
 const FORBIDDEN_ENVELOPE_FIELDS = [
   "interactionCounters",
   "voteCount",
@@ -56,6 +65,7 @@ const FORBIDDEN_ENVELOPE_FIELDS = [
   "commentCount",
   "deviceSignature",
   "votes",
+  "myVote",
 ];
 
 /**

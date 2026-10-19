@@ -1,4 +1,4 @@
-import { typedError, postView, newestFirstByActivity, ruledRootCompare } from "./post.service.js";
+import { typedError, postView, newestFirstByActivity, ruledRootCompare, withViewerVotes } from "./post.service.js";
 import { InteractionService } from "./interaction.service.js";
 import { postDeliversToViewer, postVisibleToViewer, canSeeGroup } from "./group.service.js";
 import { socialModels } from "../models.js";
@@ -26,9 +26,11 @@ export const REPLY_SLICE_LIMIT = 4;
  * - Ranked section (ac-2): computed by the ranking module (the single
  *   writer of ranked order) over the capped window. This service contributes
  *   only post documents; prominence order comes back from the formula.
- * - Vote privacy (ac-3): member views carry no counters, no ratios, and no
- *   vote records — the feed renders prominence order only. This service
- *   never reads the votes collection; rank inputs live on the post docs.
+ * - Vote privacy (ac-3, amended by the vote-display ruling, Brian, Oct 19,
+ *   2026): member views carry no counters beyond `upCount`, no ratios, and
+ *   no per-member vote records besides the viewer's OWN effective vote
+ *   (`myVote`, attached per read from one viewer-keyed read of the votes
+ *   collection). Everything about anyone else's vote stays off the wire.
  * - Hidden lists (ac-4): the server stores no hidden-list state. Members
  *   keep hidden post ids client-side (browser storage keyed by origin) and
  *   apply them at render, across base timeline and ranked section alike.
@@ -50,6 +52,11 @@ export class FeedService {
    * @param {import("@porchlight/shared").CollectionLike} deps.reactions
    *   Reaction rows ride the member view as authored (PORCH-046): cards
    *   reflect arriving reactions in place from the same feed read.
+   * @param {import("@porchlight/shared").CollectionLike} [deps.votes]
+   *   PORCH-103 (vote-display ruling): the votes collection behind the
+   *   viewer's own effective vote (`myVote`) — one viewer-keyed read per
+   *   feed read; only that member's own rows resolve. Null assemblies
+   *   (event-view shaping) omit `myVote`.
    * @param {import("./link-preview.service.js").LinkPreviewService} [deps.previews]
    *   Link previews (PORCH-052): feed views and their reply slices hydrate
    *   `preview` at read time — the card/embed metadata + og:image geometry
@@ -58,7 +65,7 @@ export class FeedService {
    *   dims — so every feed surface carries what the client's srcset/sizes
    *   and the video poster need (PORCH-044 ac-2).
    */
-  constructor({ posts, derivedData, groups, membership, ranking, media, comments, reactions, previews }) {
+  constructor({ posts, derivedData, groups, membership, ranking, media, comments, reactions, votes = null, previews }) {
     this.posts = posts;
     this.derivedData = derivedData;
     this.groups = groups;
@@ -67,6 +74,9 @@ export class FeedService {
     this.media = media;
     this.comments = comments;
     this.reactions = reactions;
+    // PORCH-103: the votes collection behind the viewer's own effective
+    // vote (`myVote`). Null (event-shaping assemblies) omits the field.
+    this.votes = votes;
     this.previews = previews ?? null;
     this.models = socialModels;
   }
@@ -79,7 +89,7 @@ export class FeedService {
    */
   async timeline({ accessToken } = {}) {
     const { networkId, did } = await this.#perimeterOf(accessToken);
-    return { posts: await this.#ordered(await this.#deliverableRows(networkId, did), networkId) };
+    return { posts: await this.#ordered(await this.#deliverableRows(networkId, did), networkId, did) };
   }
 
   /**
@@ -97,13 +107,15 @@ export class FeedService {
       throw typedError("E_GROUP_UNKNOWN", FEED_MESSAGES.E_GROUP_UNKNOWN);
     }
     const rows = await this.posts.find({ originNetworkId: networkId, groupId });
-    return { group: { _id: group._id, name: group.name }, posts: await this.#ordered(rows, networkId) };
+    return { group: { _id: group._id, name: group.name }, posts: await this.#ordered(rows, networkId, did) };
   }
 
   /**
    * Ranked section read (ac-2): prominence order from the ranking module,
    * recomputed over the capped window. The result is ordered posts only —
-   * no scores, no counters, no vote arithmetic ever reaches the client.
+   * no scores, no counters beyond the ruled upCount, no vote arithmetic
+   * ever reaches the client (vote-display ruling, Oct 19, 2026: plus the
+   * viewer's own `myVote`).
    * Group-post delivery is membership-gated for both visibilities
    * (PORCH-068 ac-2, refined): the ranked path is fed the same set the
    * base timeline feeds.
@@ -113,7 +125,7 @@ export class FeedService {
     const candidates = await this.#deliverableRows(networkId, did);
     const ranked = this.ranking.rank(candidates);
     const views = ranked.map(({ post }) => postView(post));
-    return { posts: await this.#decorate(views, networkId) };
+    return { posts: await this.#decorate(views, networkId, did) };
   }
 
   /**
@@ -159,7 +171,7 @@ export class FeedService {
       matches.add(postId);
     }
     const hits = [...matches].map((_id) => byId.get(_id));
-    return { query: q, posts: await this.#ordered(hits, networkId) };
+    return { query: q, posts: await this.#ordered(hits, networkId, did) };
   }
 
   /**
@@ -177,13 +189,22 @@ export class FeedService {
     return newestFirstByActivity(rows).map((post) => postView(post));
   }
 
-  /** Reverse-chron member views, each group post carrying its group chip. */
-  async #ordered(rows, networkId) {
-    return this.#decorate(FeedService.order(rows), networkId);
+  /** Reverse-chron member views, each group post carrying its group chip.
+   *  `did` (the viewer) attaches the viewer's own vote (`myVote`, ac-2). */
+  async #ordered(rows, networkId, did = null) {
+    return this.#decorate(FeedService.order(rows), networkId, did);
   }
 
-  /** Member views plus read-time member attribution (PORCH-034) and mediaMeta (PORCH-044). */
-  async #decorate(views, networkId) {
+  /** Member views plus read-time member attribution (PORCH-034),
+   *  mediaMeta (PORCH-044), and — when the viewer is known — their own
+   *  effective vote (PORCH-103). Event-shaping callers pass no viewer: a
+   *  broadcast envelope is viewer-independent (upCount rides the shared
+   *  view; `myVote` must never enter one — assertPayloadPrivacy forbids
+   *  it). */
+  async #decorate(views, networkId, did = null) {
+    if (did) {
+      views = await withViewerVotes(views, { votes: this.votes, networkId, did });
+    }
     const attributed = await this.#withAttribution(await this.#withGroupChips(views, networkId), networkId);
     const withConversation = await this.#withConversationPreviews(attributed, networkId);
     const withMeta = await this.media.withMediaMeta(withConversation, networkId);
@@ -194,7 +215,10 @@ export class FeedService {
    * One arrival's timeline-shaped view (PORCH-081): the EXACT decoration
    * the base timeline read rides — attribution (PORCH-034), the group chip,
    * the latest-four conversation slice, mediaMeta geometry stamps
-   * (PORCH-044), and the link preview. Used by post.created envelopes so
+   * (PORCH-044), the link preview, and the public up-vote count
+   * (PORCH-103; viewer-specific `myVote` stays off broadcast envelopes —
+   * the client's refetch fallback resolves it, as the ruling allows). Used
+   * by post.created envelopes so
    * the arriving post renders as-given and its card never needs a
    * follow-up read (the feed read's per-card loader path never fires).
    */
@@ -239,7 +263,9 @@ export class FeedService {
    *
    * - The root total is conversation content quantity for the expander,
    *   never an engagement or reaction count; reaction rows render as given
-   *   without numbers (PORCH-036), and votes never enter any read.
+   *   without numbers (PORCH-036), and the only vote data on a view is the
+   *   ruled pair (upCount + the viewer's own myVote, attached before this
+   *   decoration — vote-display ruling, Oct 19, 2026).
    * - Origin containment applies to the decoration itself: only the token's
    *   network rows are read, so a foreign-network reply never rides a view,
    *   live or cached (PORCH-046 ac-4).

@@ -10,7 +10,10 @@ export const socialModels = {
    * the Ed25519 device signature is verified at admission time against the
    * per-network device-key enrollment and stored on the document.
    * interactionCounters carry vote aggregates for the ranking formula only
-   * (feed-ranking contract) and are never exposed for display.
+   * (feed-ranking contract); the sole display exception is the vote-display
+   * ruling (Brian, Oct 19, 2026): served payloads carry the up-vote count
+   * (upCount, from the recount aggregate upVolume) and the viewer's own
+   * effective vote — never the other counters.
    */
   post: {
     type: "object",
@@ -116,10 +119,12 @@ export const socialModels = {
     },
   },
   /**
-   * Vote (PORCH-006, vote privacy contract): one effective vote per member
-   * per post (changeable), stored signed per member, consumed only by the
-   * ranking module. No endpoint ever returns vote records or counts for
-   * display; the read surfaces strip them.
+   * Vote (PORCH-006, vote privacy contract; amended by the vote-display
+   * ruling, Brian, Oct 19, 2026): one effective vote per member per post
+   * (changeable), stored signed per member, consumed only by the ranking
+   * module. Served payloads carry exactly the post's up-vote count and the
+   * viewer's OWN effective vote — no down-counts, no ratios, no per-member
+   * vote records beyond that, on any read, event, or catch-up.
    */
   vote: {
     type: "object",
