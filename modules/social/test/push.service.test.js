@@ -441,6 +441,10 @@ test("ac-2: the gating matrix is enforced over ROUTE-persisted settings — ever
       signature: devs.bob.signPayload({ type: "text", groupId: group._id, body: "Rain check" }),
     });
     assert.equal(sender.sends.length, 4, "the toggled-off groupPost class produces no further send");
+    // PORCH-108 ac-3: no backfill — the persisted OFF toggle reads verbatim
+    // on the next read; the shipping change never touches a stored row.
+    const keptOff = await route("/push/settings", tokens.alice, null, "GET");
+    assert.equal(keptOff.settings.events.groupPost, false, "the recorded OFF toggle is kept verbatim");
 
     // Removed member: bob's post still stands, alice reacts — deliverability
     // died at the revocation write (revoked through the console route).
@@ -539,28 +543,35 @@ test("ac-2: a device-link request notifies the origin's owner", async () => {
   assert.equal(link[0].subscription.identityId, OWNER);
 });
 
-test("ac-2: group posts deliver only when the member toggled groupPost on", async () => {
+test("ac-2: group posts deliver by default once enabled; the member's toggle gates them off", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
   await subscribe(mod, tokens.bob, "https://push.example.com/bob", "bob");
   const group = await mod.groupService.create({ networkId: FAMILY, name: "Picnic", members: [OWNER, ALICE, BOB], createdBy: OWNER });
+  // PORCH-108 (Brian, Oct 19, 2026): the member walked the enable flow —
+  // group posts ride the shipped default-ON toggle from now on.
   const post1 = await mkPost(mod, tokens.owner, devs.owner, { type: "text", groupId: group._id, body: "Picnic planning" });
-  assert.equal(sender.sends.length, 0, "the member-controlled toggle ships default off");
-  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { groupPost: true } });
-  const post2 = await mkPost(mod, tokens.owner, devs.owner, { type: "text", groupId: group._id, body: "Potluck list" });
-  const groupSends = sender.sends.filter((s) => s.plaintext.type === "groupPost");
-  assert.equal(groupSends.length, 1);
-  assert.deepEqual(groupSends[0].plaintext, {
+  const defaultSends = sender.sends.filter((s) => s.plaintext.type === "groupPost");
+  assert.equal(defaultSends.length, 2, "both enabled members receive the group post with zero event writes");
+  assert.deepEqual(defaultSends[0].plaintext, {
     type: "groupPost",
-    postId: post2._id,
+    postId: post1._id,
     commentId: null,
     authorName: "Brian Rivers",
     networkName: "Family",
-    excerpt: "Potluck list",
+    excerpt: "Picnic planning",
   });
-  assert.equal(groupSends[0].subscription.identityId, ALICE, "only the toggled-on member receives");
-  assert.ok(post1._id);
+  assert.equal(defaultSends[0].subscription.identityId, ALICE, "the enabled members receive, the author never does");
+  assert.equal(defaultSends[1].subscription.identityId, BOB);
+  // The toggle still gates: the member's explicit OFF act suppresses
+  // exactly their own delivery.
+  await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { groupPost: false } });
+  await mkPost(mod, tokens.owner, devs.owner, { type: "text", groupId: group._id, body: "Rain check" });
+  const afterSends = sender.sends.filter((s) => s.plaintext.type === "groupPost");
+  assert.equal(afterSends.length, 3, "only the still-toggled-on member receives after the explicit OFF");
+  assert.equal(afterSends[2].subscription.identityId, BOB, "alice's OFF suppressed only her own delivery");
+  assert.ok(afterSends[2].plaintext.postId !== post1._id);
 });
 
 /* ---- ac-3: encrypted, content-only payloads ------------------------------- */
@@ -580,7 +591,7 @@ test("ac-3: the plaintext whitelist carries content only; unknown and forbidden 
   assert.ok(pushExcerpt(long).length <= 161);
   assert.equal(pushExcerpt("  spaced  "), "spaced");
   assert.equal(pushExcerpt(null), null);
-  assert.deepEqual(DEFAULT_EVENT_SWITCHES, { reply: true, reaction: true, mention: true, groupPost: false, joined: true, deviceLink: true });
+  assert.deepEqual(DEFAULT_EVENT_SWITCHES, { reply: true, reaction: true, mention: true, groupPost: true, joined: true, deviceLink: true });
 });
 
 test("ac-3: a real push decrypts with the subscription's own keys and carries content-only plaintext", { timeout: 15000 }, async (t) => {
@@ -885,9 +896,10 @@ test("ac-5: the settings routes read and update the hub-enforced member controls
     // PORCH-063 ac-1: the fresh identity's unset row resolves the opt-in
     // default — enabled=false, never the pre-PORCH-063 born-on default.
     // PORCH-088: the row carries the groups member (empty; unset resolves ON).
+    // PORCH-108: groupPost rides the default-ON side.
     assert.deepEqual(freshBody.settings, {
       enabled: false,
-      events: { reply: true, reaction: true, mention: true, groupPost: false, joined: true, deviceLink: true },
+      events: { reply: true, reaction: true, mention: true, groupPost: true, joined: true, deviceLink: true },
       mutes: [],
       groups: {},
     });
@@ -898,7 +910,10 @@ test("ac-5: the settings routes read and update the hub-enforced member controls
     });
     assert.equal(updated.status, 200);
     const reread = await (await fetch(`${base}/push/settings`, { headers: { authorization: `Bearer ${tokens.alice}` } })).json();
-    assert.deepEqual(reread.settings.events.reply, false, "the per-event toggle persists for the hub to enforce");
+    assert.equal(reread.settings.events.reply, false, "the per-event toggle persists for the hub to enforce");
+    // PORCH-108 ac-4 (Brian, Oct 19, 2026): the full-row-replace defaults
+    // carry the ON side — a PUT omitting the groupPost key lands it on.
+    assert.equal(reread.settings.events.groupPost, true, "the absent groupPost key resolved the shipped ON default");
     const refused = await fetch(`${base}/push/settings`, {
       method: "PUT",
       headers: { "content-type": "application/json", authorization: `Bearer ${tokens.alice}` },
@@ -1026,7 +1041,7 @@ test("PORCH-063 ac-1: a fresh identity and a freshly created row both resolve en
   assert.equal(row.enabled, false, "the created row persists enabled=false");
   // The per-event defaults survive the flip, but they never deliver while
   // the master switch is off.
-  assert.deepEqual(row.events, { reply: true, reaction: true, mention: true, groupPost: false, joined: true, deviceLink: true });
+  assert.deepEqual(row.events, { reply: true, reaction: true, mention: true, groupPost: true, joined: true, deviceLink: true });
 });
 
 test("PORCH-063 ac-1: an off-state member (default or pre-set) produces no send attempt for any event — no composition, no Web Push", async () => {

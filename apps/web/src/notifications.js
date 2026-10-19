@@ -11,8 +11,9 @@
 /**
  * Per-event rows (ac-1). The keys are the hub's event vocabulary —
  * PUSH_EVENT_TYPES on Porchlight Server (PORCH-059); the labels are family
- * words. `groupPost` is the member-controlled toggle (server default off);
- * reply/reaction/mention ride the shipped server defaults.
+ * words. `groupPost` is the member-controlled toggle (server default on
+ * since PORCH-108, Brian Oct 19, 2026); reply/reaction/mention ride the
+ * shipped server defaults.
  */
 export const EVENT_ROWS = Object.freeze([
   { key: "reply", label: "Replies" },

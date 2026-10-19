@@ -46,15 +46,16 @@ export const PUSH_EVENT_TYPES = Object.freeze([
 
 /**
  * Shipped per-event defaults. Reply/reaction/mention/joined/device-link
- * are on at birth (the launch event surface); group posts are the
- * member-controlled toggle (default off), and the member's own switches
- * override from the settings write.
+ * are on at birth (the launch event surface), and group posts ride the
+ * same ON side: "Group notifications should be on by default" (Brian,
+ * Oct 19, 2026, PORCH-108) — the member's first explicit OFF act writes
+ * their switch, and their own switches override from the settings write.
  */
 export const DEFAULT_EVENT_SWITCHES = Object.freeze({
   reply: true,
   reaction: true,
   mention: true,
-  groupPost: false,
+  groupPost: true,
   joined: true,
   deviceLink: true,
 });

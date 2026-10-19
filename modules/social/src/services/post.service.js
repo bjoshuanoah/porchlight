@@ -119,7 +119,7 @@ export class PostService {
    * @param {import("./membership.service.js").MembershipService} deps.membership
    * @param {import("./push.service.js").PushService} [deps.push]
    *   PORCH-059: group posts fan out to the group's members through the
-   *   send pipeline (the member-controlled groupPost toggle gates them).
+   *   send pipeline (gated by the member's groupPost event toggle).
    * @param {import("./media.service.js").MediaService} deps.media
    *   The media pipeline: member views hydrate `mediaMeta` (rendition set
    *   of record, display dims) so clients never fetch rendition metadata
@@ -209,8 +209,9 @@ export class PostService {
     });
     // PORCH-059: group posts fan out to the group's own members through the
     // push send pipeline (subset-of-network membership holds); the
-    // member-controlled groupPost toggle gates every recipient at send
-    // time. The author never receives their own post.
+    // member's groupPost event toggle gates every recipient at send
+    // time (PORCH-108: the toggle's default side is ON). The author never
+    // receives their own post.
     if (post.groupId) {
       const group = await this.groups.findOne({ _id: post.groupId });
       await this.push?.notify({
