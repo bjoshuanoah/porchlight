@@ -5,6 +5,38 @@
 // rides one service-worker registration that already exists (the PORCH-044
 // rendition worker): no second worker is ever registered.
 
+/** Usage gate (PORCH-110, Brian Oct 19, 2026): install surfaces wait for
+ * real use — the Android CTA and the iOS guidance card render only after
+ * the member has used the app for at least 2 minutes in the current
+ * browsing session [Assumed: 120s of in-app presence, a client-side timer
+ * per origin, tuned at build]. The gate governs the render, never the
+ * capture, and never touches the server. */
+export const INSTALL_USAGE_GATE_MS = 2 * 60 * 1000;
+
+/**
+ * Advance the session's in-app presence. Presence accumulates only real
+ * in-app time: a delta arrives only from a visible document (the caller
+ * passes 0 while the tab is hidden or the app is backgrounded), and the
+ * elapsed total caps at the gate so a reached gate never re-renders.
+ */
+export function advanceUsagePresence(elapsedMs, deltaMs) {
+  const delta = Number.isFinite(deltaMs) ? Math.max(0, deltaMs) : 0;
+  return Math.min(elapsedMs + delta, INSTALL_USAGE_GATE_MS);
+}
+
+/**
+ * The render decision for either install surface (PORCH-110): the usage
+ * gate stacked beneath the existing checks — the dismissal suppression
+ * window and the already-installed retirement still win at any elapsed
+ * use, and elapsed use never resurrects a suppressed or installed surface
+ * (the classification's null already covers standalone absence).
+ */
+export function installSurfaceVisible({ installKind, usageElapsedMs, suppressed, gateMs = INSTALL_USAGE_GATE_MS }) {
+  if (!installKind) return false;
+  if (suppressed) return false;
+  return usageElapsedMs >= gateMs;
+}
+
 /** Suppression window: a dismissal hides both install surfaces for two
  * weeks, client-side, per origin (build contract [Assumed: 14 days]). */
 export const INSTALL_SUPPRESSION_MS = 14 * 24 * 60 * 60 * 1000;

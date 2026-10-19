@@ -11,6 +11,9 @@ import { join, dirname } from "node:path";
 import vm from "node:vm";
 import {
   INSTALL_SUPPRESSION_MS,
+  INSTALL_USAGE_GATE_MS,
+  advanceUsagePresence,
+  installSurfaceVisible,
   installSuppressed,
   isStandaloneLaunch,
   surfaceInstallKind,
@@ -158,7 +161,9 @@ test("PORCH-051 ac-3: main.jsx captures the prompt, renders the CTA, and writes 
   assert.match(main, /consumeInstallPrompt\(installPrompt\)/);
   assert.match(main, /readLocal\(stored, origin, "install-dismissed-at", 0\)/);
   assert.match(main, /writeLocal\(stored, origin, "install-dismissed-at",\s*dismissedAt\)/);
-  assert.match(main, /<InstallCta kind=\{installHidden \? null : installKind\} onInstall=\{installNow\} onDismiss=\{dismissInstall\} \/>/);
+  // PORCH-110: the CTA's render decision is the stacked visibility decision
+  // (usage gate AND suppression AND not-installed) — never the bare kind.
+  assert.match(main, /<InstallCta kind=\{installVisible \? installKind : null\} onInstall=\{installNow\} onDismiss=\{dismissInstall\} \/>/);
   // The installed surface is never asked again — appinstalled retires the
   // surfaces and sets the sticky standalone state.
   assert.match(main, /onInstalled = \(\) => \{ setInstallPrompt\(null\); setStandaloneLaunch\(true\); \}/);
@@ -283,4 +288,59 @@ test("PORCH-051 ac-2, PORCH-052 (executed): live-data /api stays unintercepted; 
   const response = await responded[1];
   assert.equal(response.status, 500);
   assert.equal(puts.length, 1, "the non-2xx response entered no cache");
+});
+// Usage gate before install surfaces (PORCH-110, Brian Oct 19, 2026): the
+// Android CTA and the iOS guidance card render only after the member has
+// used the app for at least 2 minutes in the current browsing session
+// [Assumed: 120s of in-app presence, a client-side timer per origin].
+test("PORCH-110 ac-1: neither install surface renders before the 2-minute presence threshold, and appears at it", () => {
+  assert.equal(INSTALL_USAGE_GATE_MS, 2 * 60 * 1000);
+  const kind = "android";
+  assert.equal(installSurfaceVisible({ installKind: kind, usageElapsedMs: 0, suppressed: false }), false);
+  assert.equal(installSurfaceVisible({ installKind: kind, usageElapsedMs: 119_999, suppressed: false }), false);
+  assert.equal(installSurfaceVisible({ installKind: "ios", usageElapsedMs: 30_000, suppressed: false }), false);
+  assert.equal(installSurfaceVisible({ installKind: kind, usageElapsedMs: 120_000, suppressed: false }), true);
+  assert.equal(installSurfaceVisible({ installKind: "ios", usageElapsedMs: 400_000, suppressed: false }), true);
+});
+
+test("PORCH-110 ac-1: in-app presence accumulates only real visible time and caps at the gate", () => {
+  assert.equal(advanceUsagePresence(0, 15_000), 15_000);
+  assert.equal(advanceUsagePresence(115_000, 10_000), 120_000);
+  assert.equal(advanceUsagePresence(120_000, 60_000), 120_000, "the reached gate never re-renders");
+  assert.equal(advanceUsagePresence(0, 0), 0);
+  assert.equal(advanceUsagePresence(0, -5_000), 0, "negative deltas advance nothing");
+  assert.equal(advanceUsagePresence(0, NaN), 0);
+});
+
+// The condition stack: the usage gate rides BENEATH the existing checks —
+// dismissal suppression and installed retirement still win at any elapsed
+// use; elapsed use never resurrects a suppressed or installed surface.
+test("PORCH-110 ac-2: suppression and installed retirement win over elapsed use in every state", () => {
+  const open = { usageElapsedMs: 500_000, suppressed: true };
+  assert.equal(installSurfaceVisible({ installKind: "android", ...open }), false, "a dismissed surface stays suppressed for its window, at any elapsed use");
+  assert.equal(installSurfaceVisible({ installKind: "ios", ...open }), false);
+  // The installed retirement and standalone absence ride the
+  // classification's null — that null wins at any elapsed use.
+  assert.equal(installSurfaceVisible({ installKind: null, usageElapsedMs: 500_000, suppressed: false }), false);
+  // A surface dismissed in an earlier session returns only after its
+  // suppression window AND a fresh 2-minute gate.
+  assert.equal(installSurfaceVisible({ installKind: "android", usageElapsedMs: 500_000, suppressed: false }), true);
+  assert.equal(installSurfaceVisible({ installKind: "android", usageElapsedMs: 30_000, suppressed: false }), false);
+});
+
+// Capture unaffected: beforeinstallprompt is still prevented and stored at
+// boot exactly as PORCH-051 ships; the gate governs the render only, and
+// the stored prompt is consumed exactly once after the gate opens the CTA.
+test("PORCH-110 ac-3: main.jsx runs the presence timer client-side and gates only the render", async () => {
+  const main = await src("src/main.jsx");
+  // Timer state starts closed (0ms) and ticks presence client-side.
+  assert.match(main, /const \[installUsageMs, setInstallUsageMs\] = useState\(0\)/);
+  assert.match(main, /advanceUsagePresence\(ms, visible \? now - lastTick : 0\)/);
+  assert.match(main, /document\.visibilityState !== "hidden"/);
+  // The capture path is untouched: prevented and stored at boot.
+  assert.match(main, /onPrompt = \(event\) => \{ event\.preventDefault\(\); setInstallPrompt\(event\); \}/);
+  assert.match(main, /consumeInstallPrompt\(installPrompt\)/);
+  // The render decision stacks the gate beneath the existing checks.
+  assert.match(main, /installSurfaceVisible\(\{[^}]*usageElapsedMs: installUsageMs,\s*\}\)/s);
+  assert.match(main, /suppressed: installSuppressed\(installDismissedAt\)/);
 });

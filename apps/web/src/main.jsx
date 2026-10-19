@@ -45,7 +45,7 @@ import { LanternBoot } from "./lantern.jsx";
 import { markAppReady } from "./appready.js";
 // PORCH-051: the Add to Home Screen machinery — the decision logic module
 // and its two surfaces (the Android custom CTA, the iOS guided card).
-import { consumeInstallPrompt, installSuppressed, isStandaloneLaunch, surfaceInstallKind, webkitClass } from "./install.js";
+import { advanceUsagePresence, consumeInstallPrompt, INSTALL_USAGE_GATE_MS, installSurfaceVisible, installSuppressed, isStandaloneLaunch, surfaceInstallKind, webkitClass } from "./install.js";
 import { InstallCta } from "./install.jsx";
 // PORCH-060: the notification settings card rides the Profile settings
 // shell; the push subscription flow (explicit Enable tap → VAPID-scoped
@@ -176,6 +176,30 @@ function App() {
     navigatorStandalone: window.navigator.standalone,
     standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
   }));
+  // PORCH-110: install surfaces wait for real use (Brian, Oct 19, 2026).
+  // The Android CTA and the iOS guidance card hold until the member has
+  // used the app for at least two minutes in this browsing session —
+  // in-app presence ticks client-side per origin (visible-tab time only;
+  // a hidden tab advances nothing) and never touches the server.
+  const [installUsageMs, setInstallUsageMs] = useState(0);
+  useEffect(() => {
+    // Presence tick: a visible interval seconds the elapsed total toward
+    // the gate; the accumulator caps at the gate, so once open the state
+    // stops changing and React bails out of the tick entirely. A
+    // backgrounded tab throttles the interval and advances nothing — real
+    // in-app presence, never wall-clock while hidden.
+    let lastTick = Date.now();
+    const id = setInterval(() => {
+      const now = Date.now();
+      setInstallUsageMs((ms) => {
+        if (ms >= INSTALL_USAGE_GATE_MS) return ms;
+        const visible = document.visibilityState !== "hidden";
+        return advanceUsagePresence(ms, visible ? now - lastTick : 0);
+      });
+      lastTick = now;
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
   const [identity, setIdentity] = useState(() => localIdentities.length === 1 && !initialConnections.some(hasLocalPin) ? initialConnections[0].identity || null : null);
   const [groups, setGroups] = useState([]);
   // Lifecycle event merges (PORCH-094) read the viewer's delivery facts —
@@ -1629,7 +1653,16 @@ function App() {
     touchCapable: window.navigator.maxTouchPoints > 0,
     webkit: webkitClass(window.navigator.userAgent),
   });
-  const installHidden = installSuppressed(installDismissedAt);
+  // PORCH-110: the render decision stacks the 2-minute usage gate beneath
+  // the existing checks — the dismissal suppression window and the
+  // already-installed retirement still win at any elapsed use (a surface
+  // dismissed or installed in an earlier session never returns on elapsed
+  // use; the suppression window AND a fresh session gate both apply).
+  const installVisible = installSurfaceVisible({
+    installKind,
+    suppressed: installSuppressed(installDismissedAt),
+    usageElapsedMs: installUsageMs,
+  });
   const dismissInstall = () => {
     const dismissedAt = Date.now();
     writeLocal(stored, origin, "install-dismissed-at", dismissedAt);
@@ -1701,7 +1734,7 @@ function App() {
         }}>No, remove it</Button>
       </DialogActions>
     </Dialog>
-    <InstallCta kind={installHidden ? null : installKind} onInstall={installNow} onDismiss={dismissInstall} />
+    <InstallCta kind={installVisible ? installKind : null} onInstall={installNow} onDismiss={dismissInstall} />
     <Snackbar open={Boolean(notice)} autoHideDuration={8000} onClose={() => setNotice("")} message={notice} />
   </ThemeProvider>;
 }
