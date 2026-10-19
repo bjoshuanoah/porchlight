@@ -28,7 +28,7 @@ import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
 // initials stay the metas-less fallback.
 import { AvatarFace, useAvatarFaceUrl } from './avatar-face.js';
 import { LampMark } from './brand.jsx';
-import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle, reactionChips, revealMachine } from './reactions.js';
+import { reactionRowsOf, ownEmojiRows, reflectReaction, optimisticToggle, reactionChips, revealMachine, ownVoteOf, upCountOf, castVoteState } from './reactions.js';
 import { groupRows, groupMemberRows, canManageGroup, addableCandidates, composableGroups, composePresetLocationId, isGroupMember, groupVisibility, canJoinGroup, blockedRows } from './groups.js';
 import {
   groupMenuRows, groupToggleLine, resolvedGroupNotification,
@@ -901,7 +901,22 @@ export function PresentReactions({ post, comment = null, data, actions, reaction
   </>;
 }
 
-export function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState, groupMenu = null }) {
+export function PostCard({ post, data, actions, navigate, detail = false, onHide, reactionState, groupMenu = null, onVoteApplied = null }) {
+  // Vote display (PORCH-104): the served member view carries exactly the
+  // two ruled values — upCount and the viewer's own myVote ("up" | "down"
+  // | null). The settled render derives both from the served value, never
+  // from prior taps; nothing else vote-derived renders anywhere on the
+  // card or the detail surface.
+  const [voteOverride, setVoteOverride] = useState(null); // { vote, count } | null
+  useEffect(() => {
+    // The write's optimistic shadow retires when the served row carries
+    // the same self-state (the write-confirm reload's reconciliation on
+    // the card; the detail's refetch on its trail) — after that, the
+    // rendered count and highlight are the served truth alone.
+    if (!voteOverride) return undefined;
+    if ((post?.myVote ?? null) === voteOverride.vote) setVoteOverride(null);
+    return undefined;
+  }, [voteOverride, post?.myVote]);
   const [localHidden, setLocalHidden] = useState(false);
   // Card-level reply (PORCH-038 ac-1): the affordance opens an inline
   // composer riding the same mention handling as the detail composer; the
@@ -1118,10 +1133,45 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
     boxShadow: { xs: 'none', lg: cssVars.shadowCard },
   };
   const compactIconSx = { width: 36, height: 36, p: 0, '&::after': { content: '""', position: 'absolute', inset: -4 } };
-  const voteButton = (direction, label, Icon) => <Tooltip title={label}><span><IconButton
-    aria-label={label} disabled={operation.busy || data.offline} sx={compactIconSx}
-    onClick={() => operation.run(() => invoke(actions, 'vote', post, direction))}
-  ><Icon fontSize="small" /></IconButton></span></Tooltip>;
+  // Vote display (PORCH-104): the count and the highlight derive from the
+  // served two values, with the write's optimistic shadow on top while the
+  // signed write is in flight.
+  const servedVote = ownVoteOf(post?.myVote);
+  const servedUpCount = upCountOf(post?.upCount);
+  const effectiveVote = voteOverride ? voteOverride.vote : servedVote;
+  const upCount = voteOverride ? voteOverride.count : servedUpCount;
+  const castVote = (direction) => {
+    if (operation.busy || data.offline) return;
+    // The highlight moves in the same frame as the click (PORCH-038 class);
+    // a server refusal rolls the highlight and the count back together and
+    // the refusal renders in plain language at the card foot.
+    const next = castVoteState(post, direction);
+    if (!next) return; // a held button is inert (see castVoteState's note)
+    setVoteOverride(next);
+    operation.run(
+      () => invoke(actions, 'vote', post, direction),
+      (result) => {
+        // Re-derive from the response's effective vote (server truth); the
+        // count stays the derived public quantity until the served row
+        // reconciles it.
+        const effective = result?.vote?.effective;
+        setVoteOverride(effective ? { vote: effective, count: next.count } : null);
+        onVoteApplied?.(result);
+      },
+      () => setVoteOverride(null),
+    );
+  };
+  const voteButton = (direction, label, Icon) => <Tooltip title={label}><span>
+    <IconButton
+      aria-label={label} disabled={operation.busy || data.offline}
+      sx={{ ...compactIconSx, ...(effectiveVote === direction ? { bgcolor: 'porchlight.amberSoft', color: 'primary.main' } : {}) }}
+      data-testid={`vote-${direction}`}
+      onClick={() => castVote(direction)}
+    >
+      <Icon fontSize="small" />
+      {direction === 'up' && upCount > 0 && <Typography component="span" sx={{ fontSize: 13, lineHeight: 1, fontWeight: 600, color: 'porchlight.muted', ml: 0.5 }}>{upCount}</Typography>}
+    </IconButton>
+  </span></Tooltip>;
   // The feed-entry anchor (PORCH-046 ac-1): a stable per-post measurement
   // point for the reading-place compensation during live arrival.
   return <Card sx={cardSx} data-feed-entry={postKey(post) || undefined}>
@@ -2460,6 +2510,20 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
   }, [selectedId, data.offline, actions.loadPost, actions.loadComments]);
   const saved = data.offline ? rows(data.posts).find((item) => identityOf(item) === String(selectedId)) : null;
   const post = thread?.id === selectedId ? thread.post : saved;
+  // Vote display (PORCH-104): the detail card derives its count and
+  // self-state from this surface's own served read — the write's confirm
+  // refetches the post once, so the pressed state and the count re-derive
+  // from the fresh payload (the timeline card's reconciliation is the
+  // write-confirm reload's).
+  const onVoteApplied = async () => {
+    try {
+      const postResult = await invoke(actions, 'loadPost', selectedId);
+      if (postResult?.post && identityOf(postResult.post) === String(selectedId)) {
+        setThread((current) => current?.id === selectedId
+          ? { ...current, post: postResult.post } : current);
+      }
+    } catch { /* the optimistic shadow stays until the next served read */ }
+  };
   // The menu's detail read rides the loaded post's group (never a foreign
   // surface's state); a menu write re-reads the group so the rendered rows
   // and presentation agree with hub-served state.
@@ -2559,6 +2623,7 @@ export function PostDetail({ data = {}, actions = {}, navigate, id, routeId }) {
       '@media (min-width: 1000px)': { gridTemplateColumns: 'minmax(0, 680fr) minmax(0, 420fr)' },
     }}>
       <PostCard post={post} data={data} actions={actions} navigate={navigate} detail reactionState={reactionState} onHide={() => navigate?.('/timeline')}
+        onVoteApplied={onVoteApplied}
         groupMenu={detailGroup ? <GroupSettingsMenu group={detailGroup} data={data} actions={actions}
           onchanged={() => setGroupRevision((at) => at + 1)} /> : null} />
       <Box sx={{ minWidth: 0 }}>

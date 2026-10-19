@@ -730,10 +730,11 @@ function App() {
   // Card- and detail-level writes resolve the post's own origin connection
   // through the shared resolver (PORCH-038 ac-4); card and detail ride one
   // routing rule, so a card write lands in the same conversation detail loads.
-  // Reaction and reply writes are optimistic in the surfaces (PORCH-046
-  // ac-2): the card reflects immediately and rolls back on failure, so no
-  // full feed reload rides a card interaction. A vote still reconciles —
-  // prominence order is the server's own computation.
+  // Reaction, reply, and vote writes are optimistic in the surfaces
+  // (PORCH-046 ac-2; vote display PORCH-104): the card reflects immediately
+  // and rolls back on failure. A vote still reconciles — the count and the
+  // member's own self-state re-derive from the served read (the ruled two
+  // values), and prominence order is the server's own computation.
   const connectionForPost = (post) => connectionForPostOrigin(post, identityConnections, active);
   const actions = useMemo(() => ({
     chooseMode,
