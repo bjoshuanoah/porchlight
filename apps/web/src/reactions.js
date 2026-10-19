@@ -174,3 +174,41 @@ export function revealMachine({
     silence,
   };
 }
+// ---- Vote display (PORCH-104, UI half of the Oct 19 ruling) -----------------
+// The vote surfaces' pure model: the served member view carries exactly two
+// vote-derived values — upCount and the viewer's OWN myVote — and nothing
+// else vote-derived may render anywhere. These helpers keep that math in one
+// place for the timeline card and the post detail surface alike.
+
+/** The member's own effective vote as served ("up" | "down", null when they
+ * hold none); any other value (undefined on pre-amendment rows, offline
+ * cache rows) renders as no vote. */
+export function ownVoteOf(myVote) {
+  return myVote === "up" || myVote === "down" ? myVote : null;
+}
+
+/** The post's up-vote quantity as served; a row without a finite upCount
+ * renders no number (zero renders nothing too — zero up-votes is silence). */
+export function upCountOf(upCount) {
+  const value = Number(upCount);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** The optimistic write state for one click on `direction`: cast and flip in
+ * a single step, with the public count derived from the served quantity. A
+ * click on the vote the member already holds is NOT a write: the shipped
+ * signed vote write carries no clear semantics — cast or change only ("a
+ * vote is up or down"; re-stating changes nothing, PORCH-103) — so a held
+ * button stays inert rather than lying optimistically. Returns null to
+ * signal "no write"; the ruled un-vote (clicking a held vote removes it)
+ * needs a server amendment and is flagged on PORCH-104's trail. */
+export function castVoteState(post, direction) {
+  const held = ownVoteOf(post?.myVote);
+  if (direction !== "up" && direction !== "down") return null;
+  if (held === direction) return null;
+  const count = upCountOf(post?.upCount) ?? 0;
+  return {
+    vote: direction,
+    count: Math.max(0, count + (direction === "up" ? 1 : held === "up" ? -1 : 0)),
+  };
+}

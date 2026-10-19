@@ -184,7 +184,14 @@ test("ac-3: no down-vote count, ratio, or another member's vote record on any su
       `no down-bearing or aggregate field: ${fields.join(", ")}`,
     );
   }
-  assert.equal(JSON.stringify(card).includes(":5"), false, "no representation of the five down-votes exists");
+  // No representation of the five down-votes exists anywhere on the payload's
+  // substance. The clock strings (createdAt and its derivatives) are stripped
+  // before the sweep: an ISO timestamp whose minute or second starts with 5
+  // ("…T13:50:22Z") carries ":5" with the wall clock, not with vote data —
+  // the raw blob check was time-of-day flaky (caught running off CI, Oct 19).
+  const withoutClock = JSON.stringify(card)
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z?/g, "");
+  assert.equal(withoutClock.includes(":5"), false, "no representation of the five down-votes exists");
 
   // Susan DOES vote down: her own payload may carry exactly her own state.
   await fx.interactions.vote({
