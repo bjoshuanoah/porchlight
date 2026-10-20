@@ -329,10 +329,17 @@ jobs:
             # 904ms" → `porchlight: command not found`). The attempt only
             # counts when the BINARY ACTUALLY RUNS, not merely when install
             # exits 0.
+            # Pin the install to the cut version: during registry propagation
+            # the unpinned form can still resolve the PREVIOUS latest, which
+            # installs cleanly and runs — the leg would verify the wrong cut
+            # while believing it verified this one. Installing porchlight@$VERSION
+            # fails (ETARGET) until this cut has actually propagated, and the
+            # installed binary must self-report exactly the cut version.
             installed=""
             for attempt in 1 2 3 4 5 6; do
-              if npm install -g porchlight && porchlight --version; then installed="1"; break; fi
-              echo "attempt $attempt failed (install or binary run) — waiting 45s for registry propagation"
+              got="$(npm install -g "porchlight@$VERSION" >/dev/null 2>&1 && porchlight --version 2>/dev/null || true)"
+              if [ -n "$got" ] && [ "$got" = "$VERSION" ]; then installed="1"; break; fi
+              echo "attempt $attempt failed (install or binary run, got version ${got:-none}, want $VERSION) — waiting 45s for registry propagation"
               sleep 45
             done
             if [ -z "$installed" ]; then
