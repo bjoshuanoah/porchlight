@@ -257,30 +257,34 @@ test("PORCH-091 ac-1: the reaction read attributes reactors (name + avatar); ac-
 test("ac-4: votes are one effective signed vote per member per post, changeable", async () => {
   const { interactions, collections, dev, juneDev, familyToken, juneToken, post } = await contentFixture();
 
+  // PORCH-113: the author's self-vote (up) rides the post from creation;
+  // June's write joins it as the second effective vote.
   const upPayload = { postId: post._id, value: "up" };
   await interactions.vote({ accessToken: juneToken, payload: upPayload, signature: juneDev.signPayload(upPayload) });
-  let stored = await collections.votes.find({ postId: post._id });
-  assert.equal(stored.length, 1);
-  assert.equal(stored[0].value, "up");
-  assert.equal(stored[0].memberDid, JUNE);
-  assert.equal(stored[0].deviceSignature, juneDev.signPayload(upPayload));
+  const allVotes = () => collections.votes.find({ postId: post._id });
+  let stored = await allVotes();
+  assert.equal(stored.length, 2);
+  const juneRow = () => stored.find((row) => row.memberDid === JUNE);
+  assert.equal(juneRow().value, "up");
+  assert.equal(juneRow().deviceSignature, juneDev.signPayload(upPayload));
 
   // Changing the vote flips the single effective vote (re-signed).
   const downPayload = { postId: post._id, value: "down" };
   await interactions.vote({ accessToken: juneToken, payload: downPayload, signature: juneDev.signPayload(downPayload) });
-  stored = await collections.votes.find({ postId: post._id });
-  assert.equal(stored.length, 1);
-  assert.equal(stored[0].value, "down");
-  assert.notEqual(stored[0].changedAt, null);
+  stored = await allVotes();
+  assert.equal(stored.length, 2);
+  assert.equal(juneRow().value, "down");
+  assert.notEqual(juneRow().changedAt, null);
 
   // Re-stating the same value changes nothing.
   await interactions.vote({ accessToken: juneToken, payload: downPayload, signature: juneDev.signPayload(downPayload) });
-  assert.equal((await collections.votes.find({ postId: post._id })).length, 1);
+  assert.equal((await allVotes()).length, 2);
 
-  // One effective vote each: Susan's up vote lives alongside June's.
+  // One effective vote each: Susan's up vote (her creation self-vote,
+  // restated here through the ordinary write) lives alongside June's.
   const susanVote = { postId: post._id, value: "up" };
   await interactions.vote({ accessToken: familyToken, payload: susanVote, signature: dev.signPayload(susanVote) });
-  const all = await collections.votes.find({ postId: post._id });
+  const all = await allVotes();
   assert.equal(all.length, 2);
   assert.deepEqual(all.map((row) => row.value).sort(), ["down", "up"]);
 

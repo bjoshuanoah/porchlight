@@ -436,6 +436,8 @@ type FeedGroupBody = { group: { _id: string } };
 type FeedGroupTimelineBody = { group: { _id: string }; posts: { _id: string }[] };
 type FeedListBody = { posts: { _id: string }[] };
 type FeedVoteBody = { vote: { postId: string; effective: string } };
+type FeedClearedVoteBody = { vote: { postId: string; effective: null } };
+type FeedErrorBody = { error: string; code: string };
 type FeedRankingBody = { formula: string; parameters: Record<string, Record<string, unknown>> };
 
 test("feed assembly: timeline, group view, ranked order, and search end to end (contract)", async (t) => {
@@ -544,6 +546,26 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
     assert.equal("interactionCounters" in post, false);
     assert.equal("voteVolume" in post, false);
   }
+
+  // Un-vote clear ride (PORCH-113, Oct 20 2026): the signed clear route
+  // ships on the real vertical; the clear removes the member's own row.
+  const clearPayload = { postId: captioned._id };
+  const clear = await fetch(`http://127.0.0.1:${port}/api/social/posts/${captioned._id}/votes`, {
+    method: "DELETE",
+    headers: auth,
+    body: signedBody(clearPayload),
+  });
+  assert.equal(clear.status, 200);
+  const cleared = (await clear.json()) as FeedClearedVoteBody;
+  assert.deepEqual(cleared.vote, { postId: captioned._id, effective: null });
+  // A clear with nothing held refuses plainly with zero mutation.
+  const clearAgain = await fetch(`http://127.0.0.1:${port}/api/social/posts/${captioned._id}/votes`, {
+    method: "DELETE",
+    headers: auth,
+    body: signedBody(clearPayload),
+  });
+  assert.equal(clearAgain.status, 400);
+  assert.equal(((await clearAgain.json()) as FeedErrorBody).code, "E_VOTE_NOT_HELD");
 
   // Plain-text search over captions, scoped to the origin.
   const search = await fetch(`http://127.0.0.1:${port}/api/social/search?q=${encodeURIComponent("picnic")}`, { headers: auth });

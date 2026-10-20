@@ -587,6 +587,35 @@ export class InteractionService {
   }
 
   /**
+   * Clear the member's own vote — the un-vote ride (PORCH-113; the
+   * vote-display ruling's "clicking a held vote again removes it", Brian,
+   * Oct 19, 2026): the clear write removes only the member's own vote row
+   * on the existing signed vote path (same token scope, same device-signature
+   * verification, same recount), recomputing volume and ratio in the stored
+   * counters. Other members' rows are untouched. A member holding no vote
+   * receives a plain refusal with zero mutation (idempotent: the repeated
+   * clear resolves the same refusal, never a state change).
+   */
+  async unvote({ accessToken, payload, signature } = {}) {
+    interactionPayload(payload);
+    const session = await this.#requireSession({ accessToken, postId: payload?.postId });
+    await this.#verifyWrite({ session, payload, signature });
+    const networkId = session.networkId;
+    const existing = await this.votes.findOne({ postId: payload.postId, networkId, memberDid: session.did });
+    if (!existing) {
+      throw typedError("E_VOTE_NOT_HELD", "You have no vote on this post to clear.");
+    }
+    await this.votes.deleteOne({ _id: existing._id });
+    await this.#recount({ postId: payload.postId });
+    await this.audit("vote_remove", {
+      networkId,
+      did: session.did,
+      detail: { postId: payload.postId, voteId: existing._id, value: existing.value },
+    });
+    return { vote: { postId: payload.postId, effective: null } };
+  }
+
+  /**
    * Thread read for a member: mentions in views, roots → leaves. The ruled
    * read order of record (PORCH-085, paired PRD 6ad13dde89855af1a3cc050b):
    * roots serve threaded-first then newest-first; each root's tree serves
