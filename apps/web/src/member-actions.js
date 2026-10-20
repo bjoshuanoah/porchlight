@@ -84,6 +84,17 @@ export async function publishVote(connection, post, value) {
   });
 }
 
+// The un-vote clear ride (PORCH-114; server half PORCH-113): the signed
+// DELETE on the vote path removes only the member's own vote row — same
+// origin-scoped path, same signed payload shape as every other member
+// write. The server recounts and refuses plainly (E_VOTE_NOT_HELD) when
+// nothing is held, so a refused clear mutates nothing.
+export async function unpublishVote(connection, post) {
+  return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/votes`, {
+    postId: post._id || post.id,
+  }, "DELETE");
+}
+
 // Group settings menu (PORCH-089): the client half of the group settings
 // workstream's write vocabulary. The routes and their server-side gates
 // merged with PORCH-088 on the main line; these builders exist as exports so the

@@ -199,8 +199,10 @@ test("ac-6: no vote affordance renders on any comment row — votes stay on post
       "no up/down vote affordance renders on any root comment or reply row");
   }
   // The vote affordance of record is the post's alone: the single vote
-  // control binds to the post argument on both surfaces' action bars.
-  assert.match(social, /invoke\(actions, 'vote', post, direction\)/);
+  // control binds to the post argument on both surfaces' action bars, and
+  // the RESOLVED write rides (a held click's clear carries vote: null —
+  // PORCH-114's un-vote ride), never the raw clicked direction.
+  assert.match(social, /invoke\(actions, 'vote', post, next\.vote \?\? null\)/);
 });
 
 // PORCH-086 trail (Brian's hub, Oct 15): since PORCH-084 landed, the card's

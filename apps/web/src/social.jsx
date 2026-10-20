@@ -1165,16 +1165,22 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
     // a server refusal rolls the highlight and the count back together and
     // the refusal renders in plain language at the card foot.
     const next = castVoteState(post, direction);
-    if (!next) return; // a held button is inert (see castVoteState's note)
+    if (!next) return; // a non-vote direction is not a write (see castVoteState)
     setVoteOverride(next);
     operation.run(
-      () => invoke(actions, 'vote', post, direction),
+      // The RESOLVED write rides, never the clicked direction: a clear's
+      // vote is null and the action routes the signed DELETE (PORCH-114) —
+      // a held click must never re-state the held vote (cast/change only
+      // fires for a real cast or flip).
+      () => invoke(actions, 'vote', post, next.vote ?? null),
       (result) => {
         // Re-derive from the response's effective vote (server truth); the
         // count stays the derived public quantity until the served row
-        // reconciles it.
+        // reconciles it. A confirmed clear (effective null) keeps the
+        // derived count and the dropped highlight until the same
+        // reconciliation retires the shadow.
         const effective = result?.vote?.effective;
-        setVoteOverride(effective ? { vote: effective, count: next.count } : null);
+        setVoteOverride(effective ? { vote: effective, count: next.count } : next.vote === null ? next : null);
         onVoteApplied?.(result);
       },
       () => setVoteOverride(null),

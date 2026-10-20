@@ -26,6 +26,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = fileURLToPath(new URL("../", import.meta.url));
 const social = await readFile(join(webRoot, "src", "social.jsx"), "utf8");
 const memberActions = await readFile(join(webRoot, "src", "member-actions.js"), "utf8");
+const mainSource = await readFile(join(webRoot, "src", "main.jsx"), "utf8");
 
 // One bundled build of src/social.jsx shared by the rendered sweeps; the
 // fixture directory is removed when the suite ends.
@@ -111,9 +112,16 @@ test("ac-1 model: one click casts or flips — the count derives from the public
   assert.deepEqual(castVoteState({ myVote: null, upCount: 0 }, "up"), { vote: "up", count: 1 });
 });
 
-test("ac-3 model: clicking a held vote is no write", () => {
-  assert.equal(castVoteState({ myVote: "up", upCount: 4 }, "up"), null);
-  assert.equal(castVoteState({ myVote: "down", upCount: 1 }, "down"), null);
+test("ac-2 model: clicking a held vote is the clear write — the count re-derives", () => {
+  // The un-vote ride (PORCH-114, the Oct 20 amendment): a held click IS a
+  // write — the signed clear — so every click on a vote control resolves a
+  // server write (cast, change, or clear) and no dead button state survives.
+  assert.deepEqual(castVoteState({ myVote: "up", upCount: 4 }, "up"), { vote: null, count: 3 });
+  assert.deepEqual(castVoteState({ myVote: "up", upCount: 1 }, "up"), { vote: null, count: 0 });
+  // A held down vote was silent on the up-count; the clear stays silent too.
+  assert.deepEqual(castVoteState({ myVote: "down", upCount: 4 }, "down"), { vote: null, count: 4 });
+  assert.deepEqual(castVoteState({ myVote: "down", upCount: 0 }, "down"), { vote: null, count: 0 });
+  // A direction that is not a vote is still no write.
   assert.equal(castVoteState({ myVote: "up" }, "sideways"), null);
 });
 
@@ -176,8 +184,10 @@ test("ac-4: the render layer reads only the two ruled values — no down counts,
   assert.doesNotMatch(social, /downVolume|voteRatio|interactionCounters|deviceSignature/i);
   assert.match(social, /upCountOf\(post\?\.upCount\)/);
   assert.match(social, /ownVoteOf\(post\?\.myVote\)/);
-  // The one vote write: the signed publishVote builder, riding every click.
-  assert.match(social, /invoke\(actions, 'vote', post, direction\)/);
+  // The one vote write: the signed publishVote builder, riding every
+  // cast/change click; the RESOLVED write rides (a clear's vote is null —
+  // never the clicked direction), so a held click cannot re-state.
+  assert.match(social, /invoke\(actions, 'vote', post, next\.vote \?\? null\)/);
   // Exactly one testid pair — the vote display never duplicates on expander
   // rows, menus, or overlays.
   assert.equal((social.match(/data-testid=\{`vote-\$\{direction\}`\}/g) ?? []).length, 1);
@@ -187,6 +197,12 @@ test("ac-4: the signed vote wire carries only postId and value — nothing else 
   const builder = memberActions.match(/export async function publishVote[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(builder, /value/);
   assert.doesNotMatch(builder, /ratio|count|signature|memberDid/i, "the vote write payload carries postId and the value alone");
+  // The un-vote clear ride (PORCH-114): the clear is a signed DELETE on the
+  // same vote path, carrying postId alone — no vote-derived value crosses.
+  const clear = memberActions.match(/export async function unpublishVote[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(clear, /"DELETE"/, "the clear rides the signed DELETE on the vote path");
+  assert.match(clear, /postId/);
+  assert.doesNotMatch(clear, /value|ratio|count|memberDid/i);
 });
 
 test("ac-4: comment rows render no vote affordance (the Oct 15 defer stands)", () => {
@@ -241,6 +257,34 @@ test("ac-3: the optimistic shadow and the rollback wiring ride the card's write"
   assert.match(postCard, /\(post\?\.myVote \?\? null\) === voteOverride\.vote\) setVoteOverride\(null\)/);
   // The response's effective vote re-derives the highlight.
   assert.match(postCard, /result\?\.vote\?\.effective/);
+  // The confirmed clear (effective null) keeps the derived count and the
+  // dropped highlight until the reconciliation retires the shadow (PORCH-114).
+  assert.match(postCard, /next\.vote === null \? next : null/);
+});
+
+test("ac-2 wire: the held click routes to the signed clear — one write per click", () => {
+  // The app's vote action resolves the write well-definedly: a vote
+  // direction rides the cast/change builder, any other click (a held
+  // button) rides the clear DELETE — and the reload re-derives from the
+  // served truth after every step.
+  const voteAction = mainSource.match(/vote: async \(post, value\) => \{[\s\S]*?\n {4}\},/)?.[0] ?? "";
+  assert.match(voteAction, /publishVote\(connectionForPost\(post\), post, value\)/);
+  assert.match(voteAction, /unpublishVote\(connectionForPost\(post\), post\)/);
+  assert.match(voteAction, /await reload\(\)/);
+});
+
+test("ac-1 publish: the composer adds nothing, asks nothing, and stages no vote write", () => {
+  const compose = social.slice(social.indexOf("export function Compose("), social.indexOf("export function Albums("));
+  assert.doesNotMatch(compose, /Lift|Lower|voteOverride|castVoteState|'vote'/, "no composer control, checkbox, or vote affordance exists in the compose card");
+  // The creation path is exactly one signed write plus the served truth —
+  // the create response's member view (upCount with the self-vote counted,
+  // the author's myVote = up) reconciles the author's row before the
+  // reload's wholesale read; never a separate vote call on the path.
+  const submit = mainSource.match(/submitPost: async \(payload\) => \{[\s\S]*?\n {4}\},/)?.[0] ?? "";
+  assert.doesNotMatch(submit, /publishVote|unpublishVote/, "the creation path carries no separate vote write");
+  assert.match(submit, /await publishPost\(active, payload\);/, "the one signed creation write");
+  assert.match(submit, /result\.post/, "the create response's member view reconciles the author's row");
+  assert.match(submit, /await reload\(\);/, "the served truth re-derives the river after the write");
 });
 
 test("ac-5: count and arrow accent carry both display modes identically", async () => {
