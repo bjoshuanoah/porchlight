@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Collapse, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemIcon,
+  DialogContent, DialogTitle, Divider, IconButton, Link, List, ListItem, ListItemAvatar, ListItemIcon,
   ListItemText, Menu, MenuItem, Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 // PORCH-095: the lantern loader family — the boot surface doubles as the
@@ -16,6 +16,13 @@ import { addressPanelModel, draftHost, addressConsequences, addressIntro, addres
 import { joinNameErrors, resumedDetail, setupStage } from './setup-state.js';
 import { copyLink, directoryRows, inviteDialogCopy, inviteRows, viewerIsOwner, viewerRole, roleLabel } from './member-directory.js';
 import { updateCardModel } from './update.js';
+// PORCH-111: the release notes render formatted — the notes' raw markdown
+// (the verbatim payload field, ac-4) parses through the shared constrained
+// markdown parser into blocks and runs of pure text data, mapped to MUI
+// components below. The parser never emits markup, so any HTML carried
+// inside note content stays literal escaped text (ac-2): no raw-node
+// rendering, no inner-HTML writes, anywhere on this surface.
+import { parseMarkdownBlocks } from '@porchlight/shared/markdown';
 import { consoleTabs } from './console-tabs.js';
 import { formatStorage, formatStorageMb, ceilingMbToGb, ceilingGbToMb } from './storage-format.js';
 import { Lockup, LampMark } from './brand.jsx';
@@ -25,6 +32,49 @@ import { NotificationSettings } from './notifications.jsx';
 // through the one avatar-face code path (authorized fetch + the identity-
 // keyed blob cache; the metas-less fallback stays initials).
 import { AvatarFace, ownFaceSources, rungOf } from './avatar-face.js';
+
+// Release notes on the Updates card (PORCH-111): the constrained markdown
+// blocks map to structured text — headings to Typography subtitles, bullets
+// to lists, bold/italic/code/link runs to inline elements. Runs carry text
+// data only (the parser never emits markup), so React escapes any raw HTML
+// the content carries; nothing here renders nodes.
+function ReleaseRuns({ runs }) {
+  return runs.map((run, index) =>
+    run.code ? <code key={index}>{run.text}</code>
+      // Links open away from the console without referrer leakage; the
+      // parser guarantees run.text is the literal link label, not markup.
+      : run.href ? <Link key={index} href={run.href} target="_blank" rel="noreferrer">{run.text}</Link>
+        : run.bold ? <b key={index}>{run.text}</b>
+          : run.italic ? <i key={index}>{run.text}</i>
+            : <React.Fragment key={index}>{run.text}</React.Fragment>);
+}
+
+function ReleaseNotesList({ list, nested = false }) {
+  const sx = {
+    display: 'block', my: 0, pl: nested ? 2 : 3,
+    listStyleType: list.ordered ? 'decimal' : 'disc', listStylePosition: 'outside',
+  };
+  return (
+    <Box component={list.ordered ? 'ol' : 'ul'} start={list.start} sx={sx}>
+      {list.items.map((item, index) => (
+        <Box component="li" key={index} sx={{ '& + &': { mt: 0.5 } }}>
+          <Typography variant="body2" component="span" sx={{ wordBreak: 'break-word' }}>{<ReleaseRuns runs={item.runs} />}</Typography>
+          {item.items.length > 0 && <ReleaseNotesList list={{ ...list, items: item.items }} nested />}
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+function ReleaseNotesBlocks({ text }) {
+  return parseMarkdownBlocks(text).map((block, index) => {
+    if (block.kind === 'heading') return <Typography key={index} variant="subtitle2" component="div" sx={{ mt: 1 }}>{<ReleaseRuns runs={block.runs} />}</Typography>;
+    if (block.kind === 'rule') return <Divider key={index} sx={{ my: 1 }} />;
+    if (block.kind === 'pre') return <Box key={index} component="pre" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', m: 0, fontSize: '0.85em' }}>{block.text}</Box>;
+    if (block.kind === 'list') return <ReleaseNotesList key={index} list={block} />;
+    return <Typography key={index} variant="body2" component="div" sx={{ wordBreak: 'break-word' }}>{<ReleaseRuns runs={block.runs} />}</Typography>;
+  });
+}
 
 /** Removal capability on the ladder (PORCH-053): the owner removes anyone
  * (the final-owner invariant guards the last one); a delegate removes
@@ -1454,7 +1504,12 @@ export function OwnerConsole({ data, actions, navigate }) {
             {card.state === 'newer' && <Box sx={{ mt: 2 }}>
               {card.notes && <Box data-testid="release-notes" sx={{ mb: 2 }}>
                 {card.notes.source !== 'unavailable' && <Typography variant="subtitle2" gutterBottom>What v{card.applyTo} changes</Typography>}
-                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...(card.notes.source === 'unavailable' ? { color: 'text.secondary' } : {}) }}>{card.notes.text}</Typography>
+                {/* PORCH-111: available notes render as structured markdown
+                    (parsed never emitted as markup — ac-2); the
+                    named-unavailable line stays plain prose. */}
+                {card.notes.source === 'unavailable'
+                  ? <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{card.notes.text}</Typography>
+                  : <ReleaseNotesBlocks text={card.notes.text} />}
               </Box>}
               <Button variant="contained" disabled={updating || typeof actions?.applyUpdate !== 'function'} onClick={applyNewRelease}>Update now</Button>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>One owner action: the hub installs the release through npm and restarts itself, serving at the same address.</Typography>

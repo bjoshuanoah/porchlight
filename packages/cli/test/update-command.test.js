@@ -78,10 +78,10 @@ test("ac-2: a newer release is applied through the shared path and completion is
   assert.equal(process.exitCode ?? 0, 0);
 });
 
-test("porch-077 ac-2: the CLI prints the pending release's notes before any apply — verbatim from the shared chain", async (t) => {
+test("porch-111 ac-3: the CLI prints the pending release's notes before any apply — terminal-formatted from the shared chain", async (t) => {
   t.after(() => { process.exitCode = undefined; });
   const dir = await tempHome(t);
-  const notesText = "Carries PORCH-077: release notes on the update surfaces (Brian, Oct 14, 2026).";
+  const notesText = ["## What v2.0.0 changes", "", "- **Formatted release notes** — [markdown](https://example.com) and `code`.", "- second bullet"].join("\n");
   const h = harness({
     statusBody: {
       release: {
@@ -94,11 +94,13 @@ test("porch-077 ac-2: the CLI prints the pending release's notes before any appl
     applyBody: { status: "applied", release: { from: "1.2.3", to: "2.0.0" } },
   });
   await import("../src/update.mjs").then(({ run }) => run({ home: dir }, h.impl));
-  // The notes print BEFORE the apply call and verbatim — never a summary.
+  // The notes print BEFORE the apply call, terminal-formatted from their
+  // markdown (headings bold, bullets marked, bold/link/code de-glyphed; no
+  // ANSI on the captured non-TTY stdout) — never a summary, never glyph soup.
   assert.deepEqual(h.calls.lines, [
-    `what v2.0.0 changes (verbatim from the GitHub release):\n`,
-    `${notesText}\n`,
+    `release notes for v2.0.0 (from the GitHub release):\n`,
     "\n",
+    `What v2.0.0 changes\n\n• Formatted release notes — markdown (https://example.com) and code.\n• second bullet\n\n`,
     "current release: v1.2.3\n",
     "latest release:  v2.0.0 (npm registry)\n",
     "applying the update through the hub's update service...\n",

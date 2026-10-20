@@ -11,7 +11,8 @@
   "main": "src/index.js",
   "types": "src/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./markdown": "./src/markdown.js"
   },
   "scripts": {
     "test": "node --test 'test/**/*.test.js'",
