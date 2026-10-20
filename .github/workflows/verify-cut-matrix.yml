@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           installed=""
           for attempt in 1 2 3 4 5 6; do
-            got="$(npm install -g "porchlight@$VERSION" >/dev/null 2>&1 && porchlight --version 2>/dev/null || true)"
+            got="$(npm install -g "porchlight@$VERSION" >/dev/null 2>&1 && porchlight --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' | head -1 | sed 's/^v//' || true)"
             if [ -n "$got" ] && [ "$got" = "$VERSION" ]; then installed="1"; break; fi
             echo "attempt $attempt failed (install or binary run, got version ${got:-none}, want $VERSION) — waiting 45s for registry propagation"
             sleep 45
