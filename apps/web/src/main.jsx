@@ -7,6 +7,7 @@ import GroupsOutlined from "@mui/icons-material/GroupsOutlined";
 import AddOutlined from "@mui/icons-material/AddOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutline";
 import { themeFor, tokenStyles, lightTokens, darkTokens } from "./theme.js";
+import { identityOf } from "./feed-filter.js";
 import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
 // PORCH-055: the signed-out marker and boot routing for the device front state.
 import { bootRoute, readSignedOut, markSignedOut, clearSignedOut } from "./front-state.js";
@@ -18,7 +19,7 @@ import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage, signDevicePayload } from "./device.js";
 import { sha256Hex } from "./device-crypto.js";
 import { resolveStoredNames } from "./name-heal.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishCommentReaction, unpublishCommentReaction, publishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost, editPost as sendPostEdit, deletePost as sendPostDelete, editComment as sendCommentEdit, deleteComment as sendCommentDelete } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishCommentReaction, unpublishCommentReaction, publishVote, unpublishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost, editPost as sendPostEdit, deletePost as sendPostDelete, editComment as sendCommentEdit, deleteComment as sendCommentDelete } from "./member-actions.js";
 import {
   snapshotPostRow, applyPostEditedRow, revertPostEditedRow,
   applyCommentEditedRow, applyCommentDeletedRows,
@@ -1242,7 +1243,17 @@ function App() {
     linkDevice: (grant) => bindDevice("identity/device-link/consume", grant),
     // No server-side origin confirmation event exists yet. Never dismiss by pretending.
     confirmDevice: unsupported,
-    vote: async (post, value) => { const result = await publishVote(connectionForPost(post), post, value); await reload(); return result; },
+    vote: async (post, value) => {
+      // Every click resolves a well-defined server write (PORCH-114): a
+      // vote direction is the signed cast/change write; any other click
+      // (a held button) is the un-vote clear ride — the signed DELETE on
+      // the vote path.
+      const result = value === "up" || value === "down"
+        ? await publishVote(connectionForPost(post), post, value)
+        : await unpublishVote(connectionForPost(post), post);
+      await reload();
+      return result;
+    },
     react: async (post, emoji) => publishReaction(connectionForPost(post), post, emoji),
     unreact: async (post, emoji) => unpublishReaction(connectionForPost(post), post, emoji),
     // Comment-subject reactions (PORCH-101): the same optimistic-discipline
@@ -1251,7 +1262,27 @@ function App() {
     // rides the payload per PORCH-098.
     reactComment: async (post, comment, emoji) => publishCommentReaction(connectionForPost(post), post, comment, emoji),
     unreactComment: async (post, comment, emoji) => unpublishCommentReaction(connectionForPost(post), post, comment, emoji),
-    submitPost: async (payload) => { const result = await publishPost(active, payload); await reload(); return result; },
+    // Publish flow (PORCH-114 ac-1): the create response's member view —
+    // upCount with the author's self-vote counted, the author's myVote = up
+    // — is served truth for the author's own card. The arriving
+    // post.created envelope carries no per-viewer myVote (the privacy law:
+    // broadcast envelopes never carry one), so the created row reconciles
+    // with the response's member view in place; the envelope's later echo
+    // dedupes against the row and the reload re-derives the wholesale
+    // river. The composer adds nothing: one signed creation write, no
+    // separate vote write.
+    submitPost: async (payload) => {
+      const result = await publishPost(active, payload);
+      if (result?.post && identityOf(result.post)) {
+        const createdId = identityOf(result.post);
+        postsRef.current = postsRef.current?.some((row) => identityOf(row) === createdId)
+          ? postsRef.current.map((row) => (identityOf(row) === createdId ? result.post : row))
+          : [result.post, ...(postsRef.current ?? [])];
+        setPosts(postsRef.current);
+      }
+      await reload();
+      return result;
+    },
     // Post + comment lifecycle (PORCH-094): the edit merges the changed
     // fields into the river optimistically (same instance, stable key — the
     // card re-renders its fields in place, no full-card remount) and reverts

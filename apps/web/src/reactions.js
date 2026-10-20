@@ -194,19 +194,23 @@ export function upCountOf(upCount) {
   return Number.isFinite(value) ? value : null;
 }
 
-/** The optimistic write state for one click on `direction`: cast and flip in
- * a single step, with the public count derived from the served quantity. A
- * click on the vote the member already holds is NOT a write: the shipped
- * signed vote write carries no clear semantics — cast or change only ("a
- * vote is up or down"; re-stating changes nothing, PORCH-103) — so a held
- * button stays inert rather than lying optimistically. Returns null to
- * signal "no write"; the ruled un-vote (clicking a held vote removes it)
- * needs a server amendment and is flagged on PORCH-104's trail. */
+/** The optimistic write state for one click on `direction`: cast, change,
+ * or clear in a single step, with the public count derived from the served
+ * quantity. A click on the vote the member already holds IS a write — the
+ * un-vote clear ride (PORCH-114, the Oct 20 amendment; server half
+ * PORCH-113's signed DELETE): every click on a vote control resolves a
+ * well-defined server write (cast, change, or clear), so a held button
+ * never stays dead. The clear state carries vote: null with the count
+ * re-derived (a held "up" vote leaves the up column; a held "down" vote
+ * was silent on the count and stays silent). Returns null only for a
+ * direction that is not a vote. */
 export function castVoteState(post, direction) {
   const held = ownVoteOf(post?.myVote);
   if (direction !== "up" && direction !== "down") return null;
-  if (held === direction) return null;
   const count = upCountOf(post?.upCount) ?? 0;
+  if (held === direction) {
+    return { vote: null, count: Math.max(0, count + (direction === "up" ? -1 : 0)) };
+  }
   return {
     vote: direction,
     count: Math.max(0, count + (direction === "up" ? 1 : held === "up" ? -1 : 0)),
