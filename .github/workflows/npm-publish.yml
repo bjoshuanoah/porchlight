@@ -306,6 +306,7 @@ jobs:
     env:
       MODE: ${{ needs.release.outputs.mode }}
       TAG: ${{ needs.release.outputs.tag }}
+      VERSION: ${{ needs.release.outputs.version }}
     steps:
       - uses: actions/setup-node@v4
         with:

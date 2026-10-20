@@ -1,0 +1,69 @@
+name: verify-cut-matrix
+
+# PORCH-112 one-off (temporary). Re-runs the npm-publish verify-install legs
+# — the FIXED script (pinned registry install + version equality assert +
+# media smoke) — verbatim against the live registry payload on the three
+# matrix OSes, checking out the cut tag of record for the media-smoke script.
+#
+# Why this exists: re-runs of a tag-triggered run pin the workflow file to the
+# tag's SHA (docs.github.com/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs),
+# so a run whose legs broke on a workflow-file defect cannot be made green by
+# re-running. This runner proves the same substance on the same payload; it
+# is removed after the evidence lands.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Registry version to verify (e.g. 0.5.0)"
+        required: true
+        default: "0.5.0"
+        type: string
+
+permissions: {}
+
+jobs:
+  verify-install:
+    name: registry npm i -g porchlight@${{ inputs.version }} + binary run (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ inputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The media smoke rides the repo's release script at the cut tag of
+      # record, so the evidence source matches the bundler's own verify step
+      # on every OS (same as the npm-publish verify-install legs).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ format('v{0}', inputs.version) }}
+      - name: Install globally from the registry (pinned) + smoke run
+        run: |
+          set -euo pipefail
+          installed=""
+          for attempt in 1 2 3 4 5 6; do
+            got="$(npm install -g "porchlight@$VERSION" >/dev/null 2>&1 && porchlight --version 2>/dev/null || true)"
+            if [ -n "$got" ] && [ "$got" = "$VERSION" ]; then installed="1"; break; fi
+            echo "attempt $attempt failed (install or binary run, got version ${got:-none}, want $VERSION) — waiting 45s for registry propagation"
+            sleep 45
+          done
+          if [ -z "$installed" ]; then
+            echo "::error::npm install -g porchlight@$VERSION never produced a running porchlight binary from the registry"
+            exit 1
+          fi
+          porchlight --version
+          porchlight
+          echo "OK: porchlight@$VERSION binary ran from PATH on ${{ matrix.os }}."
+      - name: sharp platform smoke — real hub media operation through the installed platform binary (PORCH-067)
+        run: |
+          set -euo pipefail
+          node scripts/release/media-smoke.mjs
+          echo "OK: hub media operation completed on ${{ matrix.os }}."
