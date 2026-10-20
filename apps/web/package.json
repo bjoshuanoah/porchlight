@@ -1,6 +1,6 @@
 {
   "name": "@porchlight/web",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "description": "Hub-served Porchlight web and mobile-web SPA",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "@mui/material": "^7.3.0",
     "@noble/ed25519": "^3.2.0",
     "@noble/hashes": "^2.4.0",
-    "@porchlight/shared": "0.4.1",
+    "@porchlight/shared": "0.5.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "socket.io-client": "^4.8.4",
