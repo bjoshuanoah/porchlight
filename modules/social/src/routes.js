@@ -55,6 +55,9 @@ export function createSocialRouter(controllers) {
   router.get("/posts/:postId/reactions", content.listReactions);
   router.delete("/posts/:postId/reactions", content.unreact);
   router.post("/posts/:postId/votes", content.vote);
+  // Un-vote clear ride (PORCH-113, Oct 20, 2026): clicking a held vote again
+  // resolves this signed clear write — the member's own vote row leaves.
+  router.delete("/posts/:postId/votes", content.unvote);
   router.delete("/posts/:postId", content.deletePost);
   // Lifecycle edits (PORCH-093): the author's silent text/caption edit on
   // the post and the author's text edit on a comment; media changes are

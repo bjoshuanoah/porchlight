@@ -52,9 +52,14 @@ test("ac-1: text, photo, video, audio posts store one origin with signed authors
   const storedText = await collections.posts.findOne({ _id: text._id });
   assert.equal(storedText.originNetworkId, FAMILY);
   assert.equal(storedText.deviceSignature, dev.signPayload(payload));
+  // PORCH-113: the creation write lands the author's own up-vote in the
+  // same operation — the counters resolve the self-vote from birth.
   assert.deepEqual(storedText.interactionCounters, {
-    upVolume: 0, downVolume: 0, voteVolume: 0, voteRatio: 0, commentCount: 0, reactionCount: 0,
+    upVolume: 1, downVolume: 0, voteVolume: 1, voteRatio: 1, commentCount: 0, reactionCount: 0,
   });
+  const selfVotes = await collections.votes.find({ postId: text._id, memberDid: SUSAN, value: "up" });
+  assert.equal(selfVotes.length, 1);
+  assert.equal(selfVotes[0].deviceSignature, dev.signPayload(payload));
   // Nothing is stored on any other network.
   assert.deepEqual(await collections.posts.find({ originNetworkId: OTHER }), []);
 });
@@ -167,13 +172,14 @@ test("ac-2: cross-post creates an independent post — display hint is the only 
   assert.deepEqual(cross.displayHint, { crossPostOf: source._id });
   assert.equal(source.displayHint, null); // the source document is untouched
 
-  // Two independent stored documents.
+  // Two independent stored documents. PORCH-113: cross-posted twins each
+  // carry their own independent author self-vote (ac-2).
   const storedSource = await collections.posts.findOne({ _id: source._id });
   const storedCross = await collections.posts.findOne({ _id: cross._id });
   assert.equal(storedSource.originNetworkId, FAMILY);
   assert.equal(storedCross.originNetworkId, OTHER);
-  assert.deepEqual(storedSource.interactionCounters.voteVolume, 0);
-  assert.deepEqual(storedCross.interactionCounters.voteVolume, 0);
+  assert.deepEqual(storedSource.interactionCounters.voteVolume, 1);
+  assert.deepEqual(storedCross.interactionCounters.voteVolume, 1);
 
   // The family timeline never shows the cross-post.
   const familyList = await posts.list({ accessToken: familyToken });
@@ -187,11 +193,17 @@ test("ac-2: cross-post interactions stay contained — voting on one copy leaves
   const crossPayload = { type: "photo", mediaRefs: ["med_own"], crossPostRef: source._id };
   const cross = (await posts.create({ accessToken: otherToken, payload: crossPayload, signature: dev.signPayload(crossPayload) })).post;
 
-  const crossVote = { postId: cross._id, value: "up" };
+  // PORCH-113: each twin holds its own author self-vote. Susan flips the
+  // cross copy down (a real write on that twin only); the source keeps its
+  // own self-vote untouched.
+  const crossVote = { postId: cross._id, value: "down" };
   await interactions.vote({ accessToken: otherToken, payload: crossVote, signature: dev.signPayload(crossVote) });
 
-  assert.equal((await collections.posts.findOne({ _id: cross._id })).interactionCounters.voteVolume, 1);
-  assert.equal((await collections.posts.findOne({ _id: source._id })).interactionCounters.voteVolume, 0);
+  const crossCounters = (await collections.posts.findOne({ _id: cross._id })).interactionCounters;
+  assert.equal(crossCounters.voteVolume, 1, "the flip re-signed the twin's single effective vote");
+  assert.equal(crossCounters.upVolume, 0);
+  assert.equal((await collections.posts.findOne({ _id: source._id })).interactionCounters.voteVolume, 1,
+    "the source twin keeps its own self-vote — the cross write never touched it");
 });
 
 test("ac-5: post deletion cascades transactionally — interactions, derived rows, artifacts all go", async () => {
@@ -218,12 +230,13 @@ test("ac-5: post deletion cascades transactionally — interactions, derived row
   const signature = dev.signPayload({ kind: "delete", postId: post._id, networkId: FAMILY });
   const result = await posts.deletePost({ accessToken: familyToken, postId: post._id, signature });
   assert.equal(result.deleted, true);
-  // post + comment + reaction + vote + 2 derived rows + 2 artifact rows
+  // post + comment + reaction + 2 votes (the author's self-vote + June's
+  // down) + 2 derived rows + 2 artifact rows
   // (this fixture's ledger rows are synthetic keyed counters — the kind
   // original row is keyed by the post id, not a held media ref — so both
   // die with the cascade; the REAL held-original retention of record runs
   // in the lifecycle suite against real asset rows).
-  assert.equal(result.cascadeRows, 8);
+  assert.equal(result.cascadeRows, 9);
   assert.ok(result.tombstoneId);
 
   assert.equal(await collections.posts.findOne({ _id: post._id }), null);
@@ -310,7 +323,9 @@ test("ac-5: member-level deletion sweeps all authored originals at the origin", 
   const susanComment = (await interactions.comment({ accessToken: familyToken, payload: onJune, signature: dev.signPayload(onJune) })).comment;
   const susanVote = { postId: junePostObj._id, value: "up" };
   await interactions.vote({ accessToken: familyToken, payload: susanVote, signature: dev.signPayload(susanVote) });
-  assert.equal((await collections.votes.find({ postId: junePostObj._id })).length, 1);
+  // June's own self-vote rides her post from creation (PORCH-113); Susan's
+  // vote joins it — two rows before the sweep.
+  assert.equal((await collections.votes.find({ postId: junePostObj._id })).length, 2);
 
   const signature = dev.signPayload({ kind: "delete", scope: "member", networkId: FAMILY });
   const swept = await posts.memberContentSweep({ accessToken: familyToken, signature });
@@ -321,11 +336,12 @@ test("ac-5: member-level deletion sweeps all authored originals at the origin", 
   assert.equal((await collections.votes.find({ memberDid: SUSAN, networkId: FAMILY })).length, 0);
   assert.equal(await collections.comments.findOne({ _id: susanComment._id }), null);
 
-  // June's post survives and its rank inputs forget Susan's swept vote.
+  // June's post survives and its rank inputs forget Susan's swept vote —
+  // June's own self-vote remains (PORCH-113).
   const surviving = await collections.posts.findOne({ _id: junePostObj._id });
   assert.notEqual(surviving, null);
   assert.deepEqual(surviving.interactionCounters, {
-    upVolume: 0, downVolume: 0, voteVolume: 0, voteRatio: 0, commentCount: 0, reactionCount: 0,
+    upVolume: 1, downVolume: 0, voteVolume: 1, voteRatio: 1, commentCount: 0, reactionCount: 0,
   });
 });
 

@@ -189,7 +189,9 @@ test("vote display, deployed-hub stage 2: upCount and the viewer's own vote, eve
     })());
 
     const assertVoteFields = (surface, card, member, expectMine) => {
-      assert.equal(card.upCount, 3, `${surface} carries upCount = 3 for ${member.name}`);
+      // PORCH-113: the owner's creation self-vote counts from birth — the
+      // three member ups ride on top of it (upCount 4).
+      assert.equal(card.upCount, 4, `${surface} carries upCount = 4 for ${member.name}`);
       assert.equal(card.myVote, expectMine, `${surface} carries exactly ${member.name}'s own vote`);
       for (const forbidden of ["interactionCounters", "downVolume", "voteVolume", "voteRatio", "voteCount", "downCount", "downvotes", "votes", "deviceSignature"]) {
         assert.equal(forbidden in card, false, `${surface} carries no ${forbidden}`);
@@ -197,9 +199,10 @@ test("vote display, deployed-hub stage 2: upCount and the viewer's own vote, eve
     };
 
     await runStep("card read (timeline) carries the two ruled values for each viewer", (async () => {
-      // The owner holds no vote on this post: myVote renders null.
+      // The owner's creation self-vote is their own effective vote: myVote
+      // renders "up" (PORCH-113) — never privileged, but theirs.
       const ownerCard = ((await (await fetch(`${base}/api/social/timeline`, { headers: { authorization: `Bearer ${ownerToken}` } })).json()).posts).find((row) => row._id === post._id);
-      assertVoteFields("timeline card", ownerCard, { name: "Brian Noah" }, null);
+      assertVoteFields("timeline card", ownerCard, { name: "Brian Noah" }, "up");
       // Linda's own card: myVote "up".
       const lindaCard = ((await (await fetch(`${base}/api/social/timeline`, { headers: { authorization: `Bearer ${linda.token}` } })).json()).posts).find((row) => row._id === post._id);
       assertVoteFields("timeline card (Linda)", lindaCard, linda, "up");
@@ -220,13 +223,13 @@ test("vote display, deployed-hub stage 2: upCount and the viewer's own vote, eve
     await runStep("flip up → down: the next payload reflects the change", (async () => {
       await vote(linda, post._id, "down");
       const ownerCard = ((await (await fetch(`${base}/api/social/timeline`, { headers: { authorization: `Bearer ${ownerToken}` } })).json()).posts).find((row) => row._id === post._id);
-      assert.equal(ownerCard.upCount, 2, "one up left after Linda's flip");
+      assert.equal(ownerCard.upCount, 3, "the self-vote plus Meg's and Ann's ups after Linda's flip");
       const lindaCard = ((await (await fetch(`${base}/api/social/timeline`, { headers: { authorization: `Bearer ${linda.token}` } })).json()).posts).find((row) => row._id === post._id);
       assert.equal(lindaCard.myVote, "down", "Linda's own vote flipped");
       // Flip back: the changeable vote restores the count.
       await vote(linda, post._id, "up");
       const restored = ((await (await fetch(`${base}/api/social/posts/${post._id}`, { headers: { authorization: `Bearer ${linda.token}` } })).json()).post);
-      assert.equal(restored.upCount, 3);
+      assert.equal(restored.upCount, 4);
       assert.equal(restored.myVote, "up");
     })());
 

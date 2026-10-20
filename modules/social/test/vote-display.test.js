@@ -64,13 +64,15 @@ test("ac-1: upCount rides the card/detail payloads and no other vote aggregate d
   const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "two ups and a down", caption: "two ups and a down" });
 
   // Three signed votes through the real write path: two ups, one down.
+  // PORCH-113: Susan's self-vote (the creation write, up) rides the post
+  // already — the two member ups make upCount 3.
   for (const [did, value] of [[JUNE, "up"], [MEG, "up"], [ANN, "down"]]) {
     const payload = { postId: post._id, value };
     await fx.interactions.vote({ accessToken: tokens[did], payload, signature: devs[did].signPayload(payload) });
   }
 
   // Card reads (as KIM, who holds no vote): the timeline, the ranked
-  // section, search, and the base list all carry exactly upCount = 2 and
+  // section, search, and the base list all carry exactly upCount = 3 and
   // no vote for a viewer who holds none.
   const surfaces = {
     timeline: (await feed.timeline({ accessToken: tokens[KIM] })).posts,
@@ -81,7 +83,7 @@ test("ac-1: upCount rides the card/detail payloads and no other vote aggregate d
   for (const [surface, posts] of Object.entries(surfaces)) {
     const row = posts.find((entry) => entry._id === post._id);
     assert.ok(row, `${surface} serves the post`);
-    assert.equal(row.upCount, 2, `${surface} carries the up-vote count`);
+    assert.equal(row.upCount, 3, `${surface} carries the up-vote count`);
     assert.equal(row.myVote, null, `${surface} carries no vote for a viewer who holds none`);
     for (const forbidden of ["interactionCounters", "downVolume", "voteVolume", "voteRatio", "voteCount", "downCount", "downvotes", "votes", "voteRecords", "deviceSignature"]) {
       assert.equal(forbidden in row, false, `${surface} carries no ${forbidden} (no other vote aggregate)`);
@@ -90,7 +92,7 @@ test("ac-1: upCount rides the card/detail payloads and no other vote aggregate d
 
   // The detail read carries the same single quantity.
   const detail = (await fx.posts.get({ accessToken: tokens[MEG], postId: post._id })).post;
-  assert.equal(detail.upCount, 2);
+  assert.equal(detail.upCount, 3);
   for (const forbidden of ["interactionCounters", "downVolume", "voteVolume", "voteRatio", "downCount", "votes"]) {
     assert.equal(forbidden in detail, false);
   }
@@ -106,12 +108,15 @@ test("ac-2: the viewer's own vote rides their payload and their flip lands in th
   const feed = feedOver(fx);
   const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "flip me" });
 
-  // No vote held: myVote is explicitly null, never undefined-shaped absence.
+  // June holds no vote: myVote is explicitly null, never undefined-shaped
+  // absence. The post's upCount already resolves Susan's creation
+  // self-vote (PORCH-113).
   const before = (await fx.posts.get({ accessToken: tokens[JUNE], postId: post._id })).post;
   assert.equal(before.myVote, null);
-  assert.equal(before.upCount, 0);
+  assert.equal(before.upCount, 1);
 
-  // Susan votes up: her own payload carries exactly her value; upCount = 1.
+  // Susan re-states her self-vote through the ordinary write: identical
+  // semantics to any member (one effective vote), upCount stays 1.
   await fx.interactions.vote({
     accessToken: tokens[SUSAN],
     payload: { postId: post._id, value: "up" },
@@ -169,14 +174,15 @@ test("ac-3: no down-vote count, ratio, or another member's vote record on any su
     });
   }
 
-  // A viewer holding NO vote (SUSAN, the author, never voted here) reads
-  // the card and the detail: nothing on the payload represents the five
-  // down-votes — no count, no ratio, no record.
+  // PORCH-113: Susan's creation self-vote (up) is her effective vote. The
+  // five member downs stay off her payload: she reads upCount 1 (her own
+  // up) and her own vote state — no count, no ratio, no record of the
+  // five down-votes.
   const card = (await feed.timeline({ accessToken: tokens[SUSAN] })).posts.find((row) => row._id === post._id);
   const detail = (await fx.posts.get({ accessToken: tokens[SUSAN], postId: post._id })).post;
   for (const view of [card, detail]) {
-    assert.equal(view.upCount, 0);
-    assert.equal(view.myVote, null);
+    assert.equal(view.upCount, 1);
+    assert.equal(view.myVote, "up");
     const fields = Object.keys(view);
     assert.equal(
       fields.filter((field) => /^(down|ratio|score|volume|whoVoted|voters)/i.test(field)).length,
@@ -231,11 +237,12 @@ test("ac-3: event envelopes and catch-up carry upCount only — no myVote, no do
   assert.ok(eventsBefore.length > 0 || caught.length === 0);
 
   // The post.created envelope replays with the ruled public quantity on
-  // its payload (upCount, live at composition) — and no per-member vote
-  // field, no down-count, no ratio anywhere in the envelope.
+  // its payload (upCount live at composition — the creation self-vote
+  // already counts, PORCH-113) — and no per-member vote field, no
+  // down-count, no ratio anywhere in the envelope.
   const created = eventsAfter.find((event) => event.type === "post.created" && event.postId === post._id);
   assert.ok(created, "post.created replays through catch-up");
-  assert.equal(created.content.upCount, 0, "the envelope carries the up-count as it stood at publication");
+  assert.equal(created.content.upCount, 1, "the envelope carries the up-count as it stood at publication");
   for (const forbidden of ["myVote", "downVolume", "voteVolume", "voteRatio", "votes", "downCount", "deviceSignature"]) {
     assert.equal(forbidden in created.content, false, `no ${forbidden} on the event payload`);
   }
@@ -262,10 +269,12 @@ test("ac-4: ranking behavior is unchanged — the formula still consumes the sto
   const feed = feedOver(fx);
   const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "rank source" });
 
-  // Two ups put voteVolume above the ratio floor: rankedScore = (2*1) * (1
-  // + 0.5*(1 - 0.5)) * ageFactor = 3 * ageFactor — exactly the published
-  // formula over the stored counters, with no contribution from the new
-  // serving fields.
+  // Two member ups on top of the self-vote put voteVolume at 3 with ratio
+  // 1: rankedScore = (3*1) * (1 + 0.5*(1 - 0.5)) * ageFactor = 3.75 *
+  // ageFactor — exactly the published formula over the stored counters,
+  // with no contribution from the serving fields and no special weight
+  // for the self-vote (it enters volume and ratio as an ordinary vote,
+  // PORCH-113).
   for (const did of [JUNE, MEG]) {
     await fx.interactions.vote({
       accessToken: tokens[did],
@@ -275,9 +284,10 @@ test("ac-4: ranking behavior is unchanged — the formula still consumes the sto
   }
   const { rankedScore, normalizeRankingConfig } = await import("../src/services/ranking.service.js");
   const stored = await fx.collections.posts.findOne({ _id: post._id });
-  assert.equal(stored.interactionCounters.upVolume, 2);
+  assert.equal(stored.interactionCounters.upVolume, 3);
+  assert.equal(stored.interactionCounters.voteVolume, 3);
   const ageHours = (Date.now() - new Date(stored.lastActivityAt ?? stored.createdAt).getTime()) / 3_600_000;
-  const expected = 2 * (1 + 0.5 * (1 - 0.5)) * Math.pow(2, -ageHours / 48);
+  const expected = 3 * (1 + 0.5 * (1 - 0.5)) * Math.pow(2, -ageHours / 48);
   const score = rankedScore(stored, normalizeRankingConfig(), new Date());
   assert.ok(Math.abs(score - expected) < 1e-6, `(${score}) is exactly the published formula over the stored counters`);
 
@@ -286,6 +296,6 @@ test("ac-4: ranking behavior is unchanged — the formula still consumes the sto
   // myVote attach at decoration, after rank() has consumed its inputs).
   const views = (await feed.ranked({ accessToken: tokens[JUNE] })).posts;
   const row = views.find((entry) => entry._id === post._id);
-  assert.equal(row.upCount, 2);
+  assert.equal(row.upCount, 3);
   assert.equal(row.myVote, "up");
 });

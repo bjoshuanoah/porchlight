@@ -179,6 +179,44 @@ export class PostService {
     await this.verifyWrite({ networkId, did: session.did, deviceId: session.deviceId, payload, signature });
     const { post, preview } = await this.#buildPost({ networkId, did: session.did, payload, signature });
     await this.posts.insertOne(post);
+    // Poster self-vote at publish (PORCH-113; Brian, Oct 20, 2026:
+    // "When creating a post, we should automatically set the poster's
+    // upvote"): the creation write lands the author's up-vote as a
+    // first-class vote doc of the existing signed schema (memberDid = the
+    // author, value up) in the same operation as the post — zero client
+    // action, no new endpoint, no composer change. The doc is ordinary in
+    // every direction: the vote route changes and clears it exactly like
+    // any member's vote, and the deletion cascade takes it with the post.
+    // The deviceSignature rides the verified creation signature (the
+    // author's signed authorship over the one creation payload — zero
+    // client action means no second signed vote payload exists).
+    const selfVote = {
+      _id: `vot_${crypto.randomUUID()}`,
+      postId: post._id,
+      networkId,
+      memberDid: session.did,
+      value: "up",
+      deviceSignature: signature,
+      changedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await this.votes.insertOne(selfVote);
+    } catch (error) {
+      // Same-operation discipline: a self-vote failure unwrites the post —
+      // no post ever exists without its self-vote (no half-created read
+      // state). The post row is the only prior mutation on this path.
+      await this.posts.deleteOne({ _id: post._id });
+      throw error;
+    }
+    // First served truth (post.created event view, member views)
+    // resolves upCount 1: the counters recompute over the self-vote
+    // before the event view and the returning member view shape.
+    post.interactionCounters = computeCounters({ comments: [], reactions: [], votes: [selfVote] });
+    await this.posts.updateOne(
+      { _id: post._id },
+      { $set: { interactionCounters: post.interactionCounters } },
+    );
     await this.audit("post_create", { networkId, did: session.did, detail: { postId: post._id, type: post.type } });
     // PORCH-047: the origin's live timeline learns the post the moment the
     // commit lands — post.created, content-only payload (postView), to the

@@ -105,6 +105,14 @@ export class ContentController {
     );
   };
 
+  /** DELETE /posts/:postId/votes — the signed un-vote clear ride (PORCH-113): the member's own vote row leaves. */
+  unvote = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return this.#delegate(res, () =>
+      this.interactions.unvote({ accessToken: this.bearer(req), payload, signature }),
+    );
+  };
+
   /** DELETE /posts/:postId — author-signed post deletion with cascade (ac-5). */
   deletePost = async (req, res) => {
     return this.#delegate(res, () =>
@@ -230,6 +238,7 @@ export class ContentController {
       E_REACTION_EXISTS: 409,
       E_REACTION_SUBJECT_INVALID: 400,
       E_INVALID_VOTE: 400,
+      E_VOTE_NOT_HELD: 400,
       E_PREVIEW_URL_REQUIRED: 400,
       E_PREVIEW_FETCH_FAILED: 502,
       E_PREVIEW_CONTENT_TYPE: 415,
