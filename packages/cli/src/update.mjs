@@ -11,6 +11,11 @@
 import { join } from "node:path";
 import { readJson } from "./state.mjs";
 import { loadHomeConfig, hubJson, hubUrl } from "./httpx.mjs";
+// Release notes render terminal-readable (PORCH-111): the same shared
+// constrained markdown parser the console card reads, mapped to plain
+// terminal lines here. Nothing in the payload changes (ac-4); with a
+// non-TTY stdout the formatter's plain fallback carries the copy.
+import { formatReleaseNotes } from "./notes.mjs";
 
 const UPDATE_PATH = "/api/social/console/update";
 const HEALTH_PATH = "/api/health";
@@ -77,8 +82,10 @@ export async function run(args = {}, impl = {}) {
   }
 
   // Release notes (PORCH-077): the same shared source chain the console's
-  // Updates card reads, printed before any apply. Notes never gate or alter
-  // the apply path — an unavailable chain still applies cleanly.
+  // Updates card reads, printed before any apply — terminal-formatted from
+  // the notes' own markdown since PORCH-111 (plain text when stdout is not
+  // a terminal). Notes never gate or alter the apply path — an unavailable
+  // chain still applies cleanly.
   const notes = release.notes;
   if (notes?.text) {
     if (notes.source === "unavailable") {
@@ -88,10 +95,14 @@ export async function run(args = {}, impl = {}) {
         notes.source === "github-release"
           ? "GitHub release"
           : "the published package's changelog";
-      write(`what v${release.latest} changes (verbatim from the ${source}):\n`);
-      write(`${notes.text}\n`);
+      write(`release notes for v${release.latest} (from the ${source}):\n`);
+      write("\n");
+      write(
+        formatReleaseNotes(notes.text, {
+          color: impl.color ?? (process.stdout.isTTY ?? false) === true,
+        }) + "\n\n",
+      );
     }
-    write("\n");
   }
 
   write(`current release: v${release.current}\n`);
