@@ -320,11 +320,13 @@ test("device notifications, deployed-hub stage 2: every push route + every send 
     const reactionCaptures = captured.filter((c) => c.endpoint === "/push/ok");
     assert.equal(reactionCaptures.length, 1, "the relay received exactly one real push");
     const reactionPlaintext = decryptRecord(lindaKeys.client, lindaKeys.p256dh, lindaKeys.auth, reactionCaptures[0].body);
-    assert.deepEqual(Object.keys(reactionPlaintext).sort(), ["authorName", "commentId", "excerpt", "networkName", "postId", "type"], "content-only envelope");
+    assert.deepEqual(Object.keys(reactionPlaintext).sort(), ["body", "commentId", "postId", "title", "type"], "content-only envelope");
     assert.equal(reactionPlaintext.type, "reaction");
     assert.equal(reactionPlaintext.postId, lindaPost._id);
-    assert.equal(reactionPlaintext.authorName, "Brian Noah");
-    assert.equal(reactionPlaintext.networkName, "Family");
+    // PORCH-115: the composed slots — the network-name main line, the
+    // emoji-as-authored actor line, the excerpt beneath it.
+    assert.equal(reactionPlaintext.title, "Family");
+    assert.equal(reactionPlaintext.body, "Brian Noah: 🌅\nLake morning was cold");
 
     // 410 expiry through the real sender: an owner registration riding a
     // dead endpoint expires the row at the next owner-targeted trigger.
@@ -376,8 +378,10 @@ test("device notifications, deployed-hub stage 2: every push route + every send 
       assert.equal(okCaptures.length, 2, "the groupPost push landed beside the earlier reaction push");
       const groupPlaintext = decryptRecord(ownerKeys.client, ownerKeys.p256dh, ownerKeys.auth, okCaptures[1].body);
       assert.equal(groupPlaintext.type, "groupPost");
-      assert.equal(groupPlaintext.networkName, "Family");
-      assert.deepEqual(Object.keys(groupPlaintext).sort(), ["authorName", "commentId", "excerpt", "networkName", "postId", "type"], "content-only envelope, no counts anywhere");
+      // PORCH-115: the group's display name resolves onto the actor line.
+      assert.equal(groupPlaintext.title, "Family");
+      assert.equal(groupPlaintext.body, "Linda Brown: posted in Picnic\nPicnic planning");
+      assert.deepEqual(Object.keys(groupPlaintext).sort(), ["body", "commentId", "postId", "title", "type"], "content-only envelope, no counts anywhere");
     })());
     await runStep("owner toggles groupPost off", call("/push/settings", ownerToken, { enabled: true, events: { groupPost: false } }, "PUT"));
     await runStep("group post at the toggled-off member", (async () => {

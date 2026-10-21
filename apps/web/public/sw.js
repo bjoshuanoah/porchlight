@@ -263,13 +263,16 @@ self.addEventListener("fetch", (event) => {
  * ever intercepts or caches a request (the fetch boundary above is
  * untouched, so no /api/** request can ever be fulfilled from a cache and
  * no non-2xx response can enter a cache). Payloads are content-only by the
- * hub contract (type, postId, commentId, authorName, networkName, excerpt —
- * PORCH-059); no badge machinery of any kind exists in V1 (push
+ * hub contract and COMPOSED HUB-SIDE (PORCH-115: type, postId, commentId,
+ * title, body — the hub writes every line; this worker renders them as
+ * delivered); no badge machinery of any kind exists in V1 (push
  * only; no badge API calls and no badge property anywhere). */
 
-// The content-only whitelist, decoded defensively: malformed, oversized, or
-// off-list values are dropped on the floor, never surfaced.
-const PUSH_FIELDS = ["type", "postId", "commentId", "authorName", "networkName", "excerpt"];
+// The composed envelope whitelist (PORCH-115): the hub composes every
+// line — the network-name main line (title), the actor line, the excerpt —
+// decoded defensively: malformed, oversized, or off-list values are
+// dropped on the floor, never surfaced. No product copy exists here.
+const PUSH_FIELDS = ["type", "postId", "commentId", "title", "body"];
 
 self.addEventListener("push", (event) => {
   event.waitUntil((async () => {
@@ -283,11 +286,15 @@ self.addEventListener("push", (event) => {
     for (const field of PUSH_FIELDS) {
       if (typeof payload[field] === "string" && payload[field].length > 0 && payload[field].length <= 300) data[field] = payload[field];
     }
-    const title = data.authorName || data.networkName || "Porchlight";
-    const body = data.excerpt
-      || (data.authorName && data.networkName ? `${data.authorName} in ${data.networkName}` : "A new moment from your family.");
-    await self.registration.showNotification(title, {
-      body,
+    // PORCH-115 (Brian, Oct 20, 2026): pure passthrough — title and body
+    // render exactly as delivered; this renderer writes no line of its
+    // own and carries no product-name copy (the prior client-side
+    // composition — the invented body line and the product-name fallback —
+    // is gone). An envelope without its composed main line is malformed
+    // and dropped.
+    if (!data.title) return;
+    await self.registration.showNotification(data.title, {
+      body: data.body ?? "",
       icon: "/icon-192.png",
       tag: data.postId ? `porchlight-${data.postId}` : undefined,
       data,

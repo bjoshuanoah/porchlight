@@ -29,8 +29,10 @@ import { typedError } from "./post.service.js";
  *
  * Payload privacy is the vote-privacy contract extended to the push
  * channel: the plaintext carries content only — event type, post
- * reference, author display name, origin network name, and a short caption
- * or excerpt when the recipient authored the target content. No counts, no
+ * reference, and the composed slot lines. Composition (PORCH-115, Brian,
+ * Oct 20, 2026) is hub-side: the main line is the origin network's display
+ * name as authored, the actor line reads "{actor}: {event word or emoji}",
+ * and the excerpt (the reader's own words) rides beneath it. No counts, no
  * vote records, no aggregates of any kind ship in any envelope.
  */
 
@@ -60,8 +62,26 @@ export const DEFAULT_EVENT_SWITCHES = Object.freeze({
   deviceLink: true,
 });
 
-/** The plaintext whitelist (ac-3): anything else is stripped, never sent. */
-const PLAINTEXT_FIELDS = Object.freeze(["type", "postId", "commentId", "authorName", "networkName", "excerpt"]);
+/**
+ * The actor line's fixed event words (PORCH-115 ac-2, Brian's Oct 20
+ * composition ruling). Reactions carry the emoji as authored instead
+ * ("Bridget Noah: ❤️"); group posts resolve "posted in {Group}" onto the
+ * line, falling back to bare "posted" without error when the group's
+ * display name does not resolve.
+ */
+const PUSH_EVENT_WORDS = Object.freeze({
+  reply: "replied",
+  mention: "mentioned you",
+  joined: "joined",
+  // Exact device-link copy was left to build by the TS ("names the
+  // requester"); this is the build's chosen wording.
+  deviceLink: "requested to link a device",
+});
+
+/** The composed plaintext whitelist (PORCH-115): the network-name main
+ * line (title), the composed body (actor line + excerpt), the event type,
+ * and the tap references. Anything else is stripped, never sent. */
+const PLAINTEXT_FIELDS = Object.freeze(["type", "postId", "commentId", "title", "body"]);
 
 /** Field names that must NEVER appear on a push plaintext (privacy audit). */
 const FORBIDDEN_PAYLOAD_FIELDS = [
@@ -80,7 +100,14 @@ const FORBIDDEN_PAYLOAD_FIELDS = [
   "votes",
 ];
 
-const EXCERPT_MAX_LENGTH = 160;
+/** The composed caps (PORCH-115 ac-4, [Assumed: ~64 chars main line, ~200
+ * chars excerpt; confirm at build]): the main line truncates at 64, the
+ * excerpt at 200, and the composed body stays under the client renderer's
+ * 300-char decode bound so a long network name or excerpt can never get
+ * the whole envelope dropped on the floor. */
+const EXCERPT_MAX_LENGTH = 200;
+const TITLE_MAX_LENGTH = 64;
+const BODY_MAX_LENGTH = 300;
 
 /** Short caption or excerpt: trimmed and bounded, content-only. */
 export function pushExcerpt(text) {
@@ -90,18 +117,37 @@ export function pushExcerpt(text) {
   return trimmed.length > EXCERPT_MAX_LENGTH ? `${trimmed.slice(0, EXCERPT_MAX_LENGTH)}…` : trimmed;
 }
 
+/** Main line (title slot, PORCH-115 ac-1): the origin network's display
+ * name as authored — trimmed, never the product name, truncated at the
+ * composed cap. */
+export function pushTitle(text) {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed.length) return null;
+  return trimmed.length > TITLE_MAX_LENGTH ? `${trimmed.slice(0, TITLE_MAX_LENGTH)}…` : trimmed;
+}
+
+/** The composed body's wire bound (PORCH-115 ac-4): actor line + excerpt
+ * stays at or under the renderer's decode cap. */
+function pushBody(text) {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed.length) return null;
+  return trimmed.length > BODY_MAX_LENGTH ? `${trimmed.slice(0, BODY_MAX_LENGTH)}…` : trimmed;
+}
+
 /**
- * Shape one plaintext envelope against the whitelist and audit it against
- * the no-counts, no-vote-records, no-aggregates contract (ac-3).
+ * Shape one composed plaintext envelope against the whitelist and audit
+ * it against the no-counts, no-vote-records, no-aggregates contract
+ * (ac-3; composition slots per PORCH-115).
  */
-export function pushPlaintext({ type, postId = null, commentId = null, authorName = null, networkName = null, excerpt = null }) {
+export function pushPlaintext({ type, postId = null, commentId = null, title = null, body = null }) {
   const plaintext = {
     type: String(type),
     postId: postId ?? null,
     commentId: commentId ?? null,
-    authorName: authorName ?? null,
-    networkName: networkName ?? null,
-    excerpt: pushExcerpt(excerpt),
+    title: pushTitle(title),
+    body: pushBody(body),
   };
   assertPayloadPrivacy(plaintext);
   return plaintext;
@@ -425,7 +471,7 @@ export class PushService {
    * member per group, read from the persisted settings row AT SEND TIME,
    * never cached or injected.
    */
-  async notify({ networkId, type, targetDids = [], postId = null, commentId = null, actorDid = null, groupId = null, excerpt = null } = {}) {
+  async notify({ networkId, type, targetDids = [], postId = null, commentId = null, actorDid = null, groupId = null, emoji = null, excerpt = null } = {}) {
     try {
       if (!PUSH_EVENT_TYPES.includes(type)) {
         throw new Error(`Unknown push event type "${type}" (the push vocabulary is closed)`);
@@ -439,15 +485,46 @@ export class PushService {
         this.#log({ event: "push.send.skipped", reason: "vapid_absent", networkId, type });
         return { sent: 0, skipped: targets.length };
       }
-      // Content-only composition (ac-3): author display name + origin
-      // network name + the bounded excerpt when the recipient authored the
-      // target. No counts, no vote records, no aggregates exist here.
+      // Composition (PORCH-115 ac-1/ac-2): the slot contract composes
+      // SERVER-SIDE — the main line is the origin network's display name
+      // as authored (never the product name), the actor line reads
+      // "{actor}: {event word or emoji}", and the excerpt rides beneath
+      // it. The service worker renders the composed envelope as delivered
+      // (pure passthrough; zero client-side composition, ac-3).
       const networkName = (await this.networks.findOne({ _id: networkId }))?.name ?? null;
+      const title = pushTitle(networkName);
+      if (!title) {
+        // No main line, no envelope: the first slot is mandatory and no
+        // product-name fallback exists. Log-only, no error fanout.
+        this.#log({ event: "push.send.skipped", reason: "composition_missing", networkId, type });
+        return { sent: 0, skipped: targets.length };
+      }
       let authorName = null;
       if (actorDid) {
         const names = await this.membership.attributionNames({ networkId, dids: [actorDid] });
         authorName = names.get(actorDid)?.name ?? null;
       }
+      // Reactions carry the emoji as authored ("Bridget Newton: ❤️"); a
+      // group post appends " in {Group}" only when the group's display
+      // name resolves live at compose — bare "posted" falls back without
+      // error. An unresolved actor name composes the bare event word
+      // (never an invented name, never product copy).
+      const groupName = type === "groupPost" && groupId
+        ? ((await this.groups?.findOne({ _id: groupId }))?.name ?? null)
+        : null;
+      const eventWord = type === "reaction"
+        ? (typeof emoji === "string" && emoji.trim().length ? emoji.trim() : "reacted")
+        : type === "groupPost"
+          ? (groupName ? `posted in ${groupName}` : "posted")
+          : PUSH_EVENT_WORDS[type];
+      const actorLine = authorName ? `${authorName}: ${eventWord}` : String(eventWord ?? "");
+      // Excerpt law (ac-2): the reader's words — reactions excerpt the
+      // target's own text, replies the responder's text, mentions the
+      // mentioning text, group posts the post text; owner events carry
+      // no excerpt (their triggers pass excerpt: null).
+      const excerptLine = pushExcerpt(excerpt);
+      const body = excerptLine ? `${actorLine}\n${excerptLine}` : actorLine;
+      const plaintext = pushPlaintext({ type, postId, commentId, title, body });
       let sent = 0;
       let skipped = 0;
       for (const did of targets) {
@@ -495,7 +572,6 @@ export class PushService {
           this.#log({ event: "push.send.skipped", reason: "not_live_member", networkId, type, identityId: did });
           continue;
         }
-        const plaintext = pushPlaintext({ type, postId, commentId, authorName, networkName, excerpt });
         const subs = await this.subscriptions.find({ identityId: did });
         if (!subs.length) {
           skipped += 1;

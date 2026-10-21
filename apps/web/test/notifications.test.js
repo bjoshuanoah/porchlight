@@ -5,6 +5,7 @@
 // source pins (the same style as the pwa-install and photo-first pins).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
@@ -277,16 +278,69 @@ test("PORCH-060 ac-5: a tap focuses the existing client or opens the origin-cont
   assert.deepEqual(tapDecision([], {}), { action: "open", url: "/" });
 });
 
-test("PORCH-060 ac-5: push payloads are decoded on the content-only whitelist", () => {
+test("PORCH-060 ac-5, PORCH-115: push payloads are decoded on the composed envelope whitelist", () => {
   const payload = decodePushPayload(JSON.stringify({
-    type: "reply", postId: "p1", commentId: "c1", authorName: "Ada", networkName: "The Noah Family", excerpt: "Hi!",
-    // Forbidden classes never cross into the payload (vote privacy etc.).
+    type: "reply", postId: "p1", commentId: "c1", title: "The Noah Family", body: "Ada: replied\nHi!",
+    // Forbidden classes never cross into the payload (vote privacy etc.),
+    // and the retired field names ride nothing.
+    authorName: "Ada", networkName: "The Noah Family", excerpt: "Hi!",
     voteCount: 9, upvotes: 4, downvotes: 5, followers: 12,
   }));
-  assert.deepEqual(payload, { type: "reply", postId: "p1", commentId: "c1", authorName: "Ada", networkName: "The Noah Family", excerpt: "Hi!" });
+  assert.deepEqual(payload, { type: "reply", postId: "p1", commentId: "c1", title: "The Noah Family", body: "Ada: replied\nHi!" });
   assert.deepEqual(decodePushPayload("not json"), {});
   assert.deepEqual(decodePushPayload(""), {});
   assert.deepEqual(decodePushPayload('{"postId":"too-long:' + "x".repeat(400) + '"}'), {});
+});
+
+test("PORCH-115: the service worker renders the composed envelope as delivered — pure passthrough, no client-side rewriting, no product copy", async () => {
+  const source = await src("public/sw.js");
+  const listeners = {};
+  const shown = [];
+  const sandbox = {
+    self: {
+      addEventListener: (type, fn) => { listeners[type] = fn; },
+      skipWaiting: async () => {},
+      registration: {
+        showNotification: (title, options) => { shown.push({ title, options }); },
+        matchAll: async () => [],
+        openWindow: async () => {},
+      },
+      clients: {
+        matchAll: async () => [],
+        openWindow: async () => {},
+        postMessage: async () => {},
+      },
+    },
+    caches: { open: async () => ({ match: async () => undefined, put: async () => {} }), keys: async () => [], delete: async () => true },
+    fetch: async () => new Response("", { status: 200 }),
+    Request, Headers, URL, Response,
+    setTimeout, clearTimeout,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox);
+  const pushHandler = listeners["push"];
+  assert.ok(pushHandler, "sw.js registers the push handler");
+  // The composed envelope renders exactly as delivered — the network-name
+  // main line on top, the composed body (actor line + excerpt) beneath.
+  const work = [];
+  await pushHandler({
+    data: { text: async () => JSON.stringify({ type: "reply", postId: "p1", commentId: null, title: "The Noah Family Network", body: "Bridget Noah: replied\nWaiting on insulation" }) },
+    waitUntil: (p) => work.push(p),
+  });
+  await Promise.all(work);
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].title, "The Noah Family Network");
+  assert.equal(shown[0].options.body, "Bridget Noah: replied\nWaiting on insulation");
+  // No client-side product copy and no invented line anywhere in the
+  // worker: the prior rewritten format ("from Porchlight") is gone.
+  assert.equal(source.includes("from Porchlight"), false);
+  assert.doesNotMatch(source, /"A new moment from your family\."/);
+  // A malformed envelope without its composed main line is dropped.
+  work.length = 0;
+  await pushHandler({ data: { text: async () => JSON.stringify({ authorName: "Ada", networkName: "Family", excerpt: "legacy shape" }) }, waitUntil: (p) => work.push(p) });
+  await pushHandler({ data: { text: async () => "not json" }, waitUntil: (p) => work.push(p) });
+  await Promise.all(work);
+  assert.equal(shown.length, 1, "only the composed passthrough rendered");
 });
 
 test("PORCH-060 ac-5: the single worker carries push delivery and tap-through, additively — no badge machinery", async () => {
