@@ -62,6 +62,10 @@ test("ac-2: un-react never decrements — removing a reaction keeps the member's
   const { usage, susanToken, dev, post } = fx;
   await react(fx, susanToken, dev, post, "🍂");
   await react(fx, susanToken, dev, post, "🌞");
+  // Deterministic recency stamps (same-millisecond adds resolve as
+  // first-recorded order — the ordering key itself is count).
+  await usage.emojiUsage.updateOne({ memberDid: SUSAN, emoji: "🍂" }, { $set: { lastUsedAt: "2026-01-02T00:00:00.000Z" } });
+  await usage.emojiUsage.updateOne({ memberDid: SUSAN, emoji: "🌞" }, { $set: { lastUsedAt: "2026-01-01T00:00:00.000Z" } });
   const before = await usage.list({ accessToken: susanToken });
   assert.deepEqual(before.emoji, ["🍂", "🌞"]);
 
