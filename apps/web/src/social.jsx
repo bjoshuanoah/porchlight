@@ -2977,7 +2977,7 @@ export function Compose({ open, onClose, data = {}, actions = {}, target = null,
       </>}
         {operation.error && <Alert severity="error">{operation.error}</Alert>}
       </Stack></DialogContent>
-      <DialogActions><Button disabled={operation.busy} onClick={onClose}>Cancel</Button><Button variant="contained" type="submit" disabled={operation.busy || data.offline || (mediaType ? !files.length : !body.trim())}>{operation.busy ? <LanternLoader size={20} label="Publishing your moment" glow="var(--porch-boot-core)" style={{ color: 'var(--porch-amber-ink)', minWidth: 28, minHeight: 28 }} /> : 'Publish'}</Button></DialogActions>
+      <DialogActions><Button disabled={operation.busy} onClick={onClose}>Cancel</Button><Button variant="contained" type="submit" disabled={operation.busy || data.offline || (mediaType ? !files.length : !body.trim())}>{operation.busy ? <LanternLoader size={20} label="Publishing your moment" style={{ color: 'var(--porch-amber-ink)', minWidth: 28, minHeight: 28 }} /> : 'Publish'}</Button></DialogActions>
     </Box>
   </Dialog>;
 }

@@ -23,22 +23,13 @@ import { createTheme } from "@mui/material/styles";
 // values ride BOTH token sets (spread above) so the boot consumes custom
 // properties like every other surface, never a screen literal. Contrast of
 // record (WCAG 2.2 AA on the navy canvas): wordmark 17.3:1, status ink
-// 7.2:1, dim frame 3.4:1, lit facet 11.0:1 — pinned in lantern.test.js.
+// 7.2:1 — pinned in lantern.test.js.
 // The manifest splash reconciliation (PORCH-051 porch-warm vs boot navy)
 // stays recorded as pending Brian's ruling; implemented only on his word.
 const bootTokens = {
   bootBg: "#0B1622",
   bootInk: "#FCFAE8",
   bootStatusInk: "#B3A48B",
-  bootFrame: "#E3D5B8",
-  bootFrameDim: "#8A6420",
-  bootFacet: "#FFBE57",
-  bootCore: "#FCFAE8",
-  bootNode: "#FFD799",
-  bootGlowDim: "rgba(255,190,87,.35)",
-  bootGlowBloom: "rgba(255,190,87,.95)",
-  bootGlowRest: "rgba(255,190,87,.6)",
-  bootGlowHalo: "rgba(255,190,87,.9)",
 };
 
 
@@ -297,10 +288,6 @@ const CSS_VAR_NAMES = [
   // both modes) — declared in both blocks, so the boot surfaces consume
   // custom properties like every other screen.
   ["bootBg", "boot-bg"], ["bootInk", "boot-ink"], ["bootStatusInk", "boot-status-ink"],
-  ["bootFrame", "boot-frame"], ["bootFrameDim", "boot-frame-dim"],
-  ["bootFacet", "boot-facet"], ["bootCore", "boot-core"], ["bootNode", "boot-node"],
-  ["bootGlowDim", "boot-glow-dim"], ["bootGlowBloom", "boot-glow-bloom"],
-  ["bootGlowRest", "boot-glow-rest"], ["bootGlowHalo", "boot-glow-halo"],
 ];
 
 // Screen-facing token map: camelCase keys matching the token sets, values as
