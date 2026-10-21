@@ -29,6 +29,57 @@ for (const name of await readdir(join(webRoot, "src"))) {
   const text = await readFile(join(webRoot, "src", name), "utf8");
   if (forbiddenRoutes.test(text)) failures.push(`src/${name}: forbidden route or source text`);
 }
+
+// Connection-state copy audit (PORCH-117, Brian Oct 21 2026): errors are
+// earned states and the earned unreachable-hub copy renders verbatim — the
+// two strings of record — never a variant, never the product name. Every
+// member-facing literal (string or JSX text) that names the family server
+// must carry no brand name, and every literal that opens the unreachable
+// banner ("A family server is unreachable") must be exactly one of the two
+// record strings.
+const UNREACHABLE_RECORDS = [
+  "A family server is unreachable. Saved moments may be out of date.",
+  "A family server is unreachable. Saved moments may be out of date; new activity is not available until you reconnect.",
+];
+const normalize = (value) => value.replace(/\s+/g, " ").trim();
+const foundRecords = new Set();
+const connectionFiles = (await readdir(join(webRoot, "src"))).filter((name) => /\.(?:js|jsx)$/.test(name));
+for (const name of connectionFiles) {
+  const text = await readFile(join(webRoot, "src", name), "utf8");
+  let tree;
+  try {
+    tree = parse(text, { ecmaVersion: "latest", sourceType: "module", ecmaFeatures: { jsx: true }, loc: true });
+  } catch {
+    continue; // syntax errors surface through the lint/typecheck gates
+  }
+  const checkCopy = (node) => {
+    let value = null;
+    if (node.type === "JSXText") value = node.value;
+    else if (node.type === "Literal" && typeof node.value === "string" && /\s/.test(node.value)) value = node.value;
+    if (!value) return;
+    const copy = normalize(value);
+    if (copy.length < 12) return;
+    if (/family server/i.test(copy)) {
+      if (/porchlight/i.test(copy)) failures.push(`src/${name}:${node.loc.start.line}: product name inside connection-state copy`);
+    }
+    if (/A family server is unreachable/i.test(copy)) {
+      if (!UNREACHABLE_RECORDS.includes(copy)) {
+        failures.push(`src/${name}:${node.loc.start.line}: unreachable copy is not a verbatim string of record: ${JSON.stringify(copy)}`);
+      } else foundRecords.add(copy);
+    }
+  };
+  (function visit(node) {
+    if (!node || typeof node !== "object") return;
+    checkCopy(node);
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object" && typeof value.type === "string") visit(value);
+    }
+  })(tree);
+}
+for (const record of UNREACHABLE_RECORDS) {
+  if (!foundRecords.has(record)) failures.push(`missing verbatim string of record: ${JSON.stringify(record)}`);
+}
 if (process.argv.includes("--bundle")) {
   // The app chunk carries every member-facing string and route; vendor chunks
   // hold library internals (MUI input-type maps) that never render as routes.

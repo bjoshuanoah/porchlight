@@ -181,9 +181,12 @@ test("ac-3: readiness ends the boot — no artificial hold, never timer-driven",
   assert.match(source, /return readiness\.onAppReady\(\(\) => setFading\(true\)\);/);
   const timers = [...source.matchAll(/setTimeout\(([^,]+),\s*(\d+)\)/g)].map((m) => Number(m[2]));
   for (const ms of timers) assert.ok(ms <= geometry.BOOT_FADE_MS + 80, `every timer is bounded by the fade (${ms}ms), not a boot hold`);
-  // main.jsx announces readiness from the first surface's commit.
+  // main.jsx announces readiness through the boot settle: boots with no
+  // settle sequence announce on mount; sequence boots announce when the
+  // connect/first-fetch chain ends (PORCH-117 error display discipline).
   const mainSource = await src("main.jsx");
-  assert.match(mainSource, /useEffect\(\(\) => \{ markAppReady\(\); \}, \[\]\);/);
+  assert.match(mainSource, /if \(!activeIdentityId \|\| signedOut\.current\) settleBoot\(\);/);
+  assert.match(mainSource, /onSettle: settleBoot,/);
   assert.equal(appready.getAppReady(), false, "importing main.jsx sources announces nothing by itself");
 });
 

@@ -35,6 +35,7 @@ import { openEventStream } from "./realtime.js";
 // beyond-window catch-up re-serves fresh over REST by itself, event-driven
 // on reconnect, bounded retries with exponential backoff, never a cadence.
 import { runStaleRecovery } from "./stale-recovery.js";
+import { runBootSequence } from "./boot-sequence.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
 import { signalMediaRecovery } from "./media-recovery.js";
@@ -139,6 +140,29 @@ function App() {
   const postsRef = useRef(posts);
   const [hidden, setHidden] = useState(() => localIdentities.length === 1 ? hiddenPosts(stored, `${origin}:${localIdentities[0]}`) : new Set());
   const [offline, setOffline] = useState(false);
+  // PORCH-117 (Brian, Oct 21 2026 — error display discipline): errors are
+  // earned states, and loading is not failure. The boot holds the lantern
+  // surface while the connect / session-open / first-fetch sequence works:
+  // during the hold, connection trouble renders loading only, and every
+  // offline setter gates on the hold. The chain below owns the settle: the
+  // boot ends when the sequence ends (success or exhaustion), never at
+  // mount, so a failure that resolves mid-load never renders an error at
+  // any frame and an earned error lands only after the app surface mounts.
+  const bootHoldRef = useRef(true);
+  const settleBoot = useCallback(() => {
+    if (!bootHoldRef.current) return;
+    bootHoldRef.current = false;
+    markAppReady();
+  }, []);
+  // A failed serve inside a bounded chain (boot settle, stale recovery) is
+  // deferred: the chain's exhaustion — not the first failed round-trip —
+  // is what earns the offline render. A success mid-chain discards it.
+  const deferredFeedsFailure = useRef(null);
+  const takeDeferredFeedsFailure = useCallback(() => {
+    const deferred = deferredFeedsFailure.current;
+    deferredFeedsFailure.current = null;
+    return deferred;
+  }, []);
   // PORCH-081 ac-4: a catch-up replay older than the hub's retained window
   // reads `stale` server-side; the REST catch-up note is a rendered state,
   // never a silent skip — and never a returning poll cycle.
@@ -294,11 +318,13 @@ function App() {
     setRoute(next);
     restoreScroll(next);
   }, [restoreScroll]);
-  // PORCH-095: readiness ends the boot. The first surface's commit is the
-  // app-ready event — the crossfade fires the moment it lands, even
-  // mid-sequence, with no artificial hold and no minimum display time
-  // (boot progress is driven by readiness events, never a timer alone).
-  useEffect(() => { markAppReady(); }, []);
+  // PORCH-095: readiness ends the boot. PORCH-117 amends WHEN the app
+  // announces it: boots that run a connect/session-open/first-fetch
+  // sequence settle when that sequence ends (settleBoot inside the boot
+  // chain), so the loading surface covers all connection trouble; boots
+  // with no sequence settle here, exactly as before. The announcement is
+  // still readiness-driven, never a timer, never an artificial hold.
+  useEffect(() => { if (!activeIdentityId || signedOut.current) settleBoot(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, []);
   useEffect(() => {
     const pop = () => {
       const next = routeOf();
@@ -339,7 +365,11 @@ function App() {
       Object.assign(next, reCredentialed);
       membershipFailed = failed;
     } catch {
-      setOffline(true);
+      // PORCH-117: while the boot hold is up, connection trouble renders
+      // the loading surface only — the first-fetch chain owns the earned
+      // offline render. After the boot, a renewal failure is a spent
+      // attempt and earns the state under the standing degrade law.
+      if (!bootHoldRef.current) setOffline(true);
       return false;
     }
     next.renewedAt = membershipFailed ? undefined : Date.now();
@@ -365,7 +395,7 @@ function App() {
   // load, member-write reconcile, or arrival refresh — captures the reading
   // anchor before the replace and compensates scrollTop exactly once after
   // the merge paints, so arriving content never repositions the reader.
-  const applyFeeds = useCallback((result, { notice: noticeText } = {}) => {
+  const applyFeeds = useCallback((result) => {
     const before = captureFeedAnchor();
     // PORCH-050: a 401 that survives custody recovery is a genuinely dead
     // credential — its own honest state, never an "unreachable" claim. A
@@ -383,18 +413,28 @@ function App() {
       setPosts(result.posts);
       setBehind(false);
       saveTimeline(stored, `${origin}:${identity?.id}`, result.posts);
-    } else if (noticeText && unreachable) setNotice(noticeText);
+    }
+    // PORCH-117: the unreachable outcome is the offline state's own earned
+    // render — the offline Alert carries the verbatim copy of record and
+    // clears on state. No parallel notice exists: a Snackbar flash after
+    // the boot is exactly the defect this ruling bans.
     if (before) {
       requestAnimationFrame(() => {
         applyFeedCompensation(before, captureFeedAnchor());
       });
     }
   }, [identity]);
-  const reload = useCallback(async () => {
+  const reload = useCallback(async ({ deferFailure = false } = {}) => {
     // PORCH-102: reload resolves true exactly when the feeds read served
     // fresh — the same condition applyFeeds uses to clear the freshness
     // note — so the auto-recovery driver knows when recovery is done.
     // A signed-out identity or a missing connection is a failed attempt.
+    // PORCH-117: with deferFailure a failed serve is recorded, never
+    // rendered — the bounded chain owning this attempt (boot settle, stale
+    // recovery) applies the last failure only after its attempts are spent
+    // (runBootSequence), so no error element exists while a fetch is
+    // pending or retrying. Without it the standing degrade law applies the
+    // failure immediately: one attempt, spent, is an earned state.
     if (!identity?.id) return false;
     const live = readConnections(stored, origin);
     const liveActive = live.find((item) => item.identity?.id === identity.id) || null;
@@ -402,7 +442,8 @@ function App() {
     const identityConnections = live.filter((item) => item.identity?.id === identity.id && item.token);
     const result = identityConnections.length ? await loadFeeds(identityConnections) : { posts: [], failures: [] };
     const feedsServed = !result.failures.length;
-    applyFeeds(result, { notice: "Your family server is unreachable. Showing saved moments where available." });
+    if (deferFailure && !feedsServed) deferredFeedsFailure.current = result;
+    else applyFeeds(result);
     const [groupResult, memberResult, inviteResult, limitResult, diskResult, auditResult, deviceResult, allDevicesResult, linksResult, updateResult, mediaRootResult, reauthResult] = await Promise.allSettled([
       // Member-plane groups (PORCH-030): the Groups page reads the group
       // containers the member's own token can read — creation is open to
@@ -458,14 +499,30 @@ function App() {
     // connections object — a token renewal adopts fresh credentials in state
     // without re-running a full feed reload, so a renewal cannot cadence the
     // timeline into a loading loop.
+    // PORCH-117: this effect owns the boot hold for boots that open with a
+    // session — the lantern holds while renew + the bounded first-fetch
+    // chain work, and the earned offline render (if the chain exhausts)
+    // lands on the settle, never mid-flight. Boots with no sequence (front
+    // door, WhoIsHere, signed-out) settle immediately, as before.
+    if (signedOut.current || !activeIdentityId) { settleBoot(); return; }
     void (async () => {
-      if (active?.identity?.id && !signedOut.current) {
-        try { await custody.renew(); } catch { /* renew sets offline state itself */ }
-      }
-      await reload();
+      await runBootSequence({
+        connect: () => custody.renew(),
+        attempt: () => reloadRef.current?.({ deferFailure: true }),
+        lastFailure: takeDeferredFeedsFailure,
+        onEarnedFailure: (result) => applyFeeds(result),
+        onSettle: settleBoot,
+      });
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reload, activeIdentityId, renew]);
+  }, [activeIdentityId, renew]);
+  // reload is read through the renewRef pattern's ref for both the boot
+  // chain and the PORCH-102 driver: the attempt never waits out a stale
+  // closure. The assignment flushes with the same commit as the boot
+  // chain's effect, and the first attempt only resumes after the connect
+  // step resolves — it can never see an unset ref.
+  const reloadRef = useRef(null);
+  useEffect(() => { reloadRef.current = reload; }, [reload]);
   useEffect(() => {
     const online = () => void reload();
     window.addEventListener("online", online);
@@ -479,8 +536,6 @@ function App() {
   // interval exists on this path. reload is read through a ref (the
   // renewRef pattern) so recovery never waits out a stale closure, and a
   // second concurrent stale event never stacks a second driver run.
-  const reloadRef = useRef(null);
-  useEffect(() => { reloadRef.current = reload; }, [reload]);
   const staleRecoveryBusy = useRef(false);
   const startStaleRecovery = useCallback(() => {
     if (staleRecoveryBusy.current) return;
@@ -492,7 +547,15 @@ function App() {
         // clears the note in applyFeeds. A thrown attempt is a failed
         // attempt in the driver. Past the bound the note and its Check
         // again CTA persist as the manual path — no unbounded loop.
-        await runStaleRecovery({ attempt: () => reloadRef.current?.() });
+        // PORCH-117: the bound is what earns the offline render — each
+        // failed attempt defers into the chain's slot (no error element
+        // exists while a recovery attempt is pending or retrying), and
+        // exhaustion applies the last failure once.
+        const outcome = await runStaleRecovery({ attempt: () => reloadRef.current?.({ deferFailure: true }) });
+        if (!outcome.recovered) {
+          const deferred = takeDeferredFeedsFailure();
+          if (deferred) applyFeeds(deferred);
+        }
       } finally {
         staleRecoveryBusy.current = false;
       }
@@ -561,7 +624,9 @@ function App() {
     } catch {
       // Named outage class: the delta could not be resolved; the alert
       // surfaces stay visible until a successful (re)connect resolves it.
-      setOffline(true);
+      // PORCH-117: during the boot hold the loading surface owns the
+      // state — the first-fetch chain earns the offline render.
+      if (!bootHoldRef.current) setOffline(true);
     }
     if (before) requestAnimationFrame(() => applyFeedCompensation(before, captureFeedAnchor()));
   }, [startStaleRecovery]);
@@ -596,7 +661,10 @@ function App() {
           // media slots — a first connect is not a recovery.
           if (connected && was === false) signalMediaRecovery();
           if (!connected) {
-            if (!membershipEndedRef.current) setOffline(true);
+            // PORCH-117: during the boot hold the loading surface is the
+            // connection state — the first-fetch chain owns the earned
+            // offline render, so a transport flap mid-boot never banners.
+            if (!membershipEndedRef.current && !bootHoldRef.current) setOffline(true);
             return;
           }
           setOffline(false);
@@ -1662,11 +1730,28 @@ function App() {
     // reopens through an explicit face tap. The forever-logged-in device
     // (no open session, no marker) re-credentials silently into the
     // timeline when the sole registration is unpinned.
-    if (signedOut.current || identity || frontDoor) return;
+    if (signedOut.current || identity || frontDoor) { settleBoot(); return; }
     const solo = connections.length === 1 && connections[0]?.identity?.id && !connections.some(hasLocalPin);
-    if (!solo) return;
-    actions.switchIdentity(connections[0].identity.id).catch(() => setOffline(true));
-  }, [identity, connections, frontDoor, actions.switchIdentity]);
+    if (!solo) { settleBoot(); return; }
+    // PORCH-117: the silent reopen is a session-open attempt. The boot
+    // holds while it works — connection trouble renders the loading
+    // surface and its honest status lines — and the reopen rides the
+    // standing bounded backoff (runStaleRecovery), never a bare
+    // setOffline-on-first-failure. Only exhaustion earns the error, and
+    // it lands on the settle decision, after the loading surface stops
+    // working the state; a success mid-chain never renders an error.
+    const target = connections[0].identity.id;
+    void (async () => {
+      const outcome = await runStaleRecovery(
+        { attempt: () => actions.switchIdentity(target).then(() => true) });
+      if (!outcome.recovered) {
+        settleBoot();
+        setOffline(true);
+      }
+      // A recovered reopen hands to the boot-fetch chain (identity is
+      // open now), which settles the boot from its own sequence.
+    })();
+  }, [identity, connections, frontDoor, actions.switchIdentity, settleBoot]);
   useEffect(() => {
     // A hub with no identity at all is mid-bootstrap or fresh: its visitors
     // land on the owner setup, never a bare join form.
@@ -1790,7 +1875,11 @@ function App() {
       </DialogActions>
     </Dialog>
     <InstallCta kind={installVisible ? installKind : null} onInstall={installNow} onDismiss={dismissInstall} />
-    <Snackbar open={Boolean(notice)} autoHideDuration={8000} onClose={() => setNotice("")} message={notice} />
+    {/* PORCH-117 ac-4: an error surface's disappearance follows a state
+        change or the member's own dismissal, never a timer alone — no
+        autoHide exists here; these notices stay until dismissed. */}
+    <Snackbar open={Boolean(notice)} onClose={() => setNotice("")} message={notice}
+      action={<Button color="inherit" size="small" onClick={() => setNotice("")}>Dismiss</Button>} />
   </ThemeProvider>;
 }
 

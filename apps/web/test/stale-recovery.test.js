@@ -105,8 +105,8 @@ test("ac-1: the recovery attempt IS the Check again refetch — actions.refreshF
 	const source = await mainSource;
 	assert.match(source, /refreshFeeds: \(\) => reload\(\)/,
 		"the manual CTA still rides the same reload the driver's attempt runs");
-	assert.match(source, /attempt: \(\) => reloadRef\.current\?\.\(\)/,
-		"one driver attempt = one full fresh serve through reload (throws count as failures in the driver)");
+	assert.match(source, /attempt: \(\) => reloadRef\.current\?\.\(\{ deferFailure: true \}\)/,
+		"one driver attempt = one full fresh serve through reload, deferring its failure into the chain's slot (throws count as failures in the driver)");
 	assert.match(source, /const feedsServed = !result\.failures\.length;/,
 		"reload resolves true exactly when fresh state landed (the note-clearing condition)");
 });
