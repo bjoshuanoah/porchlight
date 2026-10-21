@@ -140,6 +140,12 @@ function App() {
   const postsRef = useRef(posts);
   const [hidden, setHidden] = useState(() => localIdentities.length === 1 ? hiddenPosts(stored, `${origin}:${localIdentities[0]}`) : new Set());
   const [offline, setOffline] = useState(false);
+  // PORCH-119 ac-11: the boot surface's failure state. The ref backs the
+  // settle decision (set synchronously inside the chain's earned-failure
+  // callback, read by settleBoot after it); the state drives the failure
+  // render on LanternBoot. Both clear when the boot chain re-runs.
+  const [bootFailed, setBootFailed] = useState(false);
+  const bootFailedRef = useRef(false);
   // PORCH-117 (Brian, Oct 21 2026 — error display discipline): errors are
   // earned states, and loading is not failure. The boot holds the lantern
   // surface while the connect / session-open / first-fetch sequence works:
@@ -151,6 +157,15 @@ function App() {
   const bootHoldRef = useRef(true);
   const settleBoot = useCallback(() => {
     if (!bootHoldRef.current) return;
+    // PORCH-119 ac-11 (Brian, Oct 21, 2026 — the dusk boot, boot
+    // continuity): when the chain exhausted into an earned unreachable
+    // failure, the boot surface HOLDS that state — failure copy plus a
+    // retry action, never a flash-then-vanish banner — so readiness is
+    // withheld until retry resolves the chain. The app surface still
+    // mounts beneath the layer (the covered-mount invariant of PORCH-117
+    // stands); a dead credential (401-only outcome) never reaches here —
+    // it settles and names its own state per PORCH-050.
+    if (bootFailedRef.current) return;
     bootHoldRef.current = false;
     markAppReady();
   }, []);
@@ -505,17 +520,41 @@ function App() {
     // lands on the settle, never mid-flight. Boots with no sequence (front
     // door, WhoIsHere, signed-out) settle immediately, as before.
     if (signedOut.current || !activeIdentityId) { settleBoot(); return; }
+    runBootChain();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdentityId, renew]);
+  // PORCH-119 ac-11: the boot chain itself, re-runnable — the declared
+  // effect runs it on identity change, the boot surface's retry action
+  // re-runs it after an earned failure (same connect / first-fetch
+  // sequence, no page reload). A re-run releases any held failure first:
+  // the new chain owns the outcome, and the surface returns to the dusk
+  // loading scene until readiness or another earned failure.
+  const runBootChain = useCallback(() => {
+    bootFailedRef.current = false;
+    setBootFailed(false);
     void (async () => {
       await runBootSequence({
         connect: () => custody.renew(),
         attempt: () => reloadRef.current?.({ deferFailure: true }),
         lastFailure: takeDeferredFeedsFailure,
-        onEarnedFailure: (result) => applyFeeds(result),
+        // PORCH-117 stays: applyFeeds remains the one apply path. ac-11
+        // adds the failure hold for the unreachable class only — a
+        // 401-only outcome (dead credential) settles and names its own
+        // state on the app surface per PORCH-050, never masquerades as an
+        // unreachable hub.
+        onEarnedFailure: (result) => {
+          applyFeeds(result);
+          if (result.failures.some((failure) => failure.status !== 401)) {
+            bootFailedRef.current = true;
+            setBootFailed(true);
+          }
+        },
         onSettle: settleBoot,
       });
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- chain deps ride the boot effect's keys (identity change re-runs)
   }, [activeIdentityId, renew]);
+  const retryBoot = useCallback(() => runBootChain(), [runBootChain]);
   // reload is read through the renewRef pattern's ref for both the boot
   // chain and the PORCH-102 driver: the attempt never waits out a stale
   // closure. The assignment flushes with the same commit as the boot
@@ -1819,11 +1858,13 @@ function App() {
   };
 
   return <ThemeProvider theme={muiTheme}><CssBaseline />
-    {/* PORCH-095: the boot surface — the app's first paint, before route
-        resolution. Readiness ends it: the first surface's commit is the
-        app-ready event, and the crossfade fires the moment it lands, even
-        mid-sequence, with no artificial hold. */}
-    <LanternBoot />
+        {/* PORCH-095: the boot surface — the app's first paint, before route
+            resolution. Readiness ends it: the first surface's commit is the
+            app-ready event, and the crossfade fires the moment it lands, even
+            mid-sequence, with no artificial hold. PORCH-119 ac-11: the
+            earned boot failure holds on this surface with a retry that
+            re-runs the boot chain (never a flash-then-vanish banner). */}
+    <LanternBoot failure={bootFailed} onRetry={retryBoot} />
     {!frontDoor && <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(12px)", background: `var(--porch-appbar-bg)` }}>
       <Toolbar sx={{ minHeight: { xs: 56, lg: 64 }, maxWidth: 1180, width: "100%", mx: "auto", px: { xs: 2, lg: 4 }, pt: "env(safe-area-inset-top)" }}>
         {/* Brand lockup (PORCH-032): the new lamp mark plus the navy wordmark. */}

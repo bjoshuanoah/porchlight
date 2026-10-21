@@ -89,10 +89,13 @@ test("ac-1: every offline set gates on the boot hold — loading covers connecti
 
 test("ac-1: the boot chain and the recovery driver run deferred attempts — failure applies at exhaustion only", async () => {
 	const source = await src("main.jsx");
-	const bootEffect = source.slice(source.indexOf("this effect owns the boot hold"), source.indexOf("}, [activeIdentityId, renew]);"));
-	assert.match(bootEffect, /attempt: \(\) => reloadRef\.current\?\.\(\{ deferFailure: true \}\)/,
+	// PORCH-119: the chain itself is re-runnable (the retry path re-runs
+	// initialization from the held failure surface); the deferred-attempt
+	// law now lives in the chain body.
+	const bootChain = source.slice(source.indexOf("const runBootChain = useCallback"), source.indexOf("const retryBoot"));
+	assert.match(bootChain, /attempt: \(\) => reloadRef\.current\?\.\(\{ deferFailure: true \}\)/,
 		"boot fetch attempts defer their failed result into the chain's slot");
-	assert.match(bootEffect, /lastFailure: takeDeferredFeedsFailure,/);
+	assert.match(bootChain, /lastFailure: takeDeferredFeedsFailure,/);
 	assert.match(source, /const reload = useCallback\(async \(\{ deferFailure = false \} = \{\}\) => \{/);
 	const deferLine = source.slice(source.indexOf("if (deferFailure && !feedsServed)"));
 	assert.match(deferLine, /deferredFeedsFailure\.current = result;/);

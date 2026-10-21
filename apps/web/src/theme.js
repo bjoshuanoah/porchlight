@@ -30,6 +30,18 @@ const bootTokens = {
   bootBg: "#0B1622",
   bootInk: "#FCFAE8",
   bootStatusInk: "#B3A48B",
+  // PORCH-119: the dusk scene's light layers — mode-invariant scene paint
+  // (the brand amber family on the navy canvas), riding the token layer
+  // like every other boot value. The static pre-JS canvas (index.html)
+  // carries the same literals only as fallback-only var() values (it must
+  // paint before JS, so its custom properties resolve late); the React
+  // layer consumes the properties bare — screens carry no literal color.
+  bootDuskHalo: "radial-gradient(circle closest-side, rgba(255,190,87,.30) 0%, rgba(255,190,87,.12) 42%, rgba(255,190,87,0) 70%)",
+  bootDuskGlow: "radial-gradient(closest-side, rgba(255,190,87,.26) 0%, rgba(255,190,87,.09) 55%, rgba(255,190,87,0) 78%)",
+  bootDuskMote: "radial-gradient(circle at 40% 40%, #FFE2B0 0%, #FFBE57 55%, rgba(255,190,87,0) 100%)",
+  bootDuskTail: "linear-gradient(to bottom, rgba(255,190,87,.55), rgba(255,190,87,0))",
+  bootDuskEdge: "rgba(255,190,87,.65)",
+  bootDuskHover: "rgba(255,190,87,.12)",
 };
 
 
@@ -288,6 +300,11 @@ const CSS_VAR_NAMES = [
   // both modes) — declared in both blocks, so the boot surfaces consume
   // custom properties like every other screen.
   ["bootBg", "boot-bg"], ["bootInk", "boot-ink"], ["bootStatusInk", "boot-status-ink"],
+  // PORCH-119: the dusk scene's light layers (halo, floor glow, particle
+  // head, particle tail, retry edge, retry hover) — scene paint values.
+  ["bootDuskHalo", "boot-dusk-halo"], ["bootDuskGlow", "boot-dusk-glow"],
+  ["bootDuskMote", "boot-dusk-mote"], ["bootDuskTail", "boot-dusk-tail"],
+  ["bootDuskEdge", "boot-dusk-edge"], ["bootDuskHover", "boot-dusk-hover"],
 ];
 
 // Screen-facing token map: camelCase keys matching the token sets, values as

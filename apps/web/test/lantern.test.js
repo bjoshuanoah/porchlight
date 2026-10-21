@@ -79,16 +79,21 @@ test("ac-1: the boot renders the navy canvas with the animated webp mark above t
     assert.match(html, /position:fixed/);
     assert.ok(!/data-theme|porch-light|porch-dark/.test(html), "the boot canvas is mode-invariant");
     // The mark sits above the wordmark — the one sanctioned stacked lockup —
-    // rendered as the webp of record, not a drawn SVG twin.
+    // rendered as the webp of record, not a drawn SVG twin. The wordmark is
+    // lowercase on this surface (PORCH-119, Brian Oct 21, 2026).
     const markAt = html.indexOf('src="/loader.webp"');
-    const wordAt = html.indexOf(">Porchlight</div>");
+    const wordAt = html.indexOf(">porchlight</div>");
     assert.ok(markAt > -1 && wordAt > markAt, `mark renders above the wordmark (mark@${markAt} word@${wordAt})`);
     assert.doesNotMatch(html, /<svg|<path\b/, "no vector-twin mark renders on the boot path");
-    assert.equal(html.split(">Porchlight<").length - 1, 1, "exactly one wordmark");
+    assert.ok(!/>Porchlight</.test(html), "the boot wordmark never capitalizes");
+    assert.equal(html.split(">porchlight<").length - 1, 1, "exactly one wordmark");
+    // One polite announcement region (ac-9), never a visible status line.
+    assert.match(html, />Porchlight is loading</);
     // No generic spinner, no progress bar, no percentage anywhere in the boot.
     assert.doesNotMatch(html, /progressbar|CircularProgress|aria-valuenow/);
-    // Copy discipline in normal startup: mark + wordmark and nothing else.
-    assert.doesNotMatch(html, /[Ll]oading/);
+    // Copy discipline in normal startup: the announcement plus nothing —
+    // the ruled status lines only ever appear past the threshold (ac-3).
+    assert.doesNotMatch(html, /[Ll]oading…/);
     // The layer is never an interaction wall — the app beneath stays live.
     assert.match(html, /pointer-events:\s*none|pointerEvents:\s*none|pointer-events:none/);
   });
@@ -102,10 +107,11 @@ test("ac-1: the boot renders the navy canvas with the animated webp mark above t
   // The animated webp plays here from the first byte, before any JavaScript.
   assert.match(bootSlice, /class="porch118-webp" src="\/loader\.webp"/, "the pre-JS mark is the animated webp of record");
   assert.match(bootSlice, /src="\/loader-still\.webp"/, "the reduced-motion still frame ships beside it");
-  assert.match(bootSlice, />Porchlight</);
+  assert.match(bootSlice, />porchlight</, "the pre-JS wordmark is lowercase per the dusk ruling");
+  assert.ok(!bootSlice.includes(">Porchlight<"), "the static canvas never capitalizes the wordmark");
   assert.doesNotMatch(bootSlice, /<svg|<path\b/, "the vector-twin lantern markup is retired from the static canvas");
-  assert.doesNotMatch(bootSlice, /#8A6420|FFBE57/, "no facet choreography palette literal remains");
-  assert.doesNotMatch(bootSlice, /Loading/i, "the static layer never says Loading");
+  assert.doesNotMatch(bootSlice, /#8A6420/, "no facet choreography palette literal remains");
+  assert.doesNotMatch(bootSlice, /[Ll]oading…/, "the static layer never says Loading as a status line");
   // The readiness dissolve rides the static canvas (250ms, in step with
   // BOOT_FADE_MS) — CSS only, no timer in the static layer.
   assert.match(index, /\.porch95-boot-fade \{ animation: porch95-fade 250ms ease-out forwards; \}/, "the readiness dissolve class rides the static canvas");
@@ -150,24 +156,40 @@ test("ac-2: readiness ends the boot immediately, even mid-loop of the animated w
   assert.equal(appready.getAppReady(), false, "importing main.jsx sources announces nothing by itself");
 });
 
-test("ac-3: no Loading… below the threshold; the long lines rotate in family vocabulary", async () => {
-  const { bootStatusLine, STATUS_LINES, STATUS_THRESHOLD_MS, STATUS_CYCLE_MS, STATUS_HONESTY_MS } = assets;
-  assert.equal(bootStatusLine(1400), null, "normal startup renders mark + wordmark and nothing else");
+test("ac-3: no Loading… below the threshold; the ruled dusk rotation rides the boot path (PORCH-119)", async () => {
+  const { bootStatusLine, STATUS_LINES, STATUS_THRESHOLD_MS, STATUS_CYCLE_MS } = assets;
+  assert.equal(bootStatusLine(1400), null, "normal startup renders the dusk scene and nothing else");
+  // The ruled rotation of record (Brian, Oct 21, 2026): the five lines, in
+  // order, revealed at 1.5s and crossfaded every 3s, looping after the last.
+  assert.deepEqual(STATUS_LINES, [
+    "lighting the porch…",
+    "knocking on the front door…",
+    "ringing the doorbell…",
+    "finding you a seat…",
+    "seeing who's home…",
+  ], "the ruled five-line set rides the boot path verbatim");
   assert.equal(bootStatusLine(STATUS_THRESHOLD_MS), STATUS_LINES[0]);
   assert.equal(bootStatusLine(STATUS_THRESHOLD_MS + STATUS_CYCLE_MS - 1), STATUS_LINES[0]);
-  assert.equal(bootStatusLine(STATUS_THRESHOLD_MS + STATUS_CYCLE_MS), STATUS_LINES[1]);
-  assert.equal(bootStatusLine(STATUS_HONESTY_MS), assets.STATUS_HONESTY_LINE, "a boot that outlives its lines names its state");
-  for (const line of [...STATUS_LINES, assets.STATUS_HONESTY_LINE]) {
+  for (let i = 1; i < STATUS_LINES.length; i += 1) {
+    assert.equal(bootStatusLine(STATUS_THRESHOLD_MS + STATUS_CYCLE_MS * i), STATUS_LINES[i]);
+  }
+  // Looping after the final line — the rotation never runs dry.
+  assert.equal(bootStatusLine(STATUS_THRESHOLD_MS + STATUS_CYCLE_MS * STATUS_LINES.length), STATUS_LINES[0]);
+  for (const line of STATUS_LINES) {
     assert.doesNotMatch(line, /[Ll]oading/, `"${line}" never says Loading`);
-    assert.match(line, /…$|waking up\.$/, "status lines stay in family vocabulary");
+    assert.match(line, /…$/, "status lines stay in family vocabulary");
   }
   assert.ok(STATUS_THRESHOLD_MS >= 1400 && STATUS_THRESHOLD_MS <= 1600, `the threshold sits in Brian's ~1.5-2s band (${STATUS_THRESHOLD_MS}ms)`);
-  assert.ok(STATUS_CYCLE_MS >= 1800 && STATUS_CYCLE_MS <= 2200, `the cycle rides the ~1.8-2.2s interval (${STATUS_CYCLE_MS}ms)`);
-  // The rendered boot never carries the literal, in any variant.
+  assert.equal(STATUS_CYCLE_MS, 3000, "the crossfade interval is the ruled 3s");
+  // The rendered boot never says Loading as a status copy; the surface
+  // variant rides its flow's own copy hook; the announcement is the one
+  // sanctioned "loading" string (ac-9).
   await withLantern(async ({ LanternBoot, LanternLoader }) => {
-    assert.doesNotMatch(renderToString(React.createElement(LanternBoot)), /[Ll]oading/);
-    const withLine = renderToString(React.createElement(LanternBoot, { variant: "surface", status: "Connecting…" }));
-    assert.match(withLine, />Connecting…</, "the surface variant rides its flow's own copy hook");
+    const boot = renderToString(React.createElement(LanternBoot));
+    assert.doesNotMatch(boot, /[Ll]oading…/);
+    assert.match(boot, />Porchlight is loading</);
+    const withLine = renderToString(React.createElement(LanternBoot, { variant: "surface", status: "Opening your place…" }));
+    assert.match(withLine, />Opening your place…</, "the surface variant rides its flow's own copy hook");
     assert.doesNotMatch(renderToString(React.createElement(LanternLoader, { label: "Reading your group" })), /(>|")[Ll]oading(…)?(<|")/, "the loader's visible text is never Loading");
   });
 });
