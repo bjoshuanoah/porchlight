@@ -1490,8 +1490,8 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
           }}>Remove post</Button>
       </DialogActions>
     </Dialog>
-      <Snackbar open={Boolean(shareSnackbar || shareError)} autoHideDuration={8000}
-        onClose={() => { setShareSnackbar(''); }}
+      <Snackbar open={Boolean(shareSnackbar || shareError)}
+        onClose={() => { setShareError(''); setShareSnackbar(''); }}
         message={shareSnackbar || (shareError ? 'The share did not go through. Try again.' : '')} />
       {operation.error && <Alert severity="error" sx={{ mt: 1 }}>{operation.error}</Alert>}
     </CardContent>
@@ -3000,7 +3000,9 @@ export function Uploads({ data = {}, navigate, actions = {} }) {
   return <Box>
     <Heading title="Uploads" subtitle="Add original photos, videos, or audio to your family server" />
     <Alert severity="info" sx={{ mb: 2 }}>Uploading stores originals; it does not publish a post or add anything to an album. Create a post to share a moment.</Alert>
-    {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Reconnect before uploading.</Alert>}
+    {/* PORCH-117: the earned unreachable copy renders verbatim — record
+        string #2; no per-surface variant of the banner phrase exists. */}
+    {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>A family server is unreachable. Saved moments may be out of date; new activity is not available until you reconnect.</Alert>}
     <Stack spacing={2}>
       <Button component="label" variant="outlined" sx={{ alignSelf: 'flex-start' }}>Choose files<input hidden multiple type="file" accept="image/*,video/*,audio/*" onChange={(event) => { setFiles(Array.from(event.target.files || [])); setComplete(false); event.target.value = ''; }} /></Button>
       {files.length > 0 && <Typography>{files.map((file) => file.name).join(', ')}</Typography>}
