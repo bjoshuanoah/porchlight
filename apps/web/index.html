@@ -31,24 +31,31 @@
     </script>
   </head>
   <body>
-    <!-- PORCH-118: the boot surface, first paint and pre-JS — the loader
-         mark animates from its own webp frames (the asset of record,
+    <!-- PORCH-118/119: the boot surface, first paint and pre-JS — the
+         loader mark animates from its own webp frames (the asset of record,
          public/loader.webp: Brian's supplied animated webp committed at
-         build) from the first byte: the boot's only guaranteed window on a
-         cold load is the bundle-download span (readiness is the app's
-         first mount, so the animated React layer never outlives the
-         handoff). prefers-reduced-motion swaps the animated asset for its
-         static first frame (public/loader-still.webp, CSS media query).
-         React's LanternBoot (src/lantern.jsx) adopts this node: it manages
-         status lines past the copy threshold (src/loader-assets.js), rides
-         app readiness, takes the dissolve, and removes the node — it never
-         re-renders a second canvas over a healthy load. No flash of another
-         color precedes it in either display mode (the pre-hydration mode
-         script cannot flash through a full-viewport fixed layer). The
-         PORCH-095 vector-twin choreography is retired from the loading
-         path. The palette of record: src/theme.js bootTokens
-         (--porch-boot-*), mirrored here as literals only because this
-         canvas must paint before JS. -->
+         build) from the first byte, over the dusk scene (PORCH-119, Brian
+         Oct 21, 2026: deep navy canvas, soft amber halo behind the mark, a
+         wider flattened amber glow beneath suggesting the porch floor
+         without drawing one, sparse drifting particles with bright heads
+         and fading tails). Separate layers by construction: halo, floor
+         glow, particles, mark, wordmark, status text — the mark and the
+         typography never carry a blur or filter, and breathing animates the
+         light layers' opacity only, never the mark's position or scale
+         (the webp keeps animating its own frames). The wordmark renders
+         lowercase on this surface per the ruling. prefers-reduced-motion
+         swaps the animated asset for its static first frame
+         (public/loader-still.webp), rests the particles and the breathing,
+         and makes status swaps instant. React's LanternBoot
+         (src/lantern.jsx) adopts this node: it manages status lines past
+         the copy threshold (src/loader-assets.js), rides app readiness,
+         holds the earned failure state with a retry action (ac-11), takes
+         the dissolve, and removes the node — it never re-renders a second
+         canvas over a healthy load. No flash of another color precedes it
+         in either display mode (the pre-hydration mode script cannot flash
+         through a full-viewport fixed layer). The palette of record:
+         src/theme.js bootTokens (--porch-boot-*), mirrored here as literals
+         only because this canvas must paint before JS. -->
     <style>
       @keyframes porch95-fade { from { opacity: 1; } to { opacity: 0; } }
       .porch118-webp { display: block; }
@@ -57,17 +64,105 @@
          app's first surface is ready — never a timer. Keep the duration
          in step with BOOT_FADE_MS (src/loader-assets.js). */
       .porch95-boot-fade { animation: porch95-fade 250ms ease-out forwards; }
+      /* PORCH-119 dusk scene — mirrors the React fallback's CSS template
+         (src/lantern.jsx) rule for rule. */
+      .porch-dusk-scene { position: relative; width: 300px; height: 300px; display: flex; align-items: center; justify-content: center; }
+      .porch-dusk-scene > img { position: relative; z-index: 1; }
+      .porch-dusk-halo {
+        position: absolute; left: 50%; top: 50%; width: 320px; height: 330px; z-index: 0;
+        transform: translate(-50%, -50%); border-radius: 50%;
+        background: radial-gradient(circle closest-side, rgba(255,190,87,.30) 0%, rgba(255,190,87,.12) 42%, rgba(255,190,87,0) 70%);
+        animation: porch-dusk-breathe 4.8s ease-in-out infinite;
+      }
+      .porch-dusk-glow {
+        position: absolute; left: 50%; top: 226px; width: 440px; height: 130px; z-index: 0;
+        transform: translate(-50%, -50%) scaleY(.42); border-radius: 50%;
+        background: radial-gradient(closest-side, rgba(255,190,87,.26) 0%, rgba(255,190,87,.09) 55%, rgba(255,190,87,0) 78%);
+        animation: porch-dusk-breathe 4.8s ease-in-out infinite; animation-delay: -2.4s;
+      }
+      @keyframes porch-dusk-breathe { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
+      .porch-dusk-particles { position: absolute; inset: 0; z-index: 0; }
+      .porch-dusk-particle {
+        position: absolute; bottom: 20px; width: 4px; height: 4px; border-radius: 50%; opacity: .8;
+        background: radial-gradient(circle at 40% 40%, #FFE2B0 0%, #FFBE57 55%, rgba(255,190,87,0) 100%);
+        animation: porch-dusk-drift var(--d, 16s) ease-in-out infinite alternate;
+      }
+      .porch-dusk-particle::after {
+        content: ""; position: absolute; top: 3px; left: 50%; width: 2px; height: 13px;
+        transform: translateX(-50%); border-radius: 1px;
+        background: linear-gradient(to bottom, rgba(255,190,87,.55), rgba(255,190,87,0));
+      }
+      @keyframes porch-dusk-drift {
+        0%   { transform: translate(0, 0) rotate(0deg); }
+        30%  { transform: translate(var(--px, 24px), calc(var(--py, -90px) * .35)) rotate(10deg); }
+        60%  { transform: translate(calc(var(--px, 24px) * -.7), calc(var(--py, -90px) * .7)) rotate(-8deg); }
+        100% { transform: translate(calc(var(--px, 24px) * .5), var(--py, -90px)) rotate(6deg); }
+      }
+      .porch-dusk-particle:nth-child(1) { left: 22%; --px: 26px;  --py: -120px; --d: 17s; animation-delay: -3s; }
+      .porch-dusk-particle:nth-child(2) { left: 36%; --px: -22px; --py: -150px; --d: 21s; animation-delay: -9s; }
+      .porch-dusk-particle:nth-child(3) { left: 50%; --px: 18px;  --py: -100px; --d: 15s; animation-delay: -6s; }
+      .porch-dusk-particle:nth-child(4) { left: 64%; --px: -26px; --py: -135px; --d: 19s; animation-delay: -12s; }
+      .porch-dusk-particle:nth-child(5) { left: 76%; --px: 22px;  --py: -105px; --d: 16s; animation-delay: -2s; }
+      .porch-dusk-particle:nth-child(6) { left: 88%; --px: -18px; --py: -125px; --d: 22s; animation-delay: -15s; }
+      .porch95-statusbox { position: relative; height: 20px; width: 300px; }
+      .porch95-status {
+        position: absolute; left: 0; right: 0; top: 0; text-align: center; white-space: nowrap;
+        opacity: 0; transition: opacity 250ms ease;
+        color: var(--porch-boot-status-ink, #B3A48B); font-size: 14px;
+        font-family: Inter, system-ui, sans-serif;
+      }
+      .porch95-status-on { opacity: 1; }
+      .porch95-wordmark {
+        color: var(--porch-boot-ink, #FCFAE8); font-size: 21px; font-weight: 650;
+        letter-spacing: .02em; font-family: Inter, system-ui, sans-serif;
+      }
+      .porch95-announce {
+        position: absolute; width: 1px; height: 1px; overflow: hidden;
+        clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+      }
+      .porch95-fail { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 2px; }
+      .porch95-fail-copy {
+        color: var(--porch-boot-ink, #FCFAE8); font-size: 15px; font-family: Inter, system-ui, sans-serif;
+        text-align: center; max-width: 340px; line-height: 1.5;
+      }
+      .porch95-retry {
+        appearance: none; background: transparent; border: 1px solid rgba(255,190,87,.65);
+        border-radius: 999px; color: var(--porch-boot-ink, #FCFAE8); cursor: pointer;
+        font-family: Inter, system-ui, sans-serif; font-size: 15px; font-weight: 600; padding: 9px 24px;
+      }
+      .porch95-retry:hover { background: rgba(255,190,87,.12); }
       /* prefers-reduced-motion: the asset's static first frame with the
          plain fade into the app (the dissolve class itself stays live). */
       @media (prefers-reduced-motion: reduce) {
         .porch118-webp { display: none; }
         .porch118-webp-still { display: block; }
       }
+      /* PORCH-119 reduced motion ac-8: static lighting, no particles,
+         instant status swaps. */
+      @media (prefers-reduced-motion: reduce) {
+        .porch-dusk-particle { display: none; }
+        .porch-dusk-halo, .porch-dusk-glow { animation: none; opacity: .85; }
+        .porch95-status { transition: none; }
+      }
     </style>
-    <div id="porch-boot" role="status" style="position:fixed;top:0;right:0;bottom:0;left:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:var(--porch-boot-bg,#0B1622);z-index:2147483000;pointer-events:none">
-      <img class="porch118-webp" src="/loader.webp" width="137" height="170" alt="" aria-hidden="true" focusable="false" style="height:92px;width:auto" />
-      <img class="porch118-webp-still" src="/loader-still.webp" width="137" height="170" alt="" aria-hidden="true" focusable="false" style="height:92px;width:auto" />
-      <div style="color:var(--porch-boot-ink,#FCFAE8);font-size:21px;font-weight:650;letter-spacing:.02em;font-family:Inter,system-ui,sans-serif">Porchlight</div>
+    <div id="porch-boot" role="status" style="position:fixed;top:0;right:0;bottom:0;left:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:var(--porch-boot-bg,#0B1622);z-index:2147483000;pointer-events:none;overflow:hidden">
+      <span class="porch95-announce">Porchlight is loading</span>
+      <div class="porch-dusk-scene" aria-hidden="true">
+        <div class="porch-dusk-halo"></div>
+        <div class="porch-dusk-glow"></div>
+        <div class="porch-dusk-particles">
+          <span class="porch-dusk-particle"></span>
+          <span class="porch-dusk-particle"></span>
+          <span class="porch-dusk-particle"></span>
+          <span class="porch-dusk-particle"></span>
+          <span class="porch-dusk-particle"></span>
+          <span class="porch-dusk-particle"></span>
+        </div>
+        <img class="porch118-webp" src="/loader.webp" width="137" height="170" alt="" aria-hidden="true" focusable="false" style="height:92px;width:auto" />
+        <img class="porch118-webp-still" src="/loader-still.webp" width="137" height="170" alt="" aria-hidden="true" focusable="false" style="height:92px;width:auto" />
+      </div>
+      <div class="porch95-wordmark" aria-hidden="true">porchlight</div>
+      <div class="porch95-statusbox" aria-hidden="true"></div>
     </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
