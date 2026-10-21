@@ -4,9 +4,10 @@ import {
   DialogContent, DialogTitle, Divider, IconButton, Link, List, ListItem, ListItemAvatar, ListItemIcon,
   ListItemText, Menu, MenuItem, Paper, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
-// PORCH-095: the lantern loader family — the boot surface doubles as the
+// PORCH-118: the webp loader family — the boot surface doubles as the
 // loading state for full-screen flows, LanternLoader serves the small
-// blocked-surface marks. No spinner anywhere on these surfaces.
+// blocked-surface marks (Brian's animated webp of record). No spinner
+// anywhere on these surfaces.
 import { LanternBoot, LanternLoader } from './lantern.jsx';
 import CheckOutlined from '@mui/icons-material/CheckOutlined';
 import LogoutOutlined from '@mui/icons-material/LogoutOutlined';

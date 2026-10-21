@@ -1,155 +1,67 @@
-// PORCH-095: the loading experience — LanternBoot (the initial-launch boot
-// surface, variant="boot"; variant="surface" doubles as the loading state
-// for flows that hold a full screen, with the flow's own copy as the status
-// line) and LanternLoader (the small in-app mark for genuinely empty or
-// blocked surfaces). This is a sanctioned bespoke component family: the
-// surfaces are deliberately mode-invariant (one navy canvas, both display
-// modes) outside the MUI theme's surface system, and the animation composes
-// from the mark's node geometry (src/lantern-geometry.js) with CSS
-// transitions — no spinner library, no skeleton library, no third-party
-// loader enters the bundle (build contract, Brian Oct 16, 2026).
+// PORCH-118: the loading experience rides Brian's supplied animated webp
+// — the asset of record, committed at build into the SPA's static assets
+// (public/loader.webp with public/loader-still.webp as the static first
+// frame). LanternBoot (the initial-launch boot surface, variant="boot";
+// variant="surface" doubles as the loading state for flows that hold a
+// full screen, with the flow's own copy as the status line) and
+// LanternLoader (the small in-app mark for genuinely empty or blocked
+// surfaces) both render the mark animating from its own webp frames — the
+// PORCH-095 drawn vector-twin choreography (facet climb, node glow, one
+// pulse) is retired from the loading path by the Oct 21, 2026 ruling.
+// Fades, dissolves, and status lines stay CSS; no spinner library, no
+// skeleton library, no third-party animation runtime enters the bundle
+// (build contract). Copy and timing constants of record:
+// src/loader-assets.js; the palette of record: src/theme.js bootTokens
+// (--porch-boot-*), one navy canvas in both display modes.
 //
 // Hierarchy rule: LanternLoader renders only in its own reserved,
 // centered space — it is never fixed, never overlays the feed, and never
 // replaces visible content; where content already renders, the standing
-// machinery (skeletons, reserved media frames) is untouched.
+// machinery (skeletons, reserved media frames) is untouched. Timeout
+// honesty rides the call sites: they keep their error/timeout branches,
+// so a stuck operation yields to the connection-state/error pattern, never
+// an eternal mark.
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  BOOT_MARK_SIZE, LOADER_MARK_SIZE,
-  BOOT_FADE_MS, FACETS, FACET_RAMP_MS, NODES,
-  NODE_LEVEL_DELAY, NODE_GLOW_OFFSET_MS, NODE_GLOW_SETTLE_MS, PULSE_DELAY_MS,
-  PULSE_MS, MARK_VIEWBOX, bootStatusLine, GLOW_LOOP_PATH,
-  GLOW_LOOP_MS,
-} from "./lantern-geometry.js";
+  BOOT_FADE_MS, BOOT_MARK_H, LOADER_MARK_H,
+  LOADER_ANIM_SRC, LOADER_ANIM_W, LOADER_ANIM_H, LOADER_STILL_SRC,
+  bootStatusLine,
+} from "./loader-assets.js";
 import { getAppReady, onAppReady } from "./appready.js";
 
 // The boot's mode-invariant brand palette rides the theme token layer
-// (src/theme.js bootTokens → --porch-boot-* custom properties, one navy
-// canvas in both display modes). No literal color appears here (PORCH-042):
-// the ramp, glow, and pulse compose from those properties.
+// (--porch-boot-* custom properties). No literal color appears here
+// (PORCH-042).
 const V = {
   bg: "var(--porch-boot-bg)", ink: "var(--porch-boot-ink)", status: "var(--porch-boot-status-ink)",
-  frame: "var(--porch-boot-frame)", frameDim: "var(--porch-boot-frame-dim)",
-  facet: "var(--porch-boot-facet)", core: "var(--porch-boot-core)", node: "var(--porch-boot-node)",
-  glowDim: "var(--porch-boot-glow-dim)", glowBloom: "var(--porch-boot-glow-bloom)",
-  glowRest: "var(--porch-boot-glow-rest)", glowHalo: "var(--porch-boot-glow-halo)",
 };
 
-// One style block carries every animation of the family — CSS only, no
-// third-party animation runtime. The one-pulse rule is literal: the boot's
-// pulse keyframe runs exactly once (fill both, no infinite); only the
-// loader's candlelight circuit loops.
+// CSS only: the mark animates from its own webp frames; this block carries
+// only the reduced-motion swap (the static first frame replaces the
+// animated asset on both surfaces) — no animation runtime, no keyframe
+// choreography. The dissolve keyframes (porch95-fade) stay live.
 const CSS = `
-@keyframes porch95-facet-ramp { from { fill: ${V.frameDim}; opacity: .5; } to { fill: ${V.facet}; opacity: 1; } }
-@keyframes porch95-core-ramp { from { fill: ${V.frameDim}; opacity: .5; } to { fill: ${V.core}; opacity: 1; } }
-@keyframes porch95-frame-ramp { from { stroke: ${V.frameDim}; } to { stroke: ${V.frame}; } }
-@keyframes porch95-node-glow {
-  0% { fill: ${V.frameDim}; opacity: .4; filter: none; }
-  35% { fill: ${V.node}; opacity: 1; filter: drop-shadow(0 0 6px ${V.glowHalo}); }
-  100% { fill: ${V.frame}; opacity: .95; filter: none; }
-}
-@keyframes porch95-pulse {
-  0% { filter: drop-shadow(0 0 4px ${V.glowDim}); }
-  45% { filter: drop-shadow(0 0 22px ${V.glowBloom}); }
-  100% { filter: drop-shadow(0 0 10px ${V.glowRest}); }
-}
-@keyframes porch95-circuit {
-  0% { offset-distance: 0%; opacity: 0; }
-  10% { opacity: .85; }
-  90% { opacity: .85; }
-  100% { offset-distance: 100%; opacity: 0; }
-}
 @keyframes porch95-fade { from { opacity: 1; } to { opacity: 0; } }
-.porch95-mark { animation: porch95-pulse ${PULSE_MS}ms ease-in-out ${PULSE_DELAY_MS}ms both; }
-.porch95-facet-el { animation: porch95-facet-ramp ${FACET_RAMP_MS}ms ease-out both; }
-.porch95-core-el { animation: porch95-core-ramp ${FACET_RAMP_MS}ms ease-out both; }
-.porch95-frame-el { animation: porch95-frame-ramp ${FACETS[2].delay + FACET_RAMP_MS}ms linear both; }
-.porch95-node-el { animation: porch95-node-glow ${NODE_GLOW_SETTLE_MS}ms ease-out both; }
-.porch95-circuit-el { offset-path: path('${GLOW_LOOP_PATH}'); offset-rotate: 0deg; animation: porch95-circuit ${GLOW_LOOP_MS}ms linear infinite; }
-/* prefers-reduced-motion: the boot renders the static fully-lit mark with
-   the plain fade into the app; the loader renders a static small mark. */
+.porch118-webp { display: block; }
+.porch118-webp-still { display: none; }
+/* prefers-reduced-motion: both load states render the asset's static
+   first frame (the plain fade/dissolve itself stays live). */
 @media (prefers-reduced-motion: reduce) {
-  .porch95-mark, .porch95-facet-el, .porch95-core-el, .porch95-frame-el, .porch95-node-el, .porch95-circuit-el { animation: none !important; }
-  .porch95-facet-el { fill: ${V.facet} !important; opacity: 1 !important; }
-  .porch95-core-el { fill: ${V.core} !important; opacity: 1 !important; }
-  .porch95-frame-el { stroke: ${V.frame} !important; }
-  .porch95-node-el { fill: ${V.frame} !important; opacity: .95 !important; filter: none !important; }
-  .porch95-circuit-el { opacity: 0 !important; }
+  .porch118-webp { display: none; }
+  .porch118-webp-still { display: block; }
 }
 `;
 
-function bootLayerStyle(z) {
-  return {
-    position: "fixed", top: 0, right: 0, bottom: 0, left: 0,
-    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-    gap: 16, background: V.bg, zIndex: z,
-    // The boot is never an interaction wall: the app beneath stays
-    // interactive the frame the fade completes (and passes clicks through
-    // even earlier).
-    pointerEvents: "none",
-  };
-}
-
-/** The lantern mark for the boot climb — dim first paint, staggered warm ramp. */
-function BootMark({ size = BOOT_MARK_SIZE }) {
-  const height = Math.round(size * 132 / 120);
+/** The loader mark — the animated webp of record, still frame under reduced motion. */
+function Mark({ height = BOOT_MARK_H }) {
+  const style = { height, width: "auto" };
   return (
-    <svg className="porch95-mark" viewBox={MARK_VIEWBOX} width={size} height={height}
-      aria-hidden="true" focusable="false" style={{ display: "block" }}>
-      <g className="porch95-facet-el" style={{ animationDelay: `${FACETS[0].delay}ms` }}>
-        <path d={FACETS[0].path} />
-      </g>
-      <g className="porch95-facet-el" style={{ animationDelay: `${FACETS[1].delay}ms` }}>
-        <path d={FACETS[1].path} />
-      </g>
-      <g className="porch95-facet-el" style={{ animationDelay: `${FACETS[2].delay}ms` }}>
-        <path d={FACETS[2].path} />
-      </g>
-      <ellipse className="porch95-core-el" cx="60" cy="52" rx="9" ry="12"
-        style={{ animationDelay: `${FACETS[1].delay}ms` }} />
-      <g className="porch95-frame-el" fill="none" strokeWidth="2.5" strokeLinejoin="round">
-        <path d="M40 30 L52 16 L68 16 L80 30" />
-        <path d="M46 30 H74 V36 H46" />
-        <path d="M48 36 L72 36 L76 58 L44 58" />
-        <path d="M44 58 L76 58 L70 88 L50 88" />
-        <path d="M50 88 H70 V94 H50" />
-        <path d="M52 94 V99 M68 94 V99" />
-        <path d="M60 9 V16" />
-        <circle cx="60" cy="6" r="3" />
-      </g>
-      {NODES.map((node) => (
-        <circle key={`${node.cx}:${node.cy}`} className="porch95-node-el" cx={node.cx} cy={node.cy} r="2.2"
-          style={{ animationDelay: `${NODE_LEVEL_DELAY[node.level] + NODE_GLOW_OFFSET_MS}ms` }} />
-      ))}
-    </svg>
-  );
-}
-
-/** The small in-app mark — the loader's reserved-space instance. */
-export function LoaderMark({ size = LOADER_MARK_SIZE, glow = "var(--porch-boot-node)" }) {
-  const height = Math.round(size * 132 / 120);
-  return (
-    <svg viewBox={MARK_VIEWBOX} width={size} height={height}
-      aria-hidden="true" focusable="false" style={{ display: "block", color: "currentColor", overflow: "visible" }}>
-      <g fill="currentColor">
-        <path d="M44 58 L76 58 L70 88 L50 88 Z" opacity=".3" />
-        <path d="M48 36 L72 36 L76 58 L44 58 Z" opacity=".45" />
-        <path d="M40 30 L52 16 L68 16 L80 30 Z" opacity=".55" />
-      </g>
-      <ellipse cx="60" cy="52" rx="7.5" ry="10" fill="currentColor" opacity=".92" />
-      <g fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="round">
-        <path d="M40 30 L52 16 L68 16 L80 30" />
-        <path d="M46 30 H74 V36 H46" />
-        <path d="M48 36 L72 36 L76 58 L44 58" />
-        <path d="M44 58 L76 58 L70 88 L50 88" />
-        <path d="M50 88 H70 V94 H50" />
-        <path d="M52 94 V99 M68 94 V99" />
-        <path d="M60 9 V16" />
-        <circle cx="60" cy="6" r="3" />
-      </g>
-      <circle className="porch95-circuit-el" r="2.4" fill={glow}
-        style={{ filter: "drop-shadow(0 0 5px var(--porch-boot-facet))" }} />
-    </svg>
+    <>
+      <img className="porch118-webp" src={LOADER_ANIM_SRC} width={LOADER_ANIM_W} height={LOADER_ANIM_H}
+        alt="" aria-hidden="true" focusable="false" style={style} />
+      <img className="porch118-webp-still" src={LOADER_STILL_SRC} width={LOADER_ANIM_W} height={LOADER_ANIM_H}
+        alt="" aria-hidden="true" focusable="false" style={style} />
+    </>
   );
 }
 
@@ -160,21 +72,21 @@ export const BOOT_FADE_CLASS = "porch95-boot-fade";
 
 /**
  * LanternBoot — variant="boot" (default) is the app's first paint. The
- * climb itself lives in the static pre-JS canvas (index.html): the boot's
- * only guaranteed window on a cold load is the bundle-download span, and
- * the facet ramp, node glows, and pulse animate there from the first byte.
- * The app's first surface becomes ready in the same commit LanternBoot
- * mounts (readiness is React mount), so the React layer never shows its
- * own climb on a healthy load — it *adopts* the static canvas: manages the
- * status lines past the copy threshold (elapsed measured from navigation
- * start — the boot's true start), rides readiness, dissolves the canvas,
- * and removes it. When no static canvas exists (the React layer renders
- * standalone, tests, or a surface flow), it renders its own identical
- * layer. variant="surface" is the boot doubling as the full-screen loading
- * state for flows that hold a page (device-link consume, session open
- * behind WhoIsHere): `status` rides the flow's own copy hook and the
- * parent unmounts it when the flow resolves — the loader never outlives
- * its context.
+ * animated webp itself lives in the static pre-JS canvas (index.html): the
+ * boot's only guaranteed window on a cold load is the bundle-download
+ * span, and the mark animates there from the first byte. The app's first
+ * surface becomes ready in the same commit LanternBoot mounts (readiness
+ * is React mount), so the React layer never replays the animation on a
+ * healthy load — it *adopts* the static canvas: manages the status lines
+ * past the copy threshold (elapsed measured from navigation start — the
+ * boot's true start), rides readiness, dissolves the canvas, and removes
+ * it. When no static canvas exists (the React layer renders standalone,
+ * tests, or a surface flow), it renders its own identical layer.
+ * variant="surface" is the boot doubling as the full-screen loading state
+ * for flows that hold a page (device-link consume, session open behind
+ * WhoIsHere): `status` rides the flow's own copy hook and the parent
+ * unmounts it when the flow resolves — the loader never outlives its
+ * context.
  */
 export function LanternBoot({
   variant = "boot",
@@ -193,7 +105,7 @@ export function LanternBoot({
   useLayoutEffect(() => {
     const staticBoot = document.getElementById("porch-boot");
     if (variant === "boot" && staticBoot) {
-      // The pre-JS canvas keeps climbing; this layer only manages status,
+      // The pre-JS canvas keeps playing; this layer only manages status,
       // readiness, and the dissolve. Boot start = navigation start.
       bootedAtRef.current = now() - (typeof performance !== "undefined" ? performance.now() : 0);
       return;
@@ -276,12 +188,18 @@ export function LanternBoot({
   if (gone) return null;
   return (
     <div style={{
-      ...bootLayerStyle(variant === "surface" ? 2147483100 : 2147483000),
+      position: "fixed", top: 0, right: 0, bottom: 0, left: 0,
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      gap: 16, background: V.bg, zIndex: variant === "surface" ? 2147483100 : 2147483000,
+      // The boot is never an interaction wall: the app beneath stays
+      // interactive the frame the fade completes (and passes clicks through
+      // even earlier).
+      pointerEvents: "none",
       ...(fading ? { animation: `porch95-fade ${fadeMs}ms ease-out forwards` } : null),
     }}
       className="porch95-bootlayer" role="status">
       <style>{CSS}</style>
-      <BootMark />
+      <Mark />
       <div style={{
         color: V.ink, fontSize: 21, fontWeight: 650, letterSpacing: ".02em",
         fontFamily: "Inter, system-ui, sans-serif",
@@ -295,25 +213,24 @@ export function LanternBoot({
 }
 
 /**
- * LanternLoader — the small in-app loading mark. Renders centered in its
- * own reserved space with a quiet traveling glow circulating the mark's
- * vertices (amber-glow class, 2s loop). Callers pass their own aria label
- * and a `style` for tone (`color: "var(--porch-amber-ink)"` inside amber
- * fills). It never renders fixed, never overlays content, and never
- * outlives its operation: the call sites keep their error/timeout
- * branches, so a stuck write resolves to the error pattern, never an
- * eternal mark.
+ * LanternLoader — the small in-app loading mark: the animated webp of
+ * record at `size` CSS px tall, centered in its own reserved space. The
+ * mark animates from its own frames; prefers-reduced-motion renders the
+ * asset's static first frame. Callers pass their own aria label. It never
+ * renders fixed, never overlays content, and never outlives its operation:
+ * the call sites keep their error/timeout branches, so a stuck write
+ * resolves to the error pattern, never an eternal mark.
  */
-export function LanternLoader({ size = LOADER_MARK_SIZE, label, style, glow = "var(--porch-boot-node)" }) {
+export function LanternLoader({ size = LOADER_MARK_H, label, style }) {
   const pad = Math.round(size * 0.35);
   return (
     <div role="status" aria-label={label} style={{
       display: "flex", alignItems: "center", justifyContent: "center",
       minWidth: size + pad * 2, minHeight: size + pad * 2,
-      color: "var(--porch-amber)", ...style,
+      ...style,
     }}>
       <style>{CSS}</style>
-      <LoaderMark size={size} glow={glow} />
+      <Mark height={size} />
     </div>
   );
 }
