@@ -74,6 +74,10 @@ export class NotificationService {
         postId: comment.postId,
         commentId: comment._id,
         actorDid: comment.authorDid,
+        // PORCH-115 excerpt law: a mention excerpts the mentioning text —
+        // the comment carrying the mention rides the PUSH plaintext only
+        // (the inbox row below stays content-free).
+        excerpt: comment.body,
       });
     }
     if (

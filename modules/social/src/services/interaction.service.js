@@ -495,6 +495,9 @@ export class InteractionService {
       postId: payload.postId,
       commentId: subjectType === "comment" ? commentId : null,
       actorDid: session.did,
+      // PORCH-115: the emoji rides as authored — the actor line composes
+      // "{actor}: {emoji}" on the send pipeline.
+      emoji,
     });
     return { reaction: InteractionService.reactionView(reaction) };
   }

@@ -11,7 +11,7 @@ import {
 import express from "express";
 import webpush from "web-push";
 import { assembleSocialModule } from "../src/assemble.js";
-import { pushExcerpt, pushPlaintext, DEFAULT_EVENT_SWITCHES } from "../src/services/push.service.js";
+import { pushExcerpt, pushTitle, pushPlaintext, DEFAULT_EVENT_SWITCHES } from "../src/services/push.service.js";
 import { fixture, device } from "./helpers/content.fixture.js";
 
 const FAMILY = "net_family";
@@ -250,23 +250,24 @@ test("ac-2: reply and mention triggers resolve through the hub-enforced settings
   assert.ok(mention, "mentions deliver");
   assert.ok(reply, "replies deliver");
   assert.equal(mention.subscription.identityId, ALICE);
-  // Content-only plaintext: the full whitelist, nothing else.
+  // The composed envelope: the network-name main line, the actor line,
+  // the excerpt per the law (PORCH-115). Content-only, nothing else.
   assert.deepEqual(mention.plaintext, {
     type: "mention",
     postId: post._id,
     commentId: mention.plaintext.commentId,
-    authorName: "Bob Mills",
-    networkName: "Family",
-    excerpt: null,
+    title: "Family",
+    body: "Bob Mills: mentioned you\nBeautiful evening!",
   });
   assert.equal(reply.subscription.identityId, ALICE);
   assert.deepEqual(reply.plaintext, {
     type: "reply",
     postId: post._id,
     commentId: reply.plaintext.commentId,
-    authorName: "Bob Mills",
-    networkName: "Family",
-    excerpt: "Replying to Alice",
+    title: "Family",
+    // The reply excerpt is the responder's own reply text (Brian, Oct 20,
+    // 2026), never the parent post's text.
+    body: "Bob Mills: replied\nReplying to Alice",
   });
 });
 
@@ -285,11 +286,56 @@ test("ac-2: reactions to your post deliver with the caption as the excerpt", asy
     type: "reaction",
     postId: post._id,
     commentId: null,
-    authorName: "Bob Mills",
-    networkName: "Family",
-    excerpt: "First dance",
+    title: "Family",
+    body: "Bob Mills: 🎉\nFirst dance",
   });
   assert.equal(sender.sends[0].subscription.identityId, ALICE);
+});
+
+test("PORCH-115 ac-1: the main line is the origin network's display name as authored, and no hub-composed line carries the product name", async () => {
+  const sender = senderOf(201);
+  const { collections, mod, devs, tokens } = await pushFixture({ sender });
+  await collections.networks.updateOne({ _id: FAMILY }, { $set: { name: "The Noah Family Network" } });
+  await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Waiting on insulation and an mechanicals inspection" });
+  await mod.interactionService.react({
+    accessToken: tokens.bob,
+    payload: { postId: post._id, emoji: "🎉" },
+    signature: devs.bob.signPayload({ postId: post._id, emoji: "🎉" }),
+  });
+  assert.equal(sender.sends.length, 1);
+  const envelope = sender.sends[0].plaintext;
+  // The main line is the authored display name, resolved live at compose.
+  assert.equal(envelope.title, "The Noah Family Network");
+  // The next line reads "{actor}: {event word or emoji}".
+  assert.equal(envelope.body, "Bob Mills: 🎉\nWaiting on insulation and an mechanicals inspection");
+  // No hub-composed line contains the product name.
+  assert.equal(`${envelope.title}\n${envelope.body}`.includes("Porchlight"), false);
+});
+
+test("PORCH-115 ac-2: a group post whose display name does not resolve composes bare \"posted\" without error", async () => {
+  const sender = senderOf(201);
+  const { mod, tokens } = await pushFixture({ sender });
+  await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
+  const result = await mod.pushService.notify({
+    networkId: FAMILY,
+    type: "groupPost",
+    targetDids: [ALICE],
+    postId: "p_gone",
+    actorDid: BOB,
+    // A group id that resolves to nothing: bare "posted" falls back.
+    groupId: "grp_gone",
+    excerpt: "Where has everyone gone",
+  });
+  assert.equal(result.sent, 1);
+  assert.equal(sender.sends.length, 1);
+  assert.deepEqual(sender.sends[0].plaintext, {
+    type: "groupPost",
+    postId: "p_gone",
+    commentId: null,
+    title: "Family",
+    body: "Bob Mills: posted\nWhere has everyone gone",
+  });
 });
 
 test("ac-2: without a live subscription there is no send attempt", async () => {
@@ -515,9 +561,11 @@ test("ac-2: new member joined notifies owner and delegates at the admission writ
     type: "joined",
     postId: null,
     commentId: null,
-    authorName: null,
-    networkName: "Family",
-    excerpt: null,
+    title: "Family",
+    // Owner event, no excerpt; the fixture's joining member carries no
+    // display name, so the bare event word composes (never an invented
+    // name, never product copy).
+    body: "joined",
   });
   assert.equal(joined[0].subscription.identityId, OWNER, "the owner learns the join");
   assert.equal(sender.sends.some((s) => s.subscription.identityId === BOB), false, "plain members are not recipients");
@@ -536,9 +584,8 @@ test("ac-2: a device-link request notifies the origin's owner", async () => {
     type: "deviceLink",
     postId: null,
     commentId: null,
-    authorName: "Bob Mills",
-    networkName: "Family",
-    excerpt: null,
+    title: "Family",
+    body: "Bob Mills: requested to link a device",
   });
   assert.equal(link[0].subscription.identityId, OWNER);
 });
@@ -558,9 +605,9 @@ test("ac-2: group posts deliver by default once enabled; the member's toggle gat
     type: "groupPost",
     postId: post1._id,
     commentId: null,
-    authorName: "Brian Rivers",
-    networkName: "Family",
-    excerpt: "Picnic planning",
+    title: "Family",
+    // The group's display name resolves onto the actor line (PORCH-115).
+    body: "Brian Rivers: posted in Picnic\nPicnic planning",
   });
   assert.equal(defaultSends[0].subscription.identityId, ALICE, "the enabled members receive, the author never does");
   assert.equal(defaultSends[1].subscription.identityId, BOB);
@@ -577,20 +624,28 @@ test("ac-2: group posts deliver by default once enabled; the member's toggle gat
 /* ---- ac-3: encrypted, content-only payloads ------------------------------- */
 
 test("ac-3: the plaintext whitelist carries content only; unknown and forbidden fields never ride", () => {
-  const plaintext = pushPlaintext({ type: "reply", postId: "p_1", commentId: "c_1", authorName: "Bob Mills", networkName: "Family", excerpt: "See you there", voteCount: 3, upvotes: 2, extra: "x" });
-  assert.deepEqual(Object.keys(plaintext).sort(), ["authorName", "commentId", "excerpt", "networkName", "postId", "type"]);
+  const plaintext = pushPlaintext({ type: "reply", postId: "p_1", commentId: "c_1", title: "Family", body: "Bob Mills: replied\nSee you there", voteCount: 3, upvotes: 2, extra: "x" });
+  assert.deepEqual(Object.keys(plaintext).sort(), ["body", "commentId", "postId", "title", "type"]);
   assert.deepEqual(plaintext, {
     type: "reply",
     postId: "p_1",
     commentId: "c_1",
-    authorName: "Bob Mills",
-    networkName: "Family",
-    excerpt: "See you there",
+    title: "Family",
+    body: "Bob Mills: replied\nSee you there",
   });
   const long = "x".repeat(300);
-  assert.ok(pushExcerpt(long).length <= 161);
+  assert.ok(pushExcerpt(long).length <= 201);
   assert.equal(pushExcerpt("  spaced  "), "spaced");
   assert.equal(pushExcerpt(null), null);
+  // The composed caps (PORCH-115 ac-4): long network display names
+  // truncate on the main line; the body stays under the renderer's decode
+  // cap.
+  const longTitle = pushTitle("y".repeat(80));
+  assert.ok(longTitle.length <= 65);
+  assert.ok(longTitle.endsWith("…"));
+  assert.equal(pushTitle(" The Noah Family Network "), "The Noah Family Network");
+  assert.equal(pushTitle(null), null);
+  assert.ok(pushPlaintext({ type: "reply", title: "Family", body: "a\n" + "z".repeat(400) }).body.length <= 301);
   assert.deepEqual(DEFAULT_EVENT_SWITCHES, { reply: true, reaction: true, mention: true, groupPost: true, joined: true, deviceLink: true });
 });
 
@@ -693,9 +748,8 @@ test("ac-3: a real push decrypts with the subscription's own keys and carries co
     type: "reaction",
     postId: post._id,
     commentId: null,
-    authorName: "Bob Mills",
-    networkName: "Family",
-    excerpt: "Lake morning",
+    title: "Family",
+    body: "Bob Mills: 🌅\nLake morning",
   });
 });
 

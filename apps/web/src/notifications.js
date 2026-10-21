@@ -241,9 +241,10 @@ export function notificationsBannerVisible({ standalone = false, sessionOpen = f
   return settings.enabled !== true || permission !== "granted";
 }
 
-/** Whitelisted push envelope — the same content-only fields the hub's
- * pipeline composes (PORCH-059). Everything else is dropped on the floor. */
-export const PUSH_FIELDS = Object.freeze(["type", "postId", "commentId", "authorName", "networkName", "excerpt"]);
+/** Composed push envelope — the same composed slots the hub's pipeline
+ * sends (PORCH-115): the network-name main line and the composed body
+ * ride as delivered; everything else is dropped on the floor. */
+export const PUSH_FIELDS = Object.freeze(["type", "postId", "commentId", "title", "body"]);
 
 /** Decode an incoming push payload defensively: strings from the whitelist
  * only, anything absent malformed, oversized, or off the list discarded. */
