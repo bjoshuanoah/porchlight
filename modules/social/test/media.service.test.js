@@ -1015,6 +1015,83 @@ test("PORCH-049 ac-1: a ref without a readable archive states null geometry — 
   assert.equal(meta.durationMs, null);
 });
 
+/* ---- PORCH-116: rendition serving response classes ----------------------- */
+
+test("PORCH-116: the response classes — terminal absence for purged media; an interrupted transfer poisons nothing", async (t) => {
+  const fx = mediaFixture();
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const express = (await import("express")).default;
+  const app = express();
+  app.use(express.json());
+  app.use("/api/social", fx.mod.api);
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/social`;
+  t.after(() => server.close());
+
+  // One committed photo, served fully once as the baseline truth.
+  const bytes = await sampleImageBytes({ seed: 61 });
+  const declare = { scope: "media-upload", size: bytes.length, contentType: "image/jpeg" };
+  const begin = await (await fetch(`${base}/media/uploads`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${susan.token}` },
+    body: JSON.stringify({ payload: declare, signature: susan.dev.signPayload(declare) }),
+  })).json();
+  for (let index = 0; index < begin.chunkCount; index += 1) {
+    const chunk = bytes.subarray(index * begin.chunkSize, (index + 1) * begin.chunkSize);
+    await fetch(`${base}/media/uploads/${begin.uploadId}/chunks/${index}`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${susan.token}`, "x-chunk-sha256": chunkSha(chunk) },
+      body: chunk,
+    });
+  }
+  const commit = { scope: "media-commit", uploadId: begin.uploadId, sha256: sha256Hex(bytes), size: bytes.length };
+  const committed = await (await fetch(`${base}/media/uploads/${begin.uploadId}/complete`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${susan.token}` },
+    body: JSON.stringify({ payload: { sha256: commit.sha256, size: commit.size }, signature: susan.dev.signPayload(commit) }),
+  })).json();
+
+  const renditionUrl = `${base}/media/${committed.mediaId}/renditions/album`;
+  const truth = await fetch(renditionUrl, { headers: { authorization: `Bearer ${susan.token}` } });
+  assert.equal(truth.status, 200);
+  const truthBytes = Buffer.from(await truth.arrayBuffer());
+  const renditionSha = truth.headers.get("x-porchlight-sha256");
+
+  // The interrupted transfer (the tunnel-blip class): the member's client
+  // aborts mid-transfer, then re-fetches — the immutable content address
+  // answers identical bytes with the unchanged cache contract; the route
+  // never emitted a half-written cacheable response to pin.
+  const interrupted = new AbortController();
+  const partial = await fetch(renditionUrl, { headers: { authorization: `Bearer ${susan.token}` }, signal: interrupted.signal });
+  const reader = partial.body.getReader();
+  const first = await reader.read();
+  assert.equal(first.done, false);
+  assert.ok(first.value instanceof Uint8Array && first.value.length > 0, "the transfer is genuinely in flight when the interruption lands");
+  interrupted.abort();
+  const refetched = await fetch(renditionUrl, { headers: { authorization: `Bearer ${susan.token}` } });
+  assert.equal(refetched.status, 200);
+  assert.equal(refetched.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  assert.deepEqual(Buffer.from(await refetched.arrayBuffer()), truthBytes);
+
+  // Terminal class: an absent media id answers 404 on the route family —
+  // the purged/tombstoned class the slot renders the absence copy on.
+  const absentRendition = await fetch(`${base}/media/media_absent/renditions/album`, { headers: { authorization: `Bearer ${susan.token}` } });
+  assert.equal(absentRendition.status, 404);
+  assert.equal((await absentRendition.json()).code, "E_MEDIA_NOT_FOUND");
+  const absentOriginal = await fetch(`${base}/media/media_absent/original`, { headers: { authorization: `Bearer ${susan.token}` } });
+  assert.equal(absentOriginal.status, 404);
+
+  // Day-30 hard purge destroys the held original: the original route joins
+  // the terminal class (the deletion-cascade route pins live in
+  // lifecycle.test.js — renditions purge at delete).
+  await fx.media.purgeHeldLifecycleMedia({ networkId: FAMILY, originalIds: [committed.mediaId] });
+  const purgedOriginal = await fetch(`${base}/media/${committed.mediaId}/original`, { headers: { authorization: `Bearer ${susan.token}` } });
+  assert.equal(purgedOriginal.status, 404);
+  const purgedRendition = await fetch(renditionUrl, { headers: { authorization: `Bearer ${susan.token}` } });
+  assert.equal(purgedRendition.status, 404);
+});
+
 /* ---- helpers ------------------------------------------------------------- */
 
 /** Parse one stored ZIP entry out of the streamed archive bytes. */
