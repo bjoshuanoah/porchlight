@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, IconButton, Stack, Typography } from '@mui/material';
 import { CloseOutlined, OpenInFullOutlined, PhotoLibraryOutlined, ShareOutlined } from '@mui/icons-material';
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
+import { mediaFailureClass, mediaRetryDelayMs, MEDIA_RETRY_BUDGET } from './media-slot.js';
 import { carouselIndex } from './photo-first.js';
 import { mediaFileName, renditionSrc, rungKindForViewport, stampedAspect } from './media-rung.js';
 import { originOf } from './feed-filter.js';
@@ -81,13 +82,22 @@ function ViewerSlidePhoto({ post, id, actions, origin, originalUrl, active, zoom
   const meta = post?.mediaMeta?.[id] ?? null;
   const direct = Boolean(meta && actions?.mediaTransport && renditionSrc(meta, origin));
   const [resource, setResource] = useState(null);
+  // Slot-owned fetch contract (PORCH-116) reaches the viewer slide: the
+  // open viewer is the slot's visibility entry, the bounded retries are
+  // its re-arm funnel, and the terminal class shows the absence copy —
+  // the only state that ever does.
+  const [phase, setPhase] = useState('pending');
+  const [attempt, setAttempt] = useState(0);
+  const retriesRef = useRef(MEDIA_RETRY_BUDGET);
   useEffect(() => {
     if (direct) return undefined;
     const kind = meta ? rungKindForViewport(meta, window.innerWidth, window.devicePixelRatio || 1) : 'original';
     const identity = mediaBlobKey({ origin, mediaId: id, kind: kind ?? 'original', version: null });
     const cached = readMediaBlob(identity);
-    if (cached) { setResource(cached); return undefined; }
+    if (cached) { setResource(cached); setPhase('loaded'); return undefined; }
     let live = true;
+    setResource(null);
+    setPhase('pending');
     Promise.resolve().then(() => (typeof actions?.getMedia === 'function'
       ? actions.getMedia(id, kind ?? 'original', origin, null)
       : Promise.reject(new Error('Media is not available here yet.')))).then(async (blob) => {
@@ -95,11 +105,34 @@ function ViewerSlidePhoto({ post, id, actions, origin, originalUrl, active, zoom
       const url = URL.createObjectURL(blob);
       const row = putMediaBlob(identity, { url, blob, shape: {} });
       setResource(row);
-    }).catch(() => { /* the slide shows the reserved frame; the overlay download stays reachable */ });
+      setPhase('loaded');
+    }).catch((error) => {
+      if (!live) return;
+      if (mediaFailureClass(error?.status) === 'failed-terminal') {
+        setPhase('failed-terminal');
+        return;
+      }
+      setPhase('failed-retryable');
+      if (retriesRef.current <= 0) return;
+      retriesRef.current -= 1;
+      setTimeout(() => { if (live) setAttempt((n) => n + 1); }, mediaRetryDelayMs(MEDIA_RETRY_BUDGET - retriesRef.current));
+    });
     return () => { live = false; };
-  }, [id, origin, direct]);
+  }, [id, origin, direct, attempt]);
   const zoomed = active && zoom.scale > 1;
   const url = originalUrl ?? (direct ? renditionSrc(meta, origin) : resource?.url);
+  if (phase === 'failed-terminal') {
+    return <Box role="status" aria-label="This moment is no longer available" sx={{
+      ...(fit ? { width: fit.width, height: fit.height } : {}),
+      aspectRatio: stampedAspect(meta) ?? 1.5, maxWidth: '100%', maxHeight: '100%',
+      bgcolor: viewerTokens.subtle, borderRadius: 1,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', px: 2, py: 2,
+    }}>
+      <Typography component="span" sx={{ textAlign: 'center', fontSize: 13, lineHeight: '20px' }}>
+        Your hub did not return the media.
+      </Typography>
+    </Box>;
+  }
   if (!url) {
     return <Box aria-label="Loading photo" sx={{
       ...(fit ? { width: fit.width, height: fit.height } : {}),
@@ -113,8 +146,27 @@ function ViewerSlidePhoto({ post, id, actions, origin, originalUrl, active, zoom
   const box = fit
     ? { width: fit.width, height: fit.height }
     : { maxWidth: '100%', maxHeight: '100%', aspectRatio: stampedAspect(meta) ?? 1.5 };
-  return <Box component="img" src={url} alt={post.caption || 'Shared photo'}
+  return <Box component="img" key={`viewer-${attempt}`} src={url} alt={post.caption || 'Shared photo'}
     draggable={false}
+    onError={() => {
+      // The direct slide's failed rendition re-issues through the keyed
+      // remount, one classification read of the same content-addressed URL
+      // resolving the response class (PORCH-116): 404/410 lands the slide
+      // on the terminal absence, everything else retries bounded and
+      // holds the reserved frame — never an absence copy mid-retry.
+      const probeUrl = renditionSrc(meta, origin);
+      const probe = probeUrl ? fetch(probeUrl).then((answer) => answer.status, () => 0) : Promise.resolve(0);
+      probe.then((status) => {
+        if (!active) return;
+        if (mediaFailureClass(status) === 'failed-terminal') {
+          setPhase('failed-terminal');
+          return;
+        }
+        if (retriesRef.current <= 0) return;
+        retriesRef.current -= 1;
+        setTimeout(() => setAttempt((n) => n + 1), mediaRetryDelayMs(MEDIA_RETRY_BUDGET - retriesRef.current));
+      });
+    }}
     sx={{
       display: 'block', objectFit: 'contain', ...box,
       transform, willChange: zoomed ? 'transform' : undefined,

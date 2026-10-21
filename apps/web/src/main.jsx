@@ -37,6 +37,7 @@ import { openEventStream } from "./realtime.js";
 import { runStaleRecovery } from "./stale-recovery.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
+import { signalMediaRecovery } from "./media-recovery.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
 import { Join, Settings, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, UserSwitcher, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
@@ -147,6 +148,9 @@ function App() {
   // instead of masquerading as an outage while the polls keep failing.
   const [membershipEnded, setMembershipEnded] = useState(false);
   const membershipEndedRef = useRef(false);
+  // The live transport's per-origin connected fact (PORCH-116): media
+  // recovery fires only on an outage-to-connected transition.
+  const liveConnectedRef = useRef(new Map());
   const identityEndedRef = useRef(false);
   const [notice, setNotice] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
@@ -585,6 +589,12 @@ function App() {
           // shows the outage state and serves the cached river; a dead
           // credential keeps its own honest state instead of masquerading
           // as an outage (PORCH-050). Recovering: the catch-up resolve.
+          const was = liveConnectedRef.current.get(eventUrl);
+          liveConnectedRef.current.set(eventUrl, connected);
+          // PORCH-116 restart-window recovery: the transport's reconnect
+          // fact (an outage that came back) re-arms the failed-retryable
+          // media slots — a first connect is not a recovery.
+          if (connected && was === false) signalMediaRecovery();
           if (!connected) {
             if (!membershipEndedRef.current) setOffline(true);
             return;
@@ -829,8 +839,22 @@ function App() {
       const path = kind === "original"
         ? `media/${encodeURIComponent(mediaId)}/original`
         : `media/${encodeURIComponent(mediaId)}/renditions/${encodeURIComponent(kind)}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
-      const response = await fetch(new URL(`/api/social/${path}`, connection.url), { headers: { authorization: `Bearer ${connection.token}` } });
-      if (!response.ok) throw new Error(`This moment could not be loaded (${response.status}).`);
+      // PORCH-116: rendition attempts are bounded — a hung connection the
+      // tunnel never closes resolves to the retryable class instead of
+      // resting in pending forever. Originals (the explicit archive
+      // action) never carry the attempt cap: big downloads ride slow
+      // tunnels.
+      const attemptSignal = kind !== "original" && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+        ? AbortSignal.timeout(30000) : undefined;
+      const response = await fetch(new URL(`/api/social/${path}`, connection.url), { headers: { authorization: `Bearer ${connection.token}` }, signal: attemptSignal });
+      if (!response.ok) {
+        // The slot machine classifies by the response class (PORCH-116):
+        // the status rides the failure — 404/410 terminal, the rest the
+        // retryable-transient class.
+        const failure = new Error(`This moment could not be loaded (${response.status}).`);
+        failure.status = response.status;
+        throw failure;
+      }
       return response.blob();
     },
     // The front door: verification first (plain states), then either the

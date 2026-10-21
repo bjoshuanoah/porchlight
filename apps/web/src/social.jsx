@@ -23,6 +23,8 @@ import {
 } from './media-rung.js';
 import { mentionAnchor, mentionDraft, applyMention, mentionSegments } from './mentions.js';
 import { mediaBlobKey, readMediaBlob, putMediaBlob } from './media-blob.js';
+import { mediaFailureClass, mediaRetryDelayMs, MEDIA_RETRY_BUDGET, MEDIA_ATTEMPT_TIMEOUT_MS } from './media-slot.js';
+import { onMediaRecovery } from './media-recovery.js';
 import { overlayOriginalAction, shareOriginal } from './share-matrix.js';
 // PORCH-070: faces (post header, reply rows) ride the one avatar-face code
 // path — authorized rung fetch through the identity-keyed blob cache,
@@ -105,19 +107,102 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
   const meta = post?.mediaMeta?.[id] ?? null;
   const direct = Boolean(meta && actions?.mediaTransport);
   const [resource, setResource] = useState(null);
-  const [loadError, setLoadError] = useState('');
-  // Boot-window retry (PORCH-044): the first direct render can race the
-  // rendition worker's credential relay (a fresh worker install resets its
-  // token state). The worker parks and retries; this is the last-line
-  // retry if a request still slips through — one remount after the boot
-  // window has settled, the content-addressed URL answering from the
-  // worker's cache on the second try. Bounded: exactly one retry per media
-  // item — a genuinely broken rendition surfaces its error for real.
+  // Slot-owned fetch state (PORCH-116, Brian Oct 21, 2026): the slot carries
+  // pending → loaded | failed-retryable | failed-terminal, never a
+  // page-load cycle. A visibility entry (IntersectionObserver), a bounded
+  // backoff retry, or hub recovery (the live transport's reconnect fact,
+  // media-recovery.js) re-fires the slot's own fetch without any page
+  // reload, navigation, or member action. 404/410 is the terminal class
+  // (the absence copy, no further attempts); every other failure — network
+  // error, timeout, 5xx, interrupted transfer — is retryable: the quiet
+  // placeholder holds, the absence copy never renders.
+  const [phase, setPhase] = useState('pending');
+  // Boot-window note (PORCH-044 carries by composition): a fresh worker's
+  // credential relay race fails the first direct render; the machine
+  // classifies that probe (401/unanswered → retryable) and the bounded
+  // retries absorb it — the boot window needs no special case.
+  // `attempt` re-issues the slot's fetch: the loader effect re-runs and the
+  // direct elements remount keyed by it.
   const [attempt, setAttempt] = useState(0);
-  const retriedRef = useRef(false);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const attemptRef = useRef(attempt);
+  attemptRef.current = attempt;
+  const failedAttemptRef = useRef(-1);
+  const frameRef = useRef(null);
+  const visibleRef = useRef(false);
+  const retriesRef = useRef(MEDIA_RETRY_BUDGET);
+  const retryTimerRef = useRef(null);
+  const guardTimerRef = useRef(null);
   const operation = useOperation();
   const getMedia = actions?.getMedia;
   const origin = post?.origin ?? originOf(post);
+  const clearSlotTimers = useCallback(() => {
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    if (guardTimerRef.current) { clearTimeout(guardTimerRef.current); guardTimerRef.current = null; }
+  }, []);
+  // One failed attempt lands here: terminal ends the machine (absence copy
+  // only); retryable schedules a bounded backoff retry for a visible slot
+  // (2 attempts, small backoff), then rests until the next re-arm. The
+  // classification is idempotent per attempt and superseded classifications
+  // (an error event resolving after a recovery re-arm bumped the attempt)
+  // never touch the slot — a loaded or re-armed slot never regresses.
+  const slotFailed = useCallback((status, at = null) => {
+    const atNow = attemptRef.current;
+    if (at != null && at !== atNow) return;
+    if (failedAttemptRef.current === atNow) return;
+    failedAttemptRef.current = atNow;
+    clearSlotTimers();
+    if (mediaFailureClass(status) === 'failed-terminal') {
+      setPhase('failed-terminal');
+      return;
+    }
+    setPhase('failed-retryable');
+    if (!visibleRef.current || retriesRef.current <= 0) return;
+    retriesRef.current -= 1;
+    const retryNumber = MEDIA_RETRY_BUDGET - retriesRef.current;
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      setAttempt((n) => n + 1);
+    }, mediaRetryDelayMs(retryNumber));
+  }, [clearSlotTimers]);
+  const slotLoaded = useCallback(() => {
+    clearSlotTimers();
+    setPhase('loaded');
+  }, [clearSlotTimers]);
+  // Visibility re-arm (PORCH-116): one funnel for every entry — first
+  // entry, return after scrolling past, virtualized remount, post-failure.
+  // Scrolling out cancels a scheduled attempt; the unmount cleanup cancels
+  // the slot's timers entirely and the remount's first observation re-arms.
+  useEffect(() => {
+    const node = frameRef.current;
+    if (!node || typeof IntersectionObserver !== 'function') {
+      visibleRef.current = true;
+      return clearSlotTimers;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      visibleRef.current = entry.isIntersecting;
+      if (!entry.isIntersecting) {
+        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+        return;
+      }
+      if (phaseRef.current !== 'failed-retryable' || retryTimerRef.current) return;
+      retriesRef.current = MEDIA_RETRY_BUDGET;
+      setAttempt((n) => n + 1);
+    }, { rootMargin: '160px', threshold: 0.01 });
+    observer.observe(node);
+    return () => { clearSlotTimers(); observer.disconnect(); };
+  }, [clearSlotTimers]);
+  // Restart-window recovery (PORCH-116 ac-5): when the hub's live transport
+  // reconnects, every visible failed-retryable slot re-arms through this
+  // same machine — the slot self-heals without member action or refresh.
+  useEffect(() => onMediaRecovery(() => {
+    if (phaseRef.current !== 'failed-retryable' || !visibleRef.current) return;
+    clearSlotTimers();
+    retriesRef.current = MEDIA_RETRY_BUDGET;
+    setAttempt((n) => n + 1);
+  }), [clearSlotTimers]);
   useEffect(() => {
     if (direct) return undefined;
     // Loader fallback: insecure origins (no service worker) fetch the
@@ -142,11 +227,12 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
         posterUrl: posterIdentity ? (readMediaBlob(posterIdentity)?.url ?? null) : null,
         ...(cached.shape ?? {}),
       });
+      setPhase('loaded');
       return undefined;
     }
     let active = true;
     setResource(null);
-    setLoadError('');
+    setPhase('pending');
     const posterPromise = posterIdentity ? getMedia(id, 'poster', origin, posterSha).catch(() => null) : null;
     Promise.resolve().then(() => {
       if (typeof getMedia !== 'function') throw new Error('Media is not available here yet.');
@@ -165,9 +251,10 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
       const row = putMediaBlob(identity, { url, blob, shape });
       if (posterIdentity && posterUrlObj) putMediaBlob(posterIdentity, { url: posterUrlObj, blob: posterBlob });
       setResource({ blob, url: row.url, posterUrl: posterUrlObj ?? null, ...shape });
-    }).catch((error) => { if (active) setLoadError(messageOf(error)); });
+      setPhase('loaded');
+    }).catch((error) => { if (active) slotFailed(error?.status, attempt); });
     return () => { active = false; };
-  }, [id, getMedia, origin, direct]);
+  }, [id, getMedia, origin, direct, attempt, slotFailed]);
   // Timeline media treatment (PORCH-043): natural aspect ratio governs; the
   // 85vh object-fit-contain cap is the single exception for extreme images.
   // Media escapes the text rail — edge-to-edge against the viewport on
@@ -299,15 +386,43 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
   // media top-right overlay carries exactly original download and expand
   // (PORCH-082 build contract; the ··· menus keep Share).
 
-  // Rendition elements remount once for the boot-window retry: key=attempt
-  // re-issues the same content-addressed request after the window settles.
-  const directImg = post.type === 'photo' && direct;
-  const directVideo = post.type === 'video' && direct;
+  // Rendition elements remount once per re-issued attempt: key=attempt
+  // re-runs the slot's own fetch on the content-addressed URL (immutable,
+  // so a retried fetch cannot serve stale bytes and may short-circuit from
+  // the browser cache on hub recovery).
+  // The direct elements' error events carry no status; one classification
+  // read of the same URL resolves the response class. A probe that cannot
+  // answer (network down, hub restarting, boot-window token race) resolves
+  // to the retryable class — never the absence copy.
+  const classifyDirectFailure = (url) => {
+    const at = attemptRef.current;
+    const timeoutSignal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(MEDIA_ATTEMPT_TIMEOUT_MS) : undefined;
+    fetch(url, { signal: timeoutSignal }).then(
+      (probe) => slotFailed(probe.status, at),
+      () => slotFailed(0, at),
+    );
+  };
+  // The direct elements fire their own requests by render; a stall that
+  // never answers (a hung connection nothing resets) resolves through this
+  // attempt guard into the retryable class, so the machine can never rest
+  // in pending forever.
+  useEffect(() => {
+    if (!direct || (post.type !== 'photo' && post.type !== 'video')) return undefined;
+    guardTimerRef.current = setTimeout(() => {
+      guardTimerRef.current = null;
+      if (phaseRef.current === 'loaded' || phaseRef.current === 'failed-terminal') return;
+      slotFailed(0);
+    }, MEDIA_ATTEMPT_TIMEOUT_MS);
+    return () => { if (guardTimerRef.current) { clearTimeout(guardTimerRef.current); guardTimerRef.current = null; } };
+  }, [direct, post.type, attempt, slotFailed]);
   // The playback panel (post-first-tap chrome): a compact paper chip riding
   // the frame's bottom edge — the carousel's arrow treatment — so palette
   // tokens only, no literals (Display Modes token contract). The overlay
   // passes taps through (pointerEvents none; the chip takes its own), so
   // the frame stays the tap surface for pause/resume.
+  const directImg = post.type === 'photo' && direct;
+  const directVideo = post.type === 'video' && direct;
   const playbackPanel = panelOpen && <Box aria-label="Playback panel"
     sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', display: 'flex', alignItems: 'flex-end', p: 1 }}>
     <Stack direction="row" spacing={0.25} sx={{ pointerEvents: 'auto', bgcolor: 'background.paper',
@@ -322,34 +437,28 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
       <IconButton aria-label="Full screen" size="small" onClick={fullscreenVideo}><FullscreenOutlined fontSize="small" /></IconButton>
     </Stack>
   </Box>;
-  useEffect(() => {
-    if ((!directImg && !directVideo) || retriedRef.current) return undefined;
-    if (!loadError) return undefined;
-    retriedRef.current = true;
-    const timer = setTimeout(() => { setLoadError(''); setAttempt((n) => n + 1); }, 1200);
-    return () => clearTimeout(timer);
-  }, [loadError, directImg, directVideo]);
-  return <Box
+  return <Box ref={frameRef}
     onMouseEnter={() => setOverlayShown(true)}
     onMouseLeave={() => setOverlayShown(false)}
     sx={{ position: post.type === 'photo' || post.type === 'video' ? 'relative' : undefined }}>
-    {directImg && <Box key={`img-${attempt}`} component="img"
+    {directImg && phase !== 'failed-terminal' && <Box key={`img-${attempt}`} component="img"
       src={renditionSrc(meta, origin) ?? playableVideoUrl(meta, origin)}
       srcSet={renditionSrcset(meta, origin) || undefined}
       sizes={detail ? detailImageSizes(meta) : timelineImageSizes()}
       alt={post.caption || 'Shared photo'} loading="lazy" decoding="async"
+      onLoad={slotLoaded}
       onClick={(event) => { if (tapTogglesOverlay) setOverlayShown((shown) => !shown); event.stopPropagation(); }}
-      onError={() => setLoadError('Your hub did not return the media.')}
+      onError={() => classifyDirectFailure(renditionSrc(meta, origin) ?? playableVideoUrl(meta, origin))}
       sx={{ ...mediaSx, ...fitSx }} />}
     {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
       onClick={(event) => { if (tapTogglesOverlay) setOverlayShown((shown) => !shown); event.stopPropagation(); }}
       sx={{ ...mediaSx, ...fitSx }} />}
-    {directVideo && <Box key={`vid-${attempt}`} sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
+    {directVideo && phase !== 'failed-terminal' && <Box key={`vid-${attempt}`} sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
       <Box component="video" src={videoPlayable} poster={videoPoster}
         autoPlay muted playsInline preload="metadata" onClick={tapVideo}
         ref={(el) => { videoRef.current = el; if (el) el.muted = true; }}
-        onLoadedMetadata={syncMuted} onPlay={watchPlayback} onPause={watchPlayback}
-        onError={() => setLoadError('Your hub did not return the media.')}
+        onLoadedMetadata={(event) => { syncMuted(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
+        onError={() => classifyDirectFailure(videoPlayable)}
         sx={{ display: 'block', width: '100%', cursor: 'pointer' }} />
       {playbackPanel}
     </Box>}
@@ -357,16 +466,29 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
       <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined}
         autoPlay muted playsInline onClick={tapVideo}
         ref={(el) => { videoRef.current = el; if (el) el.muted = true; }}
-        onLoadedMetadata={syncMuted} onPlay={watchPlayback} onPause={watchPlayback}
-        onError={() => setLoadError('Your hub did not return the media.')}
+        onLoadedMetadata={(event) => { syncMuted(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
+        onError={() => slotFailed(0)}
         sx={{ display: 'block', width: '100%', cursor: 'pointer' }} />
       {playbackPanel}
     </Box>}
     {post.type === 'audio' && <Box component="audio" src={resource?.url} controls preload="none" sx={{ width: '100%' }} />}
-    {!resource && !direct && post.type !== 'audio' && !loadError && (reserved)
+    {post.type === 'audio' && phase === 'failed-terminal'
+      && <Typography component="p" sx={{ fontSize: 13, lineHeight: '20px', color: 'porchlight.muted' }}>Your hub did not return the media.</Typography>}
+    {/* Terminal absence (PORCH-116): the only state that ever shows the
+        absence copy — the media genuinely cannot return (purged or
+        tombstoned). The copy renders inside the reserved frame, so the
+        slot's layout box stays identical across every state. */}
+    {phase === 'failed-terminal' && (post.type === 'photo' || post.type === 'video') && !resource &&
+      <Box role="status" aria-label="This moment is no longer available" sx={{
+        ...mediaSx, ...fitSx, display: 'flex', alignItems: 'center', justifyContent: 'center', px: 2,
+      }}>
+        <Typography component="span" sx={{ textAlign: 'center', fontSize: 13, lineHeight: '20px', color: 'porchlight.muted' }}>
+          Your hub did not return the media.
+        </Typography>
+      </Box>}
+    {!resource && !direct && post.type !== 'audio' && phase !== 'failed-terminal' && (reserved)
       ? <Box role="status" aria-label="Loading media" sx={{ ...mediaSx, ...fitSx }} />
-      : !resource && !direct && post.type !== 'audio' && !loadError && <CircularProgress size={20} aria-label="Loading media" sx={slideRailSx} />}
-    {loadError && <Alert severity="error" sx={slideRailSx}>{loadError}</Alert>}
+      : !resource && !direct && post.type !== 'audio' && phase === 'pending' && !reserved && <CircularProgress size={20} aria-label="Loading media" sx={slideRailSx} />}
     {operation.error && <Alert severity="error" sx={slideRailSx}>{operation.error}</Alert>}
     {(post.type === 'photo' || post.type === 'video') && (directImg || directVideo || resource)
       ? (() => {
