@@ -626,6 +626,36 @@ export const socialModels = {
       updatedAt: { type: "string" },
     },
   },
+  /**
+   * Emoji usage memory (PORCH-120, Brian Oct 21 2026): the member's
+   * Frequently Used record — one row per (identity, emoji), incremented on
+   * every RECORDED reaction add (picker adds and chip joins both count).
+   * Account-level by ruling: keyed by identity DID alone, never by network
+   * and never by device (build call recorded on the task trail: identity-
+   * global scope over per-network). The count is the internal ordering
+   * key ONLY — it is never served, never audited, never pushed, and never
+   * rendered anywhere (no counts ride the usage wire; order is the only
+   * expression of frequency). Un-react never decrements; no member's usage
+   * is ever read by another member (the read route serves the caller's
+   * own list only).
+   */
+  emojiUsage: {
+    type: "object",
+    required: ["_id", "memberDid", "emoji", "count", "lastUsedAt", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      /** The identity (did) whose usage this is — never rendered to others. */
+      memberDid: { type: "string" },
+      /** The reacted emoji, stored verbatim (as-authored).
+       *  Identity-global: NO network id on this row (build ruling). */
+      emoji: { type: "string" },
+      /** Internal ordering tally; internal only, never on any wire. */
+      count: { type: "integer" },
+      /** Last add time; the tie-break beneath count (most recent first). */
+      lastUsedAt: { type: "string" },
+      createdAt: { type: "string" },
+    },
+  },
 };
 
 export default socialModels;

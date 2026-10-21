@@ -54,6 +54,10 @@ export function createSocialRouter(controllers) {
   router.post("/posts/:postId/reactions", content.react);
   router.get("/posts/:postId/reactions", content.listReactions);
   router.delete("/posts/:postId/reactions", content.unreact);
+  // Emoji usage memory (PORCH-120): the caller's own account-level record,
+  // most-first — the Frequently Used tab's read surface. Token-scoped to
+  // exactly one identity; no count fields ride the served payload.
+  router.get("/usage", content.usageList);
   router.post("/posts/:postId/votes", content.vote);
   // Un-vote clear ride (PORCH-113, Oct 20, 2026): clicking a held vote again
   // resolves this signed clear write — the member's own vote row leaves.

@@ -19,7 +19,7 @@ import { reCredentialPlanes, mergeSessionAdoptions } from "./session-credentials
 import { createDeviceRegistration, openDeviceSession, getDeviceKey, getDeviceJwk, signDeviceMessage, signDevicePayload } from "./device.js";
 import { sha256Hex } from "./device-crypto.js";
 import { resolveStoredNames } from "./name-heal.js";
-import { publishPost, publishReply, publishReaction, unpublishReaction, publishCommentReaction, unpublishCommentReaction, publishVote, unpublishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost, editPost as sendPostEdit, deletePost as sendPostDelete, editComment as sendCommentEdit, deleteComment as sendCommentDelete } from "./member-actions.js";
+import { publishPost, publishReply, publishReaction, unpublishReaction, publishCommentReaction, unpublishCommentReaction, publishVote, unpublishVote, uploadOriginals, exportOriginals, bulkPostOriginals, mentionCandidates as fetchMentionCandidates, loadEmojiUsage as fetchEmojiUsage, resolvePreview, setGroupAvatar, setGroupColor, removeGroupPost, editPost as sendPostEdit, deletePost as sendPostDelete, editComment as sendCommentEdit, deleteComment as sendCommentDelete } from "./member-actions.js";
 import {
   snapshotPostRow, applyPostEditedRow, revertPostEditedRow,
   applyCommentEditedRow, applyCommentDeletedRows,
@@ -1393,6 +1393,10 @@ function App() {
     // rides the payload per PORCH-098.
     reactComment: async (post, comment, emoji) => publishCommentReaction(connectionForPost(post), post, comment, emoji),
     unreactComment: async (post, comment, emoji) => unpublishCommentReaction(connectionForPost(post), post, comment, emoji),
+    // Frequently Used (PORCH-120): the picker's account-level usage read —
+    // the member's own identity-scoped list at the post's origin hub,
+    // fetched at every picker open (never a device-local guess).
+    emojiUsage: async (post) => fetchEmojiUsage(connectionForPost(post)),
     // Publish flow (PORCH-114 ac-1): the create response's member view —
     // upCount with the author's self-vote counted, the author's myVote = up
     // — is served truth for the author's own card. The arriving
