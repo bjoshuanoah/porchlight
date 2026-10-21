@@ -9,6 +9,7 @@ import { PostService } from "../../src/services/post.service.js";
 import { NotificationService } from "../../src/services/notification.service.js";
 import { PushService } from "../../src/services/push.service.js";
 import { InteractionService } from "../../src/services/interaction.service.js";
+import { EmojiUsageService } from "../../src/services/usage.service.js";
 import { GroupService } from "../../src/services/group.service.js";
 import { LifecycleService } from "../../src/services/lifecycle.service.js";
 import { RealtimeService, createMemoryEventPlane } from "../../src/services/realtime.service.js";
@@ -46,6 +47,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     comments: store.collection("comments"),
     reactions: store.collection("reactions"),
     votes: store.collection("votes"),
+    emojiUsage: store.collection("emoji_usage"),
     notifications: store.collection("notifications"),
     derivedData: store.collection("derived_data"),
     groups: store.collection("groups"),
@@ -121,6 +123,9 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     push,
     tombstones: collections.tombstones,
   });
+  // PORCH-120: the fixture mirrors the module assembly — the usage service
+  // rides the same reaction add path and the same token-scoped read.
+  const usage = new EmojiUsageService({ emojiUsage: collections.emojiUsage, membership });
   const interactions = new InteractionService({
     posts: collections.posts,
     comments: collections.comments,
@@ -134,6 +139,7 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     groups: collections.groups,
     tombstones: collections.tombstones,
     notificationRows: collections.notifications,
+    emojiUsage: usage,
   });
   // PORCH-093: the lifecycle half mirrors the module assembly — restore +
   // the reaper sweep ride the same tombstone rows the cascade writes. The
@@ -181,5 +187,5 @@ export function fixture({ networkIds = ["net_family", "net_other"], audit = asyn
     return admitted;
   };
 
-  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, media, realtime, realtimePlane: plane, push, lifecycle, audit: { events: collections.auditEvents }, admit, device };
+  return { store, collections, invites, membership, quota, groups, notifications, posts, interactions, usage, media, realtime, realtimePlane: plane, push, lifecycle, audit: { events: collections.auditEvents }, admit, device };
 }

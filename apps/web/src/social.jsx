@@ -51,6 +51,10 @@ import {
 // The emoji picker is code-split: its Unicode catalog loads only when a
 // member first opens a reaction picker (PORCH-036).
 const EmojiPicker = lazy(() => import('./emoji-picker.jsx'));
+// Frequently Used (PORCH-120): the picker's account-level usage session
+// cache — the hub read at every picker open, seeded for offline opens,
+// and the immediate session-order reflection of the member's own adds.
+import { cachedUsage, loadUsage, recordSessionUse } from './emoji-usage.js';
 
 const rows = (value) => Array.isArray(value) ? value : Array.isArray(value?.posts) ? value.posts : [];
 const atCurrentOrigin = (post, data) => post.origin ? post : { ...post, origin: data.server?.url, network: data.network?.name };
@@ -837,6 +841,23 @@ export function PresentReactions({ post, comment = null, data, actions, reaction
   const [anchor, setAnchor] = useState(null);
   const operation = useOperation();
   const ownDid = data.identity ? String(data.identity.id) : '';
+  // Frequently Used (PORCH-120): the picker's account-level usage — the
+  // member's identity-scoped record read from their hub at every picker
+  // open, keyed identity+origin exactly like the reaction writes' routing.
+  // The session cache seeds the open so an offline open still renders the
+  // member's known usage, and a member with no history yet sees only the
+  // tab's honest empty state.
+  const [frequent, setFrequent] = useState(() => cachedUsage({ identity: data.identity ?? null, url: post?.origin ?? '' }));
+  const refreshUsage = () => {
+    setFrequent(cachedUsage({ identity: data.identity ?? null, url: post?.origin ?? '' }));
+    try {
+      const read = invoke(actions, 'emojiUsage', post);
+      loadUsage({ identity: data.identity ?? null, url: post?.origin ?? '' }, Promise.resolve(read).catch(() => null))
+        .then((list) => setFrequent(list));
+    } catch {
+      // No usage read available on this surface — the session cache stands.
+    }
+  };
 
   // In-place reflection (PORCH-046 ac-2): a card's rows seed straight from
   // the feed read's decoration (no per-card fetch), and a read whose rows
@@ -901,6 +922,10 @@ export function PresentReactions({ post, comment = null, data, actions, reaction
           setRows((current) => reflectReaction(current ?? [], {
             emoji, ownDid, isOwn: false, reaction: result.reaction,
           }));
+          // Frequently Used (PORCH-120): the add just landed — picker adds
+          // and chip joins are the same signed route — so the session list
+          // reflects the use immediately (most-first), no hub round-trip.
+          setFrequent(recordSessionUse({ identity: data.identity ?? null, url: post?.origin ?? '' }, emoji));
         }
       },
       // Rollback (ac-2): a failed write never leaves a phantom reaction.
@@ -1009,7 +1034,7 @@ export function PresentReactions({ post, comment = null, data, actions, reaction
       {!actionBar && !actionRow && !comment && chipList}
       <Tooltip title="React"><span><IconButton aria-label={actionBar ? 'React' : 'Add a reaction'}
         aria-haspopup="dialog" disabled={operation.busy || Boolean(data?.offline)}
-        onClick={(event) => setAnchor(event.currentTarget)}
+        onClick={(event) => { setAnchor(event.currentTarget); refreshUsage(); }}
         sx={actionBar ? { width: 36, height: 36, p: 0, '&::after': { content: '""', position: 'absolute', inset: -4 } }
           : actionRow || comment
             ? { width: 32, height: 32, p: 0, color: 'text.secondary', '&::after': { content: '""', position: 'absolute', inset: -4 } }
@@ -1023,7 +1048,7 @@ export function PresentReactions({ post, comment = null, data, actions, reaction
     {actionBar && chipRow && <Stack direction="row" spacing={1} flexWrap="wrap"
       aria-label="Reactions from your family" sx={{ mt: photoFirst.spacing.actionsReactions / 8 }}>{chipList}</Stack>}
     {anchor && <Suspense fallback={<LanternLoader size={20} label="Your reaction picker" />}>
-      <EmojiPicker open anchorEl={anchor} onClose={() => setAnchor(null)} own={own} onToggle={toggle} busy={operation.busy} />
+      <EmojiPicker open anchorEl={anchor} onClose={() => setAnchor(null)} own={own} onToggle={toggle} busy={operation.busy} frequent={frequent} />
     </Suspense>}
     {reveal && revealChip && <Popper open placement="bottom" anchorEl={reveal.anchor}
       modifiers={[{ name: 'offset', options: { offset: [0, 6] } }]} sx={{ zIndex: 1300 }}>

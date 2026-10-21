@@ -20,13 +20,17 @@ export class ContentController {
    *   assemblies built before an assembled realtime service exists.
    * @param {import("../services/link-preview.service.js").LinkPreviewService} [deps.previews]
    *   Link previews (PORCH-052): the compose-time URL resolution surface.
+   * @param {import("../services/usage.service.js").EmojiUsageService} [deps.usage]
+   *   PORCH-120: the account-level emoji usage memory (the Frequently Used
+   *   read surface).
    */
-  constructor({ posts, interactions, notifications, realtime, previews }) {
+  constructor({ posts, interactions, notifications, realtime, previews, usage = null }) {
     this.posts = posts;
     this.interactions = interactions;
     this.notifications = notifications;
     this.previews = previews ?? null;
     this.realtime = realtime ?? null;
+    this.usage = usage;
   }
 
   /**
@@ -95,6 +99,16 @@ export class ContentController {
     return this.#delegate(res, () =>
       this.interactions.unreact({ accessToken: this.bearer(req), payload, signature }),
     );
+  };
+
+  /**
+   * GET /usage — the caller's own account-level frequently-used emoji order
+   * (PORCH-120). Token-derived identity scoping: the read can only ever
+   * touch the caller's list; the served shape is the emoji list alone (no
+   * counts ride the usage wire).
+   */
+  usageList = async (req, res) => {
+    return this.#delegate(res, () => this.usage.list({ accessToken: this.bearer(req) }));
   };
 
   /** POST /posts/:postId/votes — signed changeable private vote (ac-4). */

@@ -81,8 +81,11 @@ export class InteractionService {
    *   PORCH-068: the group collection behind the private-group conversation
    *   gate — every interaction surface on a private-group post resolves only
    *   for members of that group.
+   * @param {import("./usage.service.js").EmojiUsageService} [deps.emojiUsage]
+   *   PORCH-120: the account-level emoji usage memory; the reaction add
+   *   path records into it.
    */
-  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews, push, groups = null, tombstones = null, notificationRows = null }) {
+  constructor({ posts, comments, reactions, votes, membership, notifications, audit, realtime, previews, push, groups = null, tombstones = null, notificationRows = null, emojiUsage = null }) {
     this.posts = posts;
     this.comments = comments;
     this.reactions = reactions;
@@ -99,6 +102,10 @@ export class InteractionService {
     this.realtime = realtime ?? null;
     this.audit = audit ?? (async () => {});
     this.groups = groups;
+    // Emoji usage memory (PORCH-120): the account-level Frequently Used
+    // record; the reaction ADD path below records into it (absent → no
+    // recording, never a reaction failure).
+    this.emojiUsage = emojiUsage;
     this.models = socialModels;
   }
 
@@ -457,6 +464,14 @@ export class InteractionService {
     };
     await this.reactions.insertOne(reaction);
     await this.#recount({ postId: payload.postId });
+    // PORCH-120: the add just landed — picker adds and chip joins (the same
+    // signed route) both count. The duplicate probe above means a re-add
+    // never records twice; un-react never reaches this line, so a remove
+    // never decrements the member's usage. Best-effort: a usage failure
+    // never fails the member's reaction.
+    if (this.emojiUsage) {
+      await this.emojiUsage.record(session.did, emoji).catch(() => {});
+    }
     await this.audit("reaction_create", {
       networkId,
       did: session.did,

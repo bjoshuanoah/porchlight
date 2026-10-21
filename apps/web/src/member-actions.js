@@ -40,6 +40,16 @@ export async function mentionCandidates(connection, q = "") {
   return request(member, `social/mentions/candidates?q=${encodeURIComponent(q)}`);
 }
 
+// Frequently-used emoji usage (PORCH-120): the member's own account-level
+// record on the hub — the picker's Frequently Used tab reads the member's
+// identity-scoped list every open. A plain token-scoped read (no payload to
+// sign): the usage memory is a read-side preference record, and no count
+// fields ride the served payload (emoji order only).
+export async function loadEmojiUsage(connection) {
+  const member = device(connection);
+  return request(member, "social/usage");
+}
+
 export async function publishReaction(connection, post, emoji) {
   return signed(connection, `social/posts/${encodeURIComponent(post._id || post.id)}/reactions`, {
     postId: post._id || post.id, emoji,

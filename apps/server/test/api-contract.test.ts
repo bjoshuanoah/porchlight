@@ -426,6 +426,112 @@ test("notifications: content-free transport, origin-only mention autocomplete (c
   assert.equal(tokenless.status, 401);
 });
 
+// Frequently-used emoji usage (PORCH-120, Brian Oct 21 2026): the picker's
+// account-level tab rides the member's own usage read — recorded by the one
+// signed reaction route (picker adds AND chip joins), identity-scoped (the
+// token's DID is the only list any request can touch), never decremented by
+// an un-react, and served as the emoji order alone with no count fields on
+// the wire and no usage event in any envelope.
+test("emoji usage: account-level frequently-used order serves the member's own record (contract)", async (t) => {
+  const hub = testHub();
+  t.after(hub.close);
+  const port = await hub.port;
+
+  // Owner boot: account → session → network → invite → admit (same
+  // perimeter flow as the notifications contract).
+  const ownerPair = devicePair("dev_owner");
+  const ownerAccount = await call(port, "/api/identity/bootstrap/account", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ firstName: "Susan", lastName: "Bell", device: { deviceId: ownerPair.deviceId, publicKeyJwk: ownerPair.publicKeyJwk } }),
+  });
+  const ownerDid = (ownerAccount.body.account as NotificationAccountBody).did as string;
+  const ownerIdentityToken = await identitySession(port, ownerDid, ownerPair);
+  await call(port, "/api/social/bootstrap/network", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Family", ownerDid }) });
+  const ownerInvite = await call(port, "/api/social/bootstrap/invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+  const ownerCode = ((ownerInvite.body as Json).joinUrl as string).split("/join/")[1] as string;
+  const owner = await admit(port, ownerIdentityToken, ownerPair, ownerCode);
+
+  // Second member June (same origin): seeded identity + registration, then
+  // the console invite — she is the privacy counterpart below.
+  const junePair = devicePair("dev_june");
+  const juneDid = `did:porch:${randomBytes(20).toString("hex")}`;
+  await hub.db.collection("identities").insertOne({
+    _id: `ident_${randomUUID()}`,
+    did: juneDid,
+    actorType: "human",
+    displayName: "June",
+    email: null,
+    handle: null,
+    profile: {},
+    homingStatus: "home",
+    migratedToIssuer: null,
+    createdAt: new Date().toISOString(),
+  });
+  await hub.db.collection("device_registrations").insertOne({
+    _id: `reg_${randomUUID()}`,
+    did: juneDid,
+    deviceId: junePair.deviceId,
+    label: null,
+    publicKeyJwk: junePair.publicKeyJwk,
+    createdBy: "agent",
+    status: "active",
+    revokedAt: null,
+    createdAt: new Date().toISOString(),
+  });
+  const juneIdentityToken = await identitySession(port, juneDid, junePair);
+  const juneInvite = await call(port, "/api/social/console/invites", { method: "POST", headers: bearerAuth(owner.accessToken), body: JSON.stringify({}) });
+  const juneCode = (((juneInvite.body as Json).invite ?? (juneInvite.body as Json)) as Json).token as string;
+  const june = await admit(port, juneIdentityToken, junePair, juneCode);
+
+  const postPayload = { type: "text", body: "emoji usage route contract post" };
+  const created = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
+    method: "POST",
+    headers: bearerAuth(owner.accessToken),
+    body: JSON.stringify({ payload: postPayload, signature: signPayload(ownerPair, postPayload) }),
+  });
+  assert.equal(created.status, 200);
+  const postId = ((await created.json()) as NotificationCreatedBody).post._id as string;
+
+  const react = (pair: NotificationDevicePair, token: string, payload: object, method = "POST") =>
+    fetch(`http://127.0.0.1:${port}/api/social/posts/${postId}/reactions`, {
+      method,
+      headers: bearerAuth(token),
+      body: JSON.stringify({ payload, signature: signPayload(pair, payload) }),
+    });
+
+  // 🍂 added (picker add → recorded), cleared, added again (count 2):
+  const first = { postId, emoji: "🍂" };
+  assert.equal((await react(ownerPair, owner.accessToken, first)).status, 200);
+  assert.equal((await react(ownerPair, owner.accessToken, first, "DELETE")).status, 200);
+  assert.equal((await react(ownerPair, owner.accessToken, first)).status, 200);
+  // 🌞 added once (a chip join rides this same route): count 1.
+  assert.equal((await react(ownerPair, owner.accessToken, { postId, emoji: "🌞" })).status, 200);
+  // June reacts with her own emoji: her account record, never Susan's.
+  assert.equal((await react(junePair, june.accessToken, { postId, emoji: "🚲" })).status, 200);
+
+  // The member's Frequently Used read: most-used first (🍂 2, 🌞 1), and
+  // the un-react above left 🍂 recorded (never decremented).
+  const usage = await call(port, "/api/social/usage", { headers: bearerAuth(owner.accessToken) });
+  assert.equal(usage.status, 200);
+  const usageBody = usage.body as Json;
+  assert.deepEqual(usageBody.emoji, ["🍂", "🌞"]);
+  // The wire law: no counts, ids, or timestamps ride the usage payload.
+  const serial = JSON.stringify(usageBody);
+  assert.equal(serial.includes("count"), false);
+  assert.equal(serial.includes("memberDid"), false);
+  assert.equal(serial.includes("lastUsedAt"), false);
+
+  // June reads her own list only — Susan's usage is invisible to her.
+  const juneUsage = await call(port, "/api/social/usage", { headers: bearerAuth(june.accessToken) });
+  assert.equal(juneUsage.status, 200);
+  assert.deepEqual((juneUsage.body as Json).emoji, ["🚲"]);
+
+  // A tokenless read resolves no perimeter: 401, never a list.
+  const tokenless = await call(port, "/api/social/usage");
+  assert.equal(tokenless.status, 401);
+});
+
 type FeedAccountBody = { account: { did: string } };
 type FeedChallengeBody = { nonce: string };
 type FeedSessionBody = { accessToken: string };

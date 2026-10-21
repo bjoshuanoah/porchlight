@@ -16,6 +16,7 @@ export * from "./services/media.store.js";
 export * from "./services/audit.service.js";
 export { assembleSocialModule } from "./assemble.js";
 export { createSocialRouter } from "./routes.js";
+export { EmojiUsageService } from "./services/usage.service.js";
 export { MemberAdminService } from "./services/member-admin.service.js";
 export { LifecycleService } from "./services/lifecycle.service.js";
 export { OgService } from "./services/og.service.js";

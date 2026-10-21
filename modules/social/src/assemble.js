@@ -6,6 +6,7 @@ import { QuotaService } from "./services/quota.service.js";
 import { AuditService } from "./services/audit.service.js";
 import { PostService } from "./services/post.service.js";
 import { InteractionService } from "./services/interaction.service.js";
+import { EmojiUsageService } from "./services/usage.service.js";
 import { NotificationService } from "./services/notification.service.js";
 import { PushService } from "./services/push.service.js";
 import { RealtimeService, createMemoryEventPlane } from "./services/realtime.service.js";
@@ -152,6 +153,10 @@ export function assembleSocialModule(store, options = {}) {
   const tombstones = collection("tombstones");
   const reactions = collection("reactions");
   const votes = collection("votes");
+  // Emoji usage memory (PORCH-120): one row per (memberDid, emoji) — the
+  // account-level Frequently Used record, incremented by the reaction add
+  // path and read through the member's own usage route only.
+  const emojiUsage = collection("emoji_usage");
   const notifications = collection("notifications");
   const derivedData = collection("derived_data");
   const groups = collection("groups");
@@ -373,6 +378,10 @@ export function assembleSocialModule(store, options = {}) {
     feed: feedService,
     tombstones,
   });
+  // Emoji usage memory (PORCH-120): constructed before the interaction
+  // service — the reaction add path records into it, the usage read route
+  // serves from it.
+  const emojiUsageService = new EmojiUsageService({ emojiUsage, membership: membershipService });
   const interactionService = new InteractionService({
     posts,
     comments,
@@ -387,6 +396,7 @@ export function assembleSocialModule(store, options = {}) {
     groups,
     tombstones,
     notificationRows: notifications,
+    emojiUsage: emojiUsageService,
   });
   // Content lifecycle (PORCH-093): the restore + day-30 reaper half. The
   // write services own the delete-side tombstone writes; this service owns
@@ -488,7 +498,7 @@ export function assembleSocialModule(store, options = {}) {
 
   const controllers = {
     bootstrap: new SocialBootstrapController(networkService, inviteService, membershipService, bootstrapLedger, options.mintOwnerDeviceLink ?? null),
-    content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService, realtime: realtimeService, previews: linkPreviewService }),
+    content: new ContentController({ posts: postService, interactions: interactionService, notifications: notificationService, realtime: realtimeService, previews: linkPreviewService, usage: emojiUsageService }),
     feed: new FeedController({ feed: feedService }),
     membership: new MembershipController(membershipService, networkService, options.log ?? null),
     console: new ConsoleController({
