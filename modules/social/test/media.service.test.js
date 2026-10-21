@@ -1056,7 +1056,6 @@ test("PORCH-116: the response classes — terminal absence for purged media; an 
   const truth = await fetch(renditionUrl, { headers: { authorization: `Bearer ${susan.token}` } });
   assert.equal(truth.status, 200);
   const truthBytes = Buffer.from(await truth.arrayBuffer());
-  const renditionSha = truth.headers.get("x-porchlight-sha256");
 
   // The interrupted transfer (the tunnel-blip class): the member's client
   // aborts mid-transfer, then re-fetches — the immutable content address
