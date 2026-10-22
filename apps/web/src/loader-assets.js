@@ -1,5 +1,5 @@
 // Loading assets and boot copy/timing contract. The initial dusk boot uses
-// the full-resolution static app icon (/icon-512.png); only LanternLoader,
+// the display-sized static app icon (/icon-192.png); only LanternLoader,
 // the small in-app waiting mark, uses the animated webp and its reduced-
 // motion still frame. The PORCH-095 readiness/dissolve remains unchanged.
 

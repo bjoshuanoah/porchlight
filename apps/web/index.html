@@ -8,6 +8,9 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png" />
     <link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <!-- The boot mark is needed before the SPA bundle executes; preload the
+         display-sized still at high priority rather than the 512px app icon. -->
+    <link rel="preload" as="image" href="/icon-192.png" fetchpriority="high" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Porchlight · A place for family</title>
@@ -31,7 +34,7 @@
     </script>
   </head>
   <body>
-    <!-- The static first paint is the dusk boot: a real, still Porchlight
+    <!-- The static first paint is the dusk boot: the display-sized still
          icon above separate ambient lighting and orbiting fireflies.
          LanternBoot adopts this canvas until the app is ready. -->
     <style>
@@ -64,24 +67,27 @@
          The motes stay z-under the mark (it rides the top of the scene),
          so passing behind the lantern reads as the orbit wrapping it. */
       .porch-dusk-particle {
-        position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; border-radius: 50%; opacity: .8;
-        background: radial-gradient(circle at 40% 40%, #FFE2B0 0%, #FFBE57 55%, rgba(255,190,87,0) 100%);
+        position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; border-radius: 50%; opacity: .9;
+        background: radial-gradient(circle at 40% 40%, #FFF6D8 0%, #FFE2B0 40%, #FFBE57 75%, rgba(255,190,87,0) 100%);
+        box-shadow: 0 0 5px 1px rgba(255,226,176,.65), 0 0 12px 3px rgba(255,190,87,.23);
         animation: porch-dusk-orbit var(--d, 21s) ease-in-out infinite;
       }
       .porch-dusk-particle:nth-child(even) { animation-direction: reverse; }
       .porch-dusk-particle::after {
-        content: ""; position: absolute; top: 3px; left: 50%; width: 2px; height: 13px;
-        transform: translateX(-50%); border-radius: 1px;
-        background: linear-gradient(to bottom, rgba(255,190,87,.55), rgba(255,190,87,0));
+        content: ""; position: absolute; left: -12px; top: -1px; width: 15px; height: 5px;
+        border-bottom: 1px solid rgba(255,226,176,.55); border-radius: 50%;
+        background: linear-gradient(to right, rgba(255,190,87,0), rgba(255,190,87,.18) 70%, rgba(255,226,176,.38));
+        transform: rotate(var(--tail-flip, 0deg));
       }
+      .porch-dusk-particle:nth-child(even)::after { --tail-flip: 180deg; }
       /* The elliptical orbit: four eased waypoints around the anchor with
          a gentle rotate wiggle — curved everywhere, never a straight run. */
       @keyframes porch-dusk-orbit {
-        0%   { transform: translate(var(--r, 88px), 0) rotate(0deg); }
-        25%  { transform: translate(calc(var(--r, 88px) * .12), calc(var(--ry, 40px) * -1)) rotate(9deg); }
-        50%  { transform: translate(calc(var(--r, 88px) * -.92), calc(var(--ry, 40px) * -.12)) rotate(0deg); }
-        75%  { transform: translate(calc(var(--r, 88px) * -.06), var(--ry, 40px)) rotate(-9deg); }
-        100% { transform: translate(var(--r, 88px), 0) rotate(0deg); }
+        0%   { transform: translate(var(--r, 88px), 0) rotate(-90deg); }
+        25%  { transform: translate(calc(var(--r, 88px) * .12), calc(var(--ry, 40px) * -1)) rotate(-180deg); }
+        50%  { transform: translate(calc(var(--r, 88px) * -.92), calc(var(--ry, 40px) * -.12)) rotate(-270deg); }
+        75%  { transform: translate(calc(var(--r, 88px) * -.06), var(--ry, 40px)) rotate(-360deg); }
+        100% { transform: translate(var(--r, 88px), 0) rotate(-450deg); }
       }
       .porch-dusk-particle:nth-child(1) { --r: 88px;  --ry: 38px; --d: 21s; animation-delay: -4s; }
       .porch-dusk-particle:nth-child(2) { --r: 112px; --ry: 52px; --d: 27s; animation-delay: -13s; }
@@ -137,7 +143,7 @@
           <span class="porch-dusk-particle"></span>
           <span class="porch-dusk-particle"></span>
         </div>
-        <img class="porch-dusk-mark" src="/icon-512.png" width="512" height="512" alt="" aria-hidden="true" focusable="false" style="height:184px;width:184px" />
+        <img class="porch-dusk-mark" src="/icon-192.png" fetchpriority="high" width="192" height="192" alt="" aria-hidden="true" focusable="false" style="height:184px;width:184px" />
       </div>
       <div class="porch95-wordmark" aria-hidden="true">porchlight</div>
       <div class="porch95-statusbox" aria-hidden="true"></div>

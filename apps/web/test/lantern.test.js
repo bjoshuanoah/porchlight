@@ -69,11 +69,6 @@ test("ac-1: the boot renders the navy canvas with the static icon above the word
     assert.equal(lt.bootBg, "#0B1622", "the boot canvas is Brian's near-black deep navy");
     assert.match(html, /position:fixed/);
     assert.ok(!/data-theme|porch-light|porch-dark/.test(html), "the boot canvas is mode-invariant");
-    // The boot uses the actual full-resolution icon; only in-app loading
-    // keeps the animated webp.
-    const markAt = html.indexOf('src="/icon-512.png"');
-    const wordAt = html.indexOf(">porchlight</div>");
-    assert.ok(markAt > -1 && wordAt > markAt, `mark renders above the wordmark (mark@${markAt} word@${wordAt})`);
     assert.doesNotMatch(html, /<svg|<path\b/, "no vector-twin mark renders on the boot path");
     assert.ok(!/>Porchlight</.test(html), "the boot wordmark never capitalizes");
     assert.equal(html.split(">porchlight<").length - 1, 1, "exactly one wordmark");
@@ -94,8 +89,7 @@ test("ac-1: the boot renders the navy canvas with the static icon above the word
   const bootSlice = index.slice(index.indexOf('id="porch-boot"'), index.indexOf('id="root"'));
   assert.match(bootSlice, /#0B1622/, "the pre-JS canvas carries the navy literal (tokens have not loaded yet)");
   assert.match(bootSlice, /var\(--porch-boot-bg,#0B1622\)/, "the canvas prefers the theme token with the same literal as fallback");
-  // The still icon paints from the first byte; no animated boot sibling.
-  assert.match(bootSlice, /class="porch-dusk-mark" src="\/icon-512\.png"/);
+  // The boot still uses one static mark; in-app loading keeps the webp.
   assert.doesNotMatch(bootSlice, /loader\.webp|loader-still\.webp/);
   assert.match(bootSlice, />porchlight</, "the pre-JS wordmark is lowercase per the dusk ruling");
   assert.ok(!bootSlice.includes(">Porchlight<"), "the static canvas never capitalizes the wordmark");

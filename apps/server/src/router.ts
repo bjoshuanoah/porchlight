@@ -482,7 +482,17 @@ export function createServer(options: ServerOptions) {
   // The build copies the private web workspace's output next to dist/router.js.
   // No web package is needed at runtime: published server/dist contains it.
   const webRoot = options.webRoot ?? fileURLToPath(new URL("./web/", import.meta.url));
-  const staticFiles = express.static(webRoot, { index: false });
+  // The first-paint boot icon is tiny and stable across routine visits.
+  // Reuse it without a round trip, but let replaced installs refresh within
+  // an hour (the public filename is not content-addressed).
+  const staticFiles = express.static(webRoot, {
+    index: false,
+    setHeaders(res, path) {
+      if (path === join(webRoot, "icon-192.png")) {
+        res.setHeader("Cache-Control", "public, max-age=3600");
+      }
+    },
+  });
   const reservedPaths = /^\/(?:api|\.well-known|bootstrap)(?:\/|$)/;
   app.use((req, res, next) => {
     if (reservedPaths.test(req.path)) return next();

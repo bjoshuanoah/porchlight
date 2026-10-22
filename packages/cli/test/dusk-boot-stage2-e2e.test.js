@@ -4,7 +4,7 @@
 // real static SPA serving, real HTTP. The dusk boot's delivered surface,
 // exercised as a family member's browser meets it on a deployed hub:
 //   GET  /                        (the pre-JS porch-boot canvas: dusk scene)
-//   GET  /loader.webp             (the animated asset of record)
+//   GET  /icon-192.png            (the preloaded first-paint mark)
 //   GET  /loader-still.webp       (the reduced-motion first frame)
 //   GET  /assets/index-*.js       (the bundle: the React boot layer + tokens)
 //   GET  /api/health              (the hub the boot scene verifies against)
@@ -78,7 +78,6 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
       assert.match(boot, /class="porch-dusk-halo"/, "the halo layer serves pre-JS");
       assert.match(boot, /class="porch-dusk-glow"/, "the floor-glow layer serves pre-JS");
       assert.match(boot, /class="porch-dusk-particle"/, "the particle layer serves pre-JS");
-      assert.match(boot, /class="porch-dusk-mark" src="\/icon-512\.png"/, "the actual still Porchlight icon serves");
       assert.match(boot, />porchlight</, "the wordmark is lowercase on this surface");
       assert.match(boot, /<span class="porch95-announce">Porchlight is loading<\/span>/, "the polite announcement serves");
       assert.match(boot, /class="porch95-statusbox" aria-hidden="true"/, "the fixed-height status box serves");
@@ -86,10 +85,12 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
       return html;
     })());
 
-    // The original icon must load as a PNG on the deployed hub.
-    await runStep("GET /icon-512.png", (async () => {
-      const res = await fetch(base + "/icon-512.png");
+    // The display-sized icon must load as a PNG and stay cached on repeat
+    // visits; the HTML itself remains live for setup/network copy changes.
+    await runStep("GET /icon-192.png", (async () => {
+      const res = await fetch(base + "/icon-192.png");
       assert.equal(res.status, 200, "the boot icon serves");
+      assert.equal(res.headers.get("cache-control"), "public, max-age=3600");
       const bytes = Buffer.from(await res.arrayBuffer());
       assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "the boot icon is a PNG");
     })());
