@@ -294,7 +294,11 @@ test("ac-11: the earned failure holds — cycling stops, clear copy, a retry tha
   // Retry restarts initialization: the same chain, no page reload.
   assert.match(main, /const retryBoot = useCallback\(\(\) => runBootChain\(\), \[runBootChain\]\);/);
   assert.match(main, /<LanternBoot failure=\{bootFailed\} onRetry=\{retryBoot\} \/>/);
-  assert.doesNotMatch(main.slice(main.indexOf("const runBootChain")), /location\.reload|window\.location/, "the retry never reloads the page — it re-runs the boot chain");
+  // The retry never reloads the page — it re-runs the boot chain in place.
+  // PORCH-125 amendment: main.jsx carries exactly two location.reload()
+  // sites (the update flow's banner tap and cold-open marker reload);
+  // the boot chain's retry adds none.
+  assert.equal((main.match(/location\.reload\(\)/g) ?? []).length, 2, "the retry never reloads the page — it re-runs the boot chain");
 });
 
 test("ac-12: bundle discipline — the scene composes from CSS only, and the stage-2 record stands", async () => {

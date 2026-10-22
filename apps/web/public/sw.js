@@ -17,18 +17,38 @@ const CACHE_NAME = "porchlight-renditions-v1";
 // enough that a genuinely revoked member does not hang past it.
 const PARK_BUDGET_MS = 8000;
 
+/* Update detection and refresh flow (PORCH-125, Brian, Oct 22, 2026):
+ * the version check. The build stamps this worker's shell version; the
+ * stamp names the shell cache, so a newer hub build ships a newer stamp —
+ * the browser installs the updated worker (updatefound / waiting signal
+ * for the app's detectors), the shell cache bumps to the new name, and old
+ * shell caches are cleaned on activate. The stamped worker WAITS by
+ * default: nothing activates a waiting worker by a timer or an automatic
+ * path, ever (the no-hard-reload-mid-session principle; the install-time
+ * skipWaiting retired). Activation is member-owned through exactly two
+ * apply points: the cold open (the boot path applies the pending update
+ * before first paint, no banner there) and the update banner's tap (the
+ * in-session apply point). The porchlight-apply-update message below is
+ * the only skipWaiting caller. The rendition store and the staging store
+ * are version-agnostic and carry across updates untouched. */
+const SHELL_VERSION = "__PORCHLIGHT_SHELL_VERSION__";
+const SHELL_CACHE = `porchlight-shell-${/^[0-9]+$/.test(SHELL_VERSION) ? SHELL_VERSION : "dev"}`;
+
 self.addEventListener("install", () => {
-  self.skipWaiting();
+  // Deliberately empty: a newer worker WAITS for an explicit apply (the
+  // cold-open boot path or the update banner's tap) — never an automatic
+  // activation under an active member.
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
+      // The share-target staging store (PORCH-105) persists across worker
+      // updates like the rendition store itself: a staged share waits
+      // through this sweep and is retrieved after the launch lands.
+      const keep = new Set([CACHE_NAME, STAGE_CACHE, SHELL_CACHE]);
       for (const name of await caches.keys()) {
-        // The share-target staging store (PORCH-105) persists across worker
-        // updates like the rendition store itself: a staged share waits
-        // through this sweep and is retrieved after the launch lands.
-        if (name !== CACHE_NAME && name !== STAGE_CACHE) await caches.delete(name);
+        if (!keep.has(name)) await caches.delete(name);
       }
       await self.clients.claim();
     })(),
@@ -146,6 +166,13 @@ self.addEventListener("message", (event) => {
       for (const key of await cache.keys()) await cache.delete(key);
       event.source?.postMessage({ type: "share-staged-cleared" });
     })());
+  } else if (event.data?.type === "porchlight-apply-update") {
+    // PORCH-125: the ONLY activation entry — the cold open's boot path or
+    // the update banner's tap posts this; no timer and no automatic path
+    // ever reaches skipWaiting (the waiting worker is never activated
+    // underneath an active member). The activate sweep above claims the
+    // clients and cleans the old shell caches.
+    event.waitUntil(self.skipWaiting());
   }
 });
 
@@ -225,38 +252,86 @@ self.addEventListener("fetch", (event) => {
   // worker, so the rendition filter runs BEFORE any /api boundary check;
   // an early /api return ships every rendition request out
   // unauthenticated and 401s every direct <img>/<video> rendition.
-  if (!url.pathname.includes("/renditions/")) return;
-  event.respondWith(
-    (async () => {
-      const cache = await caches.open(CACHE_NAME);
+  if (url.pathname.includes("/renditions/")) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE_NAME);
+        const cached = await cache.match(request, { ignoreVary: true });
+        if (cached) return cached;
+        const token = await tokenFor(url.origin);
+        let response = await fetch(authedRequest(request, token));
+        if (response.status === 401 && token) {
+          // A PRESENT-but-rejected token is boot/credential churn, not a
+          // member failure: the set relayed at boot can predate the silent
+          // renewal the read path is already waiting for — and an
+          // <img>/<video> element never retries. Park the request and retry
+          // with each renewed-token publication until one answers or the
+          // park budget expires (a genuinely revoked member surfaces its
+          // 401 at the bound; a member with no token at all surfaces it
+          // immediately, unparked).
+          const deadline = Date.now() + PARK_BUDGET_MS;
+          while (response.status === 401 && Date.now() < deadline) {
+            await relayPublication(Math.max(0, deadline - Date.now()));
+            if (Date.now() >= deadline) break;
+            response = await fetch(authedRequest(request, tokensByOrigin[url.origin]));
+          }
+        }
+        // Only fully-authenticated content-addressed responses enter the
+        // store; originals cannot land here (the pathname check above).
+        if (response.ok && url.searchParams.has("v") && token) {
+          await cache.put(request, response.clone());
+        }
+        return response;
+      })(),
+    );
+    return;
+  }
+  // App shell serving (PORCH-125): versioned caches and update application
+  // ride this same one listener — the /api/** boundary stands here verbatim
+  // AFTER the rendition interception above: the rendition serve paths are
+  // the standing PORCH-052 repair carve-out (their Authorization must ride
+  // this worker), and every other /api/** request is never intercepted,
+  // never fulfilled from a cache. No non-2xx response is ever cached on
+  // any branch.
+  if (url.pathname.startsWith("/api/")) return;
+  // Navigation requests: network-first — a cold open online always serves
+  // the fresh document (the stale shell is never silently presented after
+  // an update); offline, the cached shell carries the open (the
+  // offline-behavior pattern carries). Only ok responses enter the shell
+  // cache, keyed by the requested path.
+  if (request.mode === "navigate") {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request);
+        if (response.ok) {
+          const cache = await caches.open(SHELL_CACHE);
+          await cache.put(request, response.clone());
+        }
+        return response;
+      } catch {
+        const cache = await caches.open(SHELL_CACHE);
+        const shell = (await cache.match(request, { ignoreVary: true }))
+          ?? (await cache.match(new Request("/?"), { ignoreVary: true }));
+        if (shell) return shell;
+        return Response.error();
+      }
+    })());
+    return;
+  }
+  // Hashed static assets (the build's /assets/ output): immutable by
+  // construction, so cache-first answers from the versioned shell cache
+  // without a network round trip; the stamp change bumps the cache name
+  // and the activate sweep collects the old shell cache.
+  if (url.pathname.startsWith("/assets/")) {
+    event.respondWith((async () => {
+      const cache = await caches.open(SHELL_CACHE);
       const cached = await cache.match(request, { ignoreVary: true });
       if (cached) return cached;
-      const token = await tokenFor(url.origin);
-      let response = await fetch(authedRequest(request, token));
-      if (response.status === 401 && token) {
-        // A PRESENT-but-rejected token is boot/credential churn, not a
-        // member failure: the set relayed at boot can predate the silent
-        // renewal the read path is already waiting for — and an
-        // <img>/<video> element never retries. Park the request and retry
-        // with each renewed-token publication until one answers or the
-        // park budget expires (a genuinely revoked member surfaces its
-        // 401 at the bound; a member with no token at all surfaces it
-        // immediately, unparked).
-        const deadline = Date.now() + PARK_BUDGET_MS;
-        while (response.status === 401 && Date.now() < deadline) {
-          await relayPublication(Math.max(0, deadline - Date.now()));
-          if (Date.now() >= deadline) break;
-          response = await fetch(authedRequest(request, tokensByOrigin[url.origin]));
-        }
-      }
-      // Only fully-authenticated content-addressed responses enter the
-      // store; originals cannot land here (the pathname check above).
-      if (response.ok && url.searchParams.has("v") && token) {
-        await cache.put(request, response.clone());
-      }
+      const response = await fetch(request);
+      if (response.ok) await cache.put(request, response.clone());
       return response;
-    })(),
-  );
+    })());
+  }
 });
 /* Device notifications (PORCH-060): push delivery and tap-through ride this
  * SAME single worker — additive listeners only; none of the handlers below

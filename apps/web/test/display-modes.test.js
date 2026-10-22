@@ -88,8 +88,13 @@ test("PORCH-042 ac-2: main.jsx resolves mode pre-theme, tracks the device prefer
   assert.match(source, /<ThemeProvider theme=\{muiTheme\}>/); // one provider, per-mode theme
   assert.match(source, /chooseMode/);
   assert.match(source, /tokenStyles\(\)/); // both mode token blocks, injected pre-render
-  // No reload on switch: the SPA never re-fetches the document for a mode change.
-  assert.doesNotMatch(source, /location\.reload|window\.location =/);
+  // No reload on switch: the SPA never re-fetches the document for a mode
+  // change. PORCH-125 amendment: main.jsx's only location.reload() sites
+  // are the update flow's two (the banner tap's apply and the cold open's
+  // boot-bound marker reload); the mode wiring carries none.
+  const modeSlice = source.slice(source.indexOf("const [modePref, setModePref]"), source.indexOf("const [connections, setConnections]"));
+  assert.doesNotMatch(modeSlice, /location\.reload|window\.location =/);
+  assert.equal((source.match(/location\.reload\(\)/g) ?? []).length, 2, "reload sites are the update flow's tap apply and cold-open marker reload only");
 });
 
 // Regression (user-reported, Oct 10 2026): clicking System did not stick —
