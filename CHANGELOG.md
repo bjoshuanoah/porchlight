@@ -5,9 +5,16 @@ under its `## v` heading is the line of record the release workflow copies
 into that release's notes (the npm-publish workflow fails loudly if the
 heading is missing).
 
-## Unreleased
+## v0.5.1 — 2026-10-22
 
-- **The porch light arrives with the page.** The dusk boot preloads a display-sized still lantern and reuses it across repeat visits without waiting on the app bundle or revalidating the image on every open. The lantern fades in over 300ms when its image loads instead of appearing abruptly; six slow orbiting fireflies glow softly without tails against the quiet navy canvas. Reduced-motion visitors see the still mark immediately after loading.
+- **Your porch light is named in your notifications.** Replies, mentions, reactions, and new group moments now arrive on your lock screen with your porch's own name as the main line — never an app name — followed by who sent what: reactions carry the emoji exactly as chosen, replies and mentions carry the sentence that mentions you, and photos arrive without a stray half-written file. This is the first cut the hub composes a notification for, so everything a notification says was written by your own porch.
+- **Videos play at their real shape.** Square videos no longer get cropped into a wide frame — every video plays at its true shape, and only very tall phone videos gently fill a tidy portrait box. Open one full-screen and it shows its natural shape from edge to edge.
+- **Your mute choice stays yours.** Unmute a video anywhere — in the feed or full-screen — and it stays unmuted: paging away and back, scrolling the timeline, or switching screens never brings the sound down without you saying so.
+- **Reactions remember your favorites.** A Frequently Used tab now sits in the emoji picker, keeping the emoji you use most, in order of use, shared across all your devices — and the emoji search finds them all again (💯 included).
+- **Saved moments repair themselves.** If a photo fails to load — a slow connection or a momentary blip — the hub quietly tries again moments later and fills the picture in when it arrives. No reload, no error card, no half-finished pictures.
+- **No phantom errors.** A "family server is unreachable" message only appears when every attempt has truly been spent — momentary slowness while opening the app just shows the loading screen, and a warning that flashes and vanishes on its own is gone. When the message is earned, it reads the same every time it appears.
+- **Your post arrives already lifted.** The moment you publish, your own hand-raise is on it from the first view — and taking a vote back clears it everywhere right away, every click answered by the porch.
+- **The porch light arrives with the page.** The dusk boot now shows the porch-light-at-dusk scene: preloads a display-sized still lantern and reuses it across repeat visits without waiting on the app bundle or revalidating the image on every open. The lantern fades in over 300ms when its image loads instead of appearing abruptly; six slow orbiting fireflies glow softly without tails against the quiet navy canvas. Reduced-motion visitors see the still mark immediately after loading.
 
 ## v0.5.0 — 2026-10-20
 
