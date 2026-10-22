@@ -16,7 +16,10 @@ import {
 } from '@mui/icons-material';
 import { MediaOverlay, PhotoViewer } from './photo-viewer.jsx';
 import { cssVars } from './theme.js';
-import { adaptiveTrackHeight, carouselIndex, photoFirst } from './photo-first.js';
+import { adaptiveTrackHeight, carouselIndex, photoFirst, videoInlineMasked } from './photo-first.js';
+// PORCH-121: the member-owned mute state — the held choice any remounted
+// video element initializes from, and the session-scope hold mirror.
+import { heldSoundOn, holdMute, initialMuted } from './video-mute.js';
 import {
   renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
   playableVideoUrl, posterUrl, rungKindForViewport, stampedAspect, mediaFileName,
@@ -297,9 +300,27 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
   // without any stamp state no box: media renders intrinsic sizing on load
   // (decode-before-paint keeps that path corruption-free, PORCH-043 ac-7).
   const reserved = resource?.width && resource?.height ? resource.width / resource.height : stampedAspect(meta);
+  // PORCH-121 extent rule (Brian, Oct 21, 2026; corrected Oct 22, 2026):
+  // only a video more portrait than 3:4 gives the box the ruled 3:4 shape —
+  // a fixed reserved frame filled by the covered video, center-cropped.
+  // Every video at or above the extent (landscape through 3:4 inclusive,
+  // square at true 1:1) keeps its stamped true ratio at full media width;
+  // no inline video is masked or letterboxed to 16:9 anywhere — the forced
+  // 16:9 frame is retired — and the mask never reaches the viewer's
+  // geometry (element-fullscreen plays natural aspect on every ratio).
+  const portraitMasked = post.type === 'video' && videoInlineMasked(reserved);
   const fitSx = media && reserved
-    ? { aspectRatio: `${reserved}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' }
+    ? (portraitMasked
+      ? { aspectRatio: '3 / 4', overflow: 'hidden', ...(detail ? { maxWidth: '540px' } : {}) }
+      : { aspectRatio: `${reserved}`, maxHeight: detail ? 720 : photoFirst.extremeCap, objectFit: 'contain' })
     : {};
+  // The masked element fills its fixed 3:4 frame: the covered video is
+  // center-cropped in place, and the poster takes the same treatment, so
+  // the frame is the identical geometric box from first paint — mute
+  // toggles and playback states never reflow it (PORCH-121 ac-5).
+  const maskedVideoSx = portraitMasked
+    ? { display: 'block', width: '100%', height: '100%', objectFit: 'cover', cursor: 'pointer' }
+    : { display: 'block', width: '100%', cursor: 'pointer' };
   // Slide mode (PORCH-045): the media spans the full slide width above, so
   // the textual lines below it ride the 16px mobile rail and the card
   // padding on desktop, exactly as media-owning posts line them up.
@@ -323,7 +344,12 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
   // the frame tap pauses/resumes and the panel owns mute, restart, and
   // fullscreen. Third-party link-preview embeds keep their own tap-to-play
   // rule under the Link Previews pair; they render nowhere here.
-  const [soundOn, setSoundOn] = useState(false);
+  // PORCH-121: from the member's first unmute tap onward mute state is
+  // member-owned — element writes are the only mute writes, `soundOn`
+  // mirrors the element (never ahead of it), and the held choice (the
+  // session-scope store in video-mute.js) re-initializes any remounted
+  // element instead of letting a lifecycle surface re-mute over it.
+  const [soundOn, setSoundOn] = useState(() => heldSoundOn(id) ?? false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [playing, setPlaying] = useState(true);
   const videoRef = useRef(null);
@@ -346,19 +372,34 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
     if (!panelOpen) {
       setPanelOpen(true);
       setOverlayShown(true);
-      event.currentTarget.muted = false;
-      setSoundOn(true);
+      // ac-1/ac-2 (PORCH-121): the element's muted property takes the
+      // write first — the tap unmutes audibly in place — and the state
+      // mirror follows the element, so the control and the element are
+      // one state on the same frame.
+      const element = event.currentTarget;
+      element.muted = false;
+      setSoundOn(!element.muted);
+      holdMute(id, !element.muted);
       return;
     }
     togglePlayback(event.currentTarget);
   };
-  // The muted property is re-asserted on every metadata load: React's muted
-  // attribute handling does not always survive element remount (the
-  // boot-window retry remounts keyed by attempt), and autoplay requires it
-  // until the member's first tap.
-  const syncMuted = (event) => {
-    if (event.currentTarget) event.currentTarget.muted = !soundOn;
+  // Metadata load captures the played geometry once (legacy payloads
+  // without stamps); no mute write rides it — the mount ref init covers
+  // every remount from the held choice, and a mute write here would be the
+  // shipped override class (PORCH-081 note: a mute-state write from a
+  // re-apply effect is an override of the member's choice, not a merge).
+  const syncGeometry = (event) => {
     if (!meta.width && event.target) setResource({ width: event.target.videoWidth, height: event.target.videoHeight });
+  };
+  // The element mirrors back into the held state through volumechange: the
+  // native fullscreen player's own mute control (the viewer's ruled mute
+  // surface, no added viewer chrome) and every other element state change
+  // land in the one state a frame later or at once — never in conflict.
+  const mirrorMute = (event) => {
+    const value = !event.currentTarget.muted;
+    setSoundOn(value);
+    holdMute(id, value);
   };
   // Playback panel handlers (Brian, 10/10: pause, restart, un/mute, and
   // full screen built in). Mute rides the element property like the first
@@ -368,8 +409,9 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
   const toggleMute = () => {
     const element = videoRef.current;
     if (!element) return;
-    element.muted = soundOn;
-    setSoundOn(!soundOn);
+    element.muted = !element.muted;
+    setSoundOn(!element.muted);
+    holdMute(id, !element.muted);
   };
   const restartVideo = () => {
     const element = videoRef.current;
@@ -460,19 +502,29 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
     {directVideo && phase !== 'failed-terminal' && <Box key={`vid-${attempt}`} sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
       <Box component="video" src={videoPlayable} poster={videoPoster}
         autoPlay muted playsInline preload="metadata" onClick={tapVideo}
-        ref={(el) => { videoRef.current = el; if (el) el.muted = true; }}
-        onLoadedMetadata={(event) => { syncMuted(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
+        // PORCH-121 ac-2 (root removal, named): inline ref callbacks re-run
+        // on every render — the shipped ref here re-asserted a hard
+        // muted=true over the member's explicit unmute on every commit
+        // (panel taps, live events, hover chrome; the element also
+        // being the fullscreen viewer, the re-mute was heard inside the
+        // viewer too). The mount now initializes from the held member
+        // choice via initialMuted (a member who has not spoken still gets
+        // the muted autoplay start).
+        ref={(el) => { videoRef.current = el; if (el) el.muted = initialMuted(id); }}
+        onLoadedMetadata={(event) => { syncGeometry(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
+        onVolumeChange={mirrorMute}
         onError={() => classifyDirectFailure(videoPlayable)}
-        sx={{ display: 'block', width: '100%', cursor: 'pointer' }} />
+        sx={maskedVideoSx} />
       {playbackPanel}
     </Box>}
     {post.type === 'video' && !direct && resource && <Box sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
       <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined}
         autoPlay muted playsInline onClick={tapVideo}
-        ref={(el) => { videoRef.current = el; if (el) el.muted = true; }}
-        onLoadedMetadata={(event) => { syncMuted(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
+        ref={(el) => { videoRef.current = el; if (el) el.muted = initialMuted(id); }}
+        onLoadedMetadata={(event) => { syncGeometry(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
+        onVolumeChange={mirrorMute}
         onError={() => slotFailed(0)}
-        sx={{ display: 'block', width: '100%', cursor: 'pointer' }} />
+        sx={maskedVideoSx} />
       {playbackPanel}
     </Box>}
     {post.type === 'audio' && <Box component="audio" src={resource?.url} controls preload="none" sx={{ width: '100%' }} />}

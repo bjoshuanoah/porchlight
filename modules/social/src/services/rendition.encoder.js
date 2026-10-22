@@ -126,14 +126,42 @@ export async function videoMetadata(originalBytes) {
       // metadata itself lands on stderr. Hard failures fall through.
       stderr = error.stderr ?? "";
     }
-    const videoStream = /Stream #\S+.*Video: .*?, (\d+)x(\d+)/.exec(stderr);
-    if (!videoStream) {
+    // PORCH-121: the stamp of record is the DISPLAY geometry (models.js:
+    // "the probe's effective display dims, EXIF-rotated"). The stream line
+    // states the coded dims; a phone-portrait clip encodes as 1920x1080
+    // landscape and carries the portrait display matrix. ffmpeg repeats
+    // the rotation as an indented "displaymatrix: rotation of N degrees"
+    // side-data line inside the stream's block (the legacy `rotate` tag
+    // surfaces through the same line on the demuxer), so the probe reads
+    // stream-wise and swaps the dims when the rotation is a quarter-turn.
+    const dims = { width: null, height: null, rotated: false };
+    let inVideoStream = false;
+    for (const line of stderr.split("\n")) {
+      if (/Input #|Output #|Stream #/.test(line)) {
+        inVideoStream = /Stream #\S+.*Video: /.test(line);
+        if (inVideoStream) {
+          const match = /, (\d+)x(\d+)/.exec(line);
+          dims.width = match ? Number(match[1]) : null;
+          dims.height = match ? Number(match[2]) : null;
+          dims.rotated = false;
+        }
+      } else if (inVideoStream && /displaymatrix/.test(line)) {
+        const rotation = /rotation of (-?[\d.]+) degrees/.exec(line);
+        dims.rotated = Boolean(rotation) && Math.abs(Math.round(Number(rotation[1]))) % 180 === 90;
+      }
+    }
+    if (dims.width == null) {
       throw undecodable();
+    }
+    if (dims.rotated) {
+      const width = dims.width;
+      dims.width = dims.height;
+      dims.height = width;
     }
     const duration = /Duration: (\d+):(\d+):(\d+\.?\d*)/.exec(stderr);
     return {
-      width: Number(videoStream[1]),
-      height: Number(videoStream[2]),
+      width: dims.width,
+      height: dims.height,
       durationSeconds: duration
         ? Number(duration[1]) * 3600 + Number(duration[2]) * 60 + Number(duration[3])
         : null,

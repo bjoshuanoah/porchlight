@@ -71,12 +71,16 @@ test("PORCH-049 ac-3 + Brian's Oct 10 turn: no panel before the first tap, then 
   // the muted element property (property, not attribute: autoplay reads
   // the property) and the panel opens with it.
   assert.match(social, /onClick=\{tapVideo\}/);
-  assert.match(social, /event\.currentTarget\.muted = false;/);
+  assert.match(social, /element\.muted = false;/);
   assert.match(social, /setPanelOpen\(true\);/);
-  // The muted property is load-bearing at mount and re-asserted on
-  // metadata load (the boot-window retry remounts the element).
-  assert.match(social, /if \(el\) el\.muted = true;/);
-  assert.match(social, /event\.currentTarget\.muted = !soundOn;/);
+  // The member's mute choice (PORCH-121): a (re)mounted element initializes
+  // from the held choice (never a hard muted re-assert over an explicit
+  // unmute), the element's volumechange mirrors back into the one state,
+  // and the panel's mute toggle writes the element and follows it —
+  // no lifecycle re-mute path survives.
+  assert.match(social, /if \(el\) el\.muted = initialMuted\(id\);/);
+  assert.match(social, /onVolumeChange=\{mirrorMute\}/);
+  assert.match(social, /element\.muted = !element\.muted;/);
   // After the first tap the panel owns the playback (Brian, 10/10: pause,
   // restart, un/mute, full screen built in): pause/resume truth rides the
   // element's play/pause events, restart replays from the top, mute rides
@@ -84,9 +88,43 @@ test("PORCH-049 ac-3 + Brian's Oct 10 turn: no panel before the first tap, then 
   // fallback.
   assert.match(social, /onPlay=\{watchPlayback\} onPause=\{watchPlayback\}/);
   assert.match(social, /element\.currentTime = 0;/);
-  assert.match(social, /element\.muted = soundOn;/);
   assert.match(social, /element\.requestFullscreen/);
   assert.match(social, /webkitEnterFullscreen/);
+});
+
+test("PORCH-121: mute state is member-owned and held — the element is the truth, no override path survives", () => {
+  // The rendered control derives from the element-mirroring state, which
+  // every write path sets from the element after the touch, and
+  // volumechange reconciles anything written outside the client's taps
+  // (native fullscreen player controls).
+  assert.match(social, /aria-label=\{soundOn \? 'Mute' : 'Unmute'\}/);
+  assert.match(social, /const mirrorMute = \(event\) => \{/);
+  assert.match(social, /const value = !event\.currentTarget\.muted;/);
+  assert.match(social, /holdMute\(id, !element\.muted\);/);
+  // The held store is a session interaction, keyed by media id — no
+  // per-identity persistence, no server write anywhere.
+  const muteModule = social.slice(social.indexOf("import { heldSoundOn"), social.indexOf("const rows ="));
+  assert.doesNotMatch(muteModule, /request|api\.|body:/);
+  // No re-apply effect writes muted anywhere in the media family: the
+  // metadata handler captures geometry only.
+  const mediaItem = social.slice(social.indexOf('function MediaItem'), social.indexOf('async function mediaShape'));
+  assert.doesNotMatch(mediaItem, /muted = !soundOn/);
+  assert.doesNotMatch(mediaItem, /el\.muted = true/);
+});
+
+test("PORCH-121 extent rule: inline portrait masking and the retired 16:9 frame", () => {
+  // Only a video more portrait than 3:4 takes the ruled 3:4 mask; the
+  // boundary is inclusive on the natural side (3:4 itself plays true).
+  assert.match(social, /videoInlineMasked\(reserved\)/);
+  assert.match(social, /aspectRatio: '3 \/ 4', overflow: 'hidden'/);
+  // The masked element fills the fixed frame covered, center-cropped —
+  // the poster rides the same treatment.
+  assert.match(social, /objectFit: 'cover'/);
+  // Natural true-ratio videos keep the stamped box at full media width —
+  // and no 16:9 literal renders anywhere in the media family: the forced
+  // 16:9 frame is retired on every breakpoint.
+  const mediaItem = social.slice(social.indexOf('function MediaItem'), social.indexOf('async function mediaShape'));
+  assert.doesNotMatch(mediaItem, /16 \/ 9/);
 });
 
 test("PORCH-049 turn: media sharing rides the ··· menus after the PORCH-082 retirement", async () => {

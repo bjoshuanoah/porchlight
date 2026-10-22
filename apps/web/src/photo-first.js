@@ -1,5 +1,18 @@
 import { lightTokens, darkTokens } from "./theme.js";
 
+// PORCH-121 (Brian, Oct 21, 2026; extent corrected Oct 22, 2026): the ruled
+// inline portrait extent. A video more portrait than 3:4 (taller than the
+// 6:8 extent, the 9:16 class) inline-masks covered into a fixed 3:4 frame;
+// every video at or above the extent — landscapes, square (true 1:1,
+// never cropped), 4:5, and 3:4 itself — plays its true stamped ratio. The
+// forced 16:9 video frame is retired; the mask never reaches the viewer
+// (element-fullscreen is natural-aspect on every ratio).
+export const PORTRAIT_EXTENT = 3 / 4;
+
+export function videoInlineMasked(aspect) {
+  return typeof aspect === "number" && aspect > 0 && aspect < PORTRAIT_EXTENT;
+}
+
 // PORCH-043 build contract — "Photo-First Timeline: Build Contract"
 // (Porchlight UI initiative, TS §5, Brian Oct 14, 2026). The published
 // values live in one module so the timeline renders from a single source
