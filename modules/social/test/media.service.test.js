@@ -110,6 +110,28 @@ export const sampleVideoBytes = async ({ seconds = 1 } = {}) => {
   }
 };
 
+/* PORCH-121: a phone-portrait clip of record — the encoded stream is the
+ * 1280x720 landscape pair an iPhone writes, and the portrait display
+ * matrix (rotation 90°) is the side data the muxer stores with it. */
+export const sampleRotatedVideoBytes = async ({ seconds = 1 } = {}) => {
+  const dir = await mkdtemp(join(tmpdir(), "porchlight-video-rot-"));
+  const base = join(dir, "coded.mp4");
+  const rotated = join(dir, "display.mp4");
+  try {
+    await runBin(ffmpegStatic, [
+      "-hide_banner", "-loglevel", "error", "-y",
+      "-f", "lavfi", "-i", `testsrc2=size=1280x720:rate=24:duration=${seconds}`,
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p",
+      base,
+    ]);
+    // The display matrix is rewritten on the stream at mux time.
+    await runBin(ffmpegStatic, ["-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "90", "-i", base, "-c", "copy", rotated]);
+    return await readFile(rotated);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
 /** Drive a full upload: begin (device-signed) → chunks → complete (device-signed). */
 async function upload(media, member, bytes, { contentType = "image/jpeg", beginOverrides = {}, commitOverrides = {} } = {}) {
   const declare = { scope: "media-upload", size: bytes.length, contentType, ...beginOverrides.payload };
@@ -1013,6 +1035,36 @@ test("PORCH-049 ac-1: a ref without a readable archive states null geometry — 
   assert.equal(meta.height, null);
   assert.equal(meta.aspect, null);
   assert.equal(meta.durationMs, null);
+});
+
+/* ---- PORCH-121: the stamp states display geometry, not coded dims -------- */
+
+test("PORCH-121 ac-4: a phone-portrait clip (display-matrix rotation) stamps its true portrait display dims", async () => {
+  const fx = mediaFixture({ chunkSize: 1024 * 1024 });
+  const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
+  const june = await admitted(fx, { networkId: FAMILY, did: JUNE, device: fx.juneDev });
+  const bytes = await sampleRotatedVideoBytes();
+  const clip = await mediaVideoUpload(fx, susan, bytes);
+  const payload = { type: "video", mediaRefs: [clip.mediaId], caption: "the portrait" };
+  const post = (await fx.mod.postService.create({ accessToken: susan.token, payload, signature: susan.dev.signPayload(payload) })).post;
+  const view = (await fx.mod.postService.get({ accessToken: june.token, postId: post._id })).post;
+  const meta = view.mediaMeta[clip.mediaId];
+  // The coded stream is 1280x720 landscape; the display matrix (rotation
+  // 90°) makes the true display 720x1280 portrait — the stamp of record is
+  // the display dims (models.js: "the probe's effective display dims,
+  // EXIF-rotated"), never the coded 16:9 pair.
+  assert.equal(meta.width, 720);
+  assert.equal(meta.height, 1280);
+  assert.ok(Math.abs(meta.aspect - 720 / 1280) < 0.001, `stamped aspect is the display ratio (${meta.aspect})`);
+  assert.ok(meta.durationMs >= 900 && meta.durationMs <= 1500);
+  // The playable rendition rides the auto-rotated stream: its own dims
+  // agree with the stamp, so the client's reserved frame matches the bytes.
+  const playable = meta.renditions.find((rung) => rung.kind === "playable");
+  assert.ok(playable);
+  assert.equal(playable.width, 720);
+  assert.equal(playable.height, 1280);
+  // The poster is the auto-rotated frame as well.
+  assert.ok(meta.poster && meta.poster.width === 640 && meta.poster.height > meta.poster.width);
 });
 
 /* ---- PORCH-116: rendition serving response classes ----------------------- */
