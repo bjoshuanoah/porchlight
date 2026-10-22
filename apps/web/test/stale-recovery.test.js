@@ -96,9 +96,9 @@ test("ac-4: the recovery module carries no interval machinery — nothing re-arm
 test("ac-1: the stale resolve inside the reconnect catch-up triggers the auto-recovery", async () => {
 	const source = await mainSource;
 	const inCatchUp = source.slice(source.indexOf("const catchUpOrigin = useCallback"));
-	assert.match(inCatchUp, /setBehind\(result\.stale\);\s*\n[^]*?if \(result\.stale\) startStaleRecovery\(\);/,
+	assert.match(inCatchUp, /setBehind\(result\.stale\);\s*\n[^]*?if \(result\.stale\) startConnectivityRecovery\(\);/,
 		"the beyond-window replay itself fires the recovery — no tap, no cadence");
-	assert.match(inCatchUp, /\}, \[startStaleRecovery\]\);/, "the trigger rides catchUpOrigin's dependency list");
+	assert.match(inCatchUp, /\}, \[startConnectivityRecovery\]\);/, "the trigger rides catchUpOrigin's dependency list");
 });
 
 test("ac-1: the recovery attempt IS the Check again refetch — actions.refreshFeeds unchanged", async () => {
@@ -113,7 +113,7 @@ test("ac-1: the recovery attempt IS the Check again refetch — actions.refreshF
 
 test("ac-2: the trigger is guarded — a concurrent stale event never stacks a second driver run", async () => {
 	const source = await mainSource;
-	const block = source.slice(source.indexOf("PORCH-102: the freshness-note auto-recovery."));
+	const block = source.slice(source.indexOf("PORCH-102: the standing bounded re-serve chain."));
 	assert.match(block, /if \(staleRecoveryBusy\.current\) return;/);
 	assert.match(block, /staleRecoveryBusy\.current = true;/);
 	assert.match(block, /finally \{\s*\n\s*staleRecoveryBusy\.current = false;\s*\n\s*\}/,
