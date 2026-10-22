@@ -688,7 +688,7 @@ function App() {
           return match ? { networkId: match.networkId ?? null, token: match.token } : null;
         },
         onEvent: (envelope) => mergeArrival(envelope, connection),
-        onState: ({ connected }) => {
+        onState: ({ connected, established }) => {
           // The connection fact renders visibly (ac-4): a realtime outage
           // shows the outage state and serves the cached river; a dead
           // credential keeps its own honest state instead of masquerading
@@ -703,7 +703,15 @@ function App() {
             // PORCH-117: during the boot hold the loading surface is the
             // connection state — the first-fetch chain owns the earned
             // offline render, so a transport flap mid-boot never banners.
-            if (!membershipEndedRef.current && !bootHoldRef.current) setOffline(true);
+            // PORCH-117 follow-up (Brian, Oct 22, 2026 — "is it socket
+            // errors?"): establishment is not an error either. A stream
+            // that has never completed a handshake is still working its
+            // state — its connect attempts render loading only (the
+            // transport's own backoff); a first-attempt connect_error
+            // before any handshake must never flash the unreachable
+            // banner. Only an established-then-lost connection is a
+            // definitive outage that earns the state.
+            if (established && !membershipEndedRef.current && !bootHoldRef.current) setOffline(true);
             return;
           }
           setOffline(false);
