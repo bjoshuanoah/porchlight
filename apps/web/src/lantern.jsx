@@ -58,11 +58,13 @@ const CSS = `
 /* Brian, Oct 22, second amendment: count +300% (6 → 24 motes) and
    spread +200% (each mote's field extent ×3 — the widest orbit now
    sweeps 384px, 3× the prior 128px ceiling). The tiered radii keep
-   near-lantern depth against the wide field, per-mote period and
-   desynced phase stay, alternating direction — never a uniform swarm.
-   The orbit composes from translate waypoints so the mark's own layers
-   stay untouched, and the motes stay z-under the mark: passing "behind"
-   the lantern reads as the orbit wrapping it. */
+   near-lantern depth against the wide field, alternating direction
+   stays, never a uniform swarm. The orbit composes from translate
+   waypoints so the mark's own layers stay untouched, and the motes
+   stay z-under the mark: passing "behind" the lantern reads as the
+   orbit wrapping it. Each load starts every mote at a random point of
+   its orbit — randomizeMoteStarts offsets the animation into a
+   per-load phase. */
 .porch-dusk-particle {
   position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; border-radius: 50%; opacity: .9;
   background: var(--porch-boot-dusk-mote);
@@ -182,6 +184,21 @@ function Mark({ height = LOADER_MARK_H }) {
 // both ride porch95-fade).
 export const BOOT_FADE_CLASS = "porch95-boot-fade";
 
+// Random starting points (Brian, Oct 22): every load opens each mote at a
+// random phase of its own orbit — the animation-delay lands on a random
+// fraction of the mote's duration, so no two boots open on the same
+// swarm. Count, spread, orbit geometry, and reduced-motion hiding are
+// untouched; the fallback layer applies this after mount, the pre-JS
+// canvas carries the same routine in its inline script. CSS stays
+// deterministic below only as the no-JS fallback phase.
+export function randomizeMoteStarts(container) {
+  if (!container) return;
+  for (const mote of container.querySelectorAll(".porch-dusk-particle")) {
+    const duration = parseFloat(getComputedStyle(mote).animationDuration);
+    if (duration > 0) mote.style.animationDelay = `-${(Math.random() * duration).toFixed(3)}s`;
+  }
+}
+
 /**
  * Crossfade the boot status line (ac-6): the outgoing line fades out while
  * the incoming line fades in, inside the fixed-height status box so the
@@ -243,6 +260,7 @@ export function LanternBoot({
   const fadingRef = useRef(false);
   const boxRef = useRef(null);
   const failCleanupRef = useRef(null);
+  const partsRef = useRef(null);
 
   useLayoutEffect(() => {
     const staticBoot = document.getElementById("porch-boot");
@@ -257,6 +275,16 @@ export function LanternBoot({
     // it dissolves and removes it — nothing here may orphan it, or the
     // adopting layer would fall back to a second full canvas).
     bootedAtRef.current = now();
+  }, []);
+
+  // Random starting points (Brian, Oct 22): the rendered fallback layer
+  // randomizes its own motes after mount. When the pre-JS canvas is
+  // adopted this layer renders no motes (partsRef stays empty) — the
+  // static canvas randomizes in its own inline script, so the two never
+  // double-apply.
+  useLayoutEffect(() => {
+    randomizeMoteStarts(partsRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- randomize once per rendered layer
   }, []);
 
   useEffect(() => {
@@ -372,7 +400,7 @@ export function LanternBoot({
       <div className="porch-dusk-scene" aria-hidden="true">
         <div className="porch-dusk-halo"></div>
         <div className="porch-dusk-glow"></div>
-        <div className="porch-dusk-particles">
+        <div className="porch-dusk-particles" ref={partsRef}>
           {[...Array(24)].map((_, i) => <span key={i} className="porch-dusk-particle"></span>)}
         </div>
         <BootMark />

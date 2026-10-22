@@ -63,11 +63,12 @@
       /* Brian, Oct 22, second amendment: count +300% (6 → 24 motes) and
          spread +200% (each mote's field extent ×3 — the widest orbit now
          sweeps 384px, 3× the prior 128px ceiling). The tiered radii keep
-         near-lantern depth against the wide field, per-mote period and
-         desynced phase stay, alternating direction — never a uniform
-         swarm. The motes stay z-under the mark (it rides the top of the
-         scene), so passing behind the lantern reads as the orbit
-         wrapping it. */
+         near-lantern depth against the wide field, alternating direction
+         stays, never a uniform swarm. The motes stay z-under the mark (it
+         rides the top of the scene), so passing behind the lantern reads
+         as the orbit wrapping it. Each load starts every mote at a
+         random point of its orbit — the inline randomizer below offsets
+         the animation into a per-load phase. */
       .porch-dusk-particle {
         position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; border-radius: 50%; opacity: .9;
         background: radial-gradient(circle at 40% 40%, #FFF6D8 0%, #FFE2B0 40%, #FFBE57 75%, rgba(255,190,87,0) 100%);
@@ -189,6 +190,20 @@
           if (mark.complete && mark.naturalWidth) reveal();
           else mark.addEventListener("load", reveal, { once: true });
         })(document.currentScript.previousElementSibling);
+      </script>
+      <script>
+        // Random starting points (Brian, Oct 22): every load opens each
+        // mote at a random phase of its own orbit — the animation-delay
+        // lands on a random fraction of the mote's duration, so no two
+        // boots open on the same swarm. Count, spread, orbit geometry,
+        // and reduced-motion hiding are untouched; the hardcoded delays
+        // above remain only as the no-JS fallback phase.
+        (function (motes) {
+          for (var i = 0; i < motes.length; i++) {
+            var duration = parseFloat(getComputedStyle(motes[i]).animationDuration);
+            if (duration > 0) motes[i].style.animationDelay = "-" + (Math.random() * duration).toFixed(3) + "s";
+          }
+        })(document.querySelectorAll(".porch-dusk-particle"));
       </script>
       </div>
       <div class="porch95-wordmark" aria-hidden="true">porchlight</div>
