@@ -1,17 +1,7 @@
-// PORCH-118: the loading asset of record and the boot copy/timing contract.
-//
-// loader mark is Brian's supplied animated webp (ruling, Oct 21, 2026: both load states — boot and in-app — carry the animated
-// asset, animating from its own frames). The asset is committed at build
-// into the SPA's static assets (apps/web/public/loader.webp, 36 frames @
-// 15fps, derived exactly from the task's media) so the pre-JS static boot
-// canvas (index.html) plays it before any JavaScript; the reduced-motion
-// treatment renders the asset's static first frame
-// (apps/web/public/loader-still.webp). The PORCH-095 drawn vector-twin
-// choreography (facet climb, node glow, one pulse) is retired from the
-// loading path by this ruling — what remains of that task here is the
-// copy law and the dissolve timing. Colors of record (the boot's
-// mode-invariant brand palette) stay in the theme token layer
-// (src/theme.js bootTokens, --porch-boot-*).
+// Loading assets and boot copy/timing contract. The initial dusk boot uses
+// the full-resolution static app icon (/icon-512.png); only LanternLoader,
+// the small in-app waiting mark, uses the animated webp and its reduced-
+// motion still frame. The PORCH-095 readiness/dissolve remains unchanged.
 
 // The asset of record — displayed at CSS height via the size constants
 // below; the intrinsic dimensions keep the aspect locked for layout.
@@ -20,10 +10,8 @@ export const LOADER_STILL_SRC = "/loader-still.webp";
 export const LOADER_ANIM_W = 137;
 export const LOADER_ANIM_H = 170;
 
-// The mark reads fairly small on the boot (above the wordmark), much
-// smaller in-app (reserved space). Brian, Oct 22, 2026: the boot lantern
-// doubles — 200% bigger than the tuned 92px boot size; the in-app loader
-// mark is untouched.
+// Brian's Oct 22 doubled boot size (184px) applies to the static icon.
+// The in-app animated mark retains its reserved-space size.
 export const BOOT_MARK_H = 184;
 export const LOADER_MARK_H = 40;
 

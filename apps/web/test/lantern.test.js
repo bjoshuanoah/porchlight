@@ -1,14 +1,5 @@
-// PORCH-118: the loading experience contract — the boot and the quiet
-// in-app loader both ride Brian's supplied animated webp (the asset of
-// record, animating from its own frames). The suite pins the ruling's hard
-// edges: the navy canvas with a no-flash first paint in both display
-// modes and no vector-twin mark anywhere on the boot path, readiness
-// ending the boot with no artificial hold (never timer-driven), the copy
-// discipline (no "Loading…" literal, status lines only past the
-// threshold), the reserved-space in-app loader (never over content, never
-// forever), the reduced-motion static-first-frame treatments with WCAG
-// 2.2 AA, and the bundle discipline (the webp ships in-bundle and loops
-// forever; no spinner or animation library, fades/dissolves stay CSS).
+// Boot readiness and in-app loader behavior: the dusk boot uses the still
+// icon while the small in-app loader retains its animated webp.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile, mkdir, rm } from "node:fs/promises";
@@ -68,7 +59,7 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-test("ac-1: the boot renders the navy canvas with the animated webp mark above the wordmark — no spinner, no vector twin", async () => {
+test("ac-1: the boot renders the navy canvas with the static icon above the wordmark", async () => {
   await withLantern(async ({ LanternBoot }) => {
     const html = renderToString(React.createElement(LanternBoot));
     // One fixed navy layer, identical canvas for both modes (no mode branch).
@@ -78,10 +69,9 @@ test("ac-1: the boot renders the navy canvas with the animated webp mark above t
     assert.equal(lt.bootBg, "#0B1622", "the boot canvas is Brian's near-black deep navy");
     assert.match(html, /position:fixed/);
     assert.ok(!/data-theme|porch-light|porch-dark/.test(html), "the boot canvas is mode-invariant");
-    // The mark sits above the wordmark — the one sanctioned stacked lockup —
-    // rendered as the webp of record, not a drawn SVG twin. The wordmark is
-    // lowercase on this surface (PORCH-119, Brian Oct 21, 2026).
-    const markAt = html.indexOf('src="/loader.webp"');
+    // The boot uses the actual full-resolution icon; only in-app loading
+    // keeps the animated webp.
+    const markAt = html.indexOf('src="/icon-512.png"');
     const wordAt = html.indexOf(">porchlight</div>");
     assert.ok(markAt > -1 && wordAt > markAt, `mark renders above the wordmark (mark@${markAt} word@${wordAt})`);
     assert.doesNotMatch(html, /<svg|<path\b/, "no vector-twin mark renders on the boot path");
@@ -104,9 +94,9 @@ test("ac-1: the boot renders the navy canvas with the animated webp mark above t
   const bootSlice = index.slice(index.indexOf('id="porch-boot"'), index.indexOf('id="root"'));
   assert.match(bootSlice, /#0B1622/, "the pre-JS canvas carries the navy literal (tokens have not loaded yet)");
   assert.match(bootSlice, /var\(--porch-boot-bg,#0B1622\)/, "the canvas prefers the theme token with the same literal as fallback");
-  // The animated webp plays here from the first byte, before any JavaScript.
-  assert.match(bootSlice, /class="porch118-webp" src="\/loader\.webp"/, "the pre-JS mark is the animated webp of record");
-  assert.match(bootSlice, /src="\/loader-still\.webp"/, "the reduced-motion still frame ships beside it");
+  // The still icon paints from the first byte; no animated boot sibling.
+  assert.match(bootSlice, /class="porch-dusk-mark" src="\/icon-512\.png"/);
+  assert.doesNotMatch(bootSlice, /loader\.webp|loader-still\.webp/);
   assert.match(bootSlice, />porchlight</, "the pre-JS wordmark is lowercase per the dusk ruling");
   assert.ok(!bootSlice.includes(">Porchlight<"), "the static canvas never capitalizes the wordmark");
   assert.doesNotMatch(bootSlice, /<svg|<path\b/, "the vector-twin lantern markup is retired from the static canvas");
@@ -122,7 +112,7 @@ test("ac-1: the boot renders the navy canvas with the animated webp mark above t
   assert.match(lanternSource, /BOOT_FADE_CLASS/);
 });
 
-test("ac-2: readiness ends the boot immediately, even mid-loop of the animated webp — never a timer alone", async () => {
+test("ac-2: readiness ends the boot immediately, even mid-firefly orbit — never a timer alone", async () => {
   // The bus: readiness is idempotent, late subscribers fire immediately,
   // and the boot never waits on an event already passed.
   appready.resetAppReadyForTests();
@@ -240,27 +230,18 @@ test("ac-4: the in-app loader renders the small animated webp in reserved space 
   assert.equal(existsSync(join(webRoot, "src", "lantern-geometry.js")), false, "no geometry-twin module remains");
 });
 
-test("ac-5: reduced motion renders the asset's static first frame, and the AA contrast holds", async () => {
+test("ac-5: reduced motion keeps the boot icon still and the in-app loader swaps frames", async () => {
   await withLantern(async ({ LanternBoot }) => {
     const css = styleOf(renderToString(React.createElement(LanternBoot)));
     const reduced = css.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/)[1];
-    // The swap is CSS-only: the animated asset hides, the static first
-    // frame takes its place — on both load states (they share this CSS).
+    // The in-app loader swaps its animated asset for a still frame.
     assert.match(reduced, /\.porch118-webp \{ display: none; \}/, "the animated asset rests under reduced motion");
     assert.match(reduced, /\.porch118-webp-still \{ display: block; \}/, "the static first frame renders");
     assert.doesNotMatch(reduced, /animation:/, "the swap adds no staged animation of its own");
-    // The plain fade into the app survives reduced motion (the boot still
-    // dissolves; only the staged animation is swapped for the still frame).
+    // The plain fade into the app survives reduced motion.
     assert.match(css, /@keyframes porch95-fade/);
     assert.ok(!css.includes('animation: `porch118'), "no JS-composed animation joins the loading path");
   });
-  // The static canvas carries its own reduced-motion swap: the pre-JS
-  // mark renders the still frame, with the fade class live.
-  const index = await readFile(join(webRoot, "index.html"), "utf8");
-  const indexReduced = index.slice(index.indexOf("@media (prefers-reduced-motion: reduce)"), index.indexOf("</style>"));
-  assert.match(indexReduced, /\.porch118-webp \{ display: none; \}/, "the pre-JS animated mark drops under reduced motion");
-  assert.match(indexReduced, /\.porch118-webp-still \{ display: block; \}/, "the pre-JS still frame renders");
-  assert.doesNotMatch(indexReduced, /porch95-boot-fade/, "the plain fade into the app survives reduced motion");
   // WCAG 2.2 AA on the navy canvas: all text pairs ≥ 4.5:1.
   assert.ok(contrast(lt.bootBg, lt.bootInk) >= 4.5, `wordmark ${contrast(lt.bootBg, lt.bootInk).toFixed(2)}:1 on navy`);
   assert.ok(contrast(lt.bootBg, lt.bootStatusInk) >= 4.5, `status text ${contrast(lt.bootBg, lt.bootStatusInk).toFixed(2)}:1 on navy`);

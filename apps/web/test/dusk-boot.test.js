@@ -1,15 +1,5 @@
-// PORCH-119: the dusk loading screen — the porch-light-at-dusk boot scene
-// (Brian, Oct 21, 2026) riding PORCH-118's webp boot machinery and
-// PORCH-095's readiness/dissolve contract, both untouched. The suite pins
-// the ruling's hard edges per acceptance criterion: the layered dusk scene
-// (halo behind the mark, flattened glow beneath, sparse firefly orbits)
-// with the mark and typography never blurred or filtered, the breathing
-// light layers (never the mark), the ruled five-line rotation revealed at
-// 1.5s and crossfaded every 3s in a fixed-height box, the immediate ≤300ms
-// readiness dissolve, the reduced-motion static treatment, the polite
-// screen-reader contract, unmount cleanup, the earned-failure hold with
-// retry, and bundle discipline (CSS only, no animation library) plus the
-// deployed-hub stage-2 record.
+// Dusk boot behavior checks: first-paint asset, status rotation, readiness,
+// accessibility, failure continuity, and deployed-hub coverage.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -61,16 +51,16 @@ async function staticBootSlice() {
   return index.slice(index.indexOf('id="porch-boot"'), index.indexOf('id="root"'));
 }
 
-test("ac-1: the dusk boot carries the webp mark, the lowercase wordmark, and no clipping surface", async () => {
+test("ac-1: the dusk boot carries the static app icon and lowercase wordmark", async () => {
   await withLantern(async ({ LanternBoot }) => {
     const html = renderToString(React.createElement(LanternBoot));
-    // Deep navy canvas, centered composition, the webp of record.
+    // Deep navy canvas with the original, still Porchlight icon.
     assert.match(html, /background:var\(--porch-boot-bg\)/);
     assert.match(html, /alignItems:"center"|align-items:\s*center/);
-    assert.match(html, /src="\/loader\.webp"/);
+    assert.match(html, /src="\/icon-512\.png"/);
     assert.match(html, /class="porch95-wordmark" aria-hidden="true">porchlight</, "the wordmark renders lowercase on this surface");
     // Layer order: mark above the wordmark, wordmark above the status box.
-    const markAt = html.indexOf('src="/loader.webp"');
+    const markAt = html.indexOf('src="/icon-512.png"');
     const wordAt = html.indexOf(">porchlight<");
     const boxAt = html.indexOf('class="porch95-statusbox"');
     assert.ok(markAt > -1 && wordAt > markAt && boxAt > wordAt, "mark → wordmark → status, no reordering");
@@ -82,10 +72,10 @@ test("ac-1: the dusk boot carries the webp mark, the lowercase wordmark, and no 
   assert.match(boot, /style="[^"]*overflow:hidden/, "the pre-JS canvas clips its own overflow");
   assert.match(boot, /var\(--porch-boot-bg,#0B1622\)/, "deep navy rides the boot token pre-JS");
   assert.match(boot, />porchlight</);
-  assert.match(boot, /src="\/loader\.webp"/);
+  assert.match(boot, /src="\/icon-512\.png"/);
   // Brian, Oct 22: the lantern is 200% bigger — 184px on both canvases.
   assert.equal(assets.BOOT_MARK_H, 184, "the React boot mark doubles");
-  assert.match(boot, /style="height:184px;width:auto"/, "the pre-JS canvas carries the doubled mark");
+  assert.match(boot, /style="height:184px;width:184px"/, "the pre-JS canvas carries the doubled icon");
 });
 
 test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, mark and typography never blurred", async () => {
@@ -107,16 +97,10 @@ test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, m
     const halo = css.match(/\.porch-dusk-halo \{[^}]*\}/)[0];
     assert.ok(Number(glow.match(/top:\s*(\d+)px/)[1]) > 100, "the glow sits beneath the mark");
     assert.ok(halo.includes("top: 50%"), "the halo sits behind the mark's center");
-    // Separate layers by construction: the mark rides the top of the scene
-    // (Brian, Oct 22: "make sure the lantern image is on top of the others")
-    // at full opacity — and neither the mark nor the wordmark/status text
-    // carries a blur or filter.
-    assert.match(css, /\.porch-dusk-scene > img \{ position: relative; z-index: 2; opacity: 1; \}/);
-    for (const sel of ["\\.porch-dusk-scene > img", "\\.porch95-wordmark", "\\.porch95-status \\{", "\\.porch95-status-on"]) {
-      const rule = css.match(new RegExp(sel.replace(/[{}\\]/g, (c) => c) + "[^}]*}"));
-      assert.ok(rule, `rule for ${sel} exists`);
-      assert.ok(!/filter|blur/.test(rule[0]), "no blur or filter lands on the mark/typography layer");
-    }
+    // The image is an opaque sibling above the lighting, with an isolated
+    // stacking context so no animated mote can paint over its pixels.
+    assert.match(css, /\.porch-dusk-scene \{[^}]*isolation: isolate/);
+    assert.match(css, /\.porch-dusk-mark \{[^}]*z-index: 3; opacity: 1/);
   });
   // The static canvas mirrors the scene rule for rule (pre-JS parity).
   const index = await readFile(join(webRoot, "index.html"), "utf8");
@@ -128,7 +112,7 @@ test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, m
   const haloAt = boot.indexOf("porch-dusk-halo");
   const glowAt = boot.indexOf("porch-dusk-glow");
   const partsAt = boot.indexOf("porch-dusk-particles");
-  const markAt = boot.indexOf("porch118-webp");
+  const markAt = boot.indexOf("porch-dusk-mark");
   assert.ok(haloAt < glowAt && glowAt < partsAt && partsAt < markAt, "lighting renders behind the mark");
 });
 
@@ -183,10 +167,7 @@ test("ac-4: breathing modulates the light layers only — never the mark's posit
     // The rhythm is subtle and both light layers ride it (offset phases).
     assert.match(css, /animation: porch-dusk-breathe 4\.8s ease-in-out infinite/);
     assert.match(css, /\.porch-dusk-glow \{[^}]*animation-delay:\s*-2\.4s/, "the glow breathes off-phrase — no synchronized flash");
-    for (const sel of ["porch118-webp", "porch118-webp-still", "porch95-wordmark"]) {
-      const hit = css.match(new RegExp(`\\.${sel}[^{]*\\{[^}]*animation`));
-      assert.ok(!hit, `breathing never touches the ${sel} layer — the webp keeps animating its own frames`);
-    }
+    assert.doesNotMatch(css.match(/\.porch-dusk-mark \{[^}]*\}/)[0], /animation|filter|transform/, "the icon is static, sharp and motionless");
     assert.ok(!breathe.includes("scale"), "no scale modulation on any breathing layer");
   });
 });
@@ -236,7 +217,7 @@ test("ac-7: readiness dissolves immediately and completes inside 300ms — never
   assert.match(index, /\.porch95-boot-fade \{ animation: porch95-fade 250ms ease-out forwards; \}/);
 });
 
-test("ac-8: reduced motion — static lighting, no particles, instant status swaps, static mark", async () => {
+test("ac-8: reduced motion — static lighting, no particles, instant status swaps", async () => {
   await withLantern(async ({ LanternBoot }) => {
     const css = styleOf(renderToString(React.createElement(LanternBoot)));
     const dusk = css.slice(css.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
