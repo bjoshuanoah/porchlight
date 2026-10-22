@@ -1,25 +1,10 @@
-// PORCH-118: the loading experience rides Brian's supplied animated webp
-// — the asset of record, committed at build into the SPA's static assets
-// (public/loader.webp with public/loader-still.webp as the static first
-// frame). PORCH-119 (Brian, Oct 21, 2026 — the dusk-boot ruling): the boot
-// becomes the porch-light-at-dusk scene — deep navy canvas, the webp mark
-// over a soft amber halo, a wider flattened amber glow beneath it
-// suggesting light on a porch floor without drawing a floor, and sparse
-// drifting particles with bright heads and fading tails. All layers are
-// separate by construction (halo, floor glow, particles, mark, wordmark,
-// status text): lighting never blurs the mark or the typography. Breathing
-// modulates the light layers' opacity only — never the mark's position or
-// scale (the webp keeps animating its own frames). The wordmark renders
-// lowercase on this surface per the ruling. LanternBoot (variant="boot",
-// the initial-launch boot surface; variant="surface" doubles as the
-// loading state for flows that hold a full screen, with the flow's own
-// copy as the status line) and LanternLoader (the small in-app mark for
-// genuinely empty or blocked surfaces) keep the PORCH-118 webp machinery.
-// Fades, dissolves, crossfades, and the dusk lighting stay CSS; no spinner
-// library, no skeleton library, no third-party animation runtime enters
-// the bundle (build contract). Copy and timing constants of record:
-// src/loader-assets.js; the palette of record: src/theme.js bootTokens
-// (--porch-boot-*), one navy canvas in both display modes.
+// PORCH-119: the first-paint dusk boot uses the actual static Porchlight icon
+// (Brian, Oct 22 reference feedback). The mark is opaque and above every
+// lighting/particle layer in its isolated scene; breathing modulates only
+// the ambient light. The static pre-JS canvas in index.html is adopted by
+// LanternBoot and shares the fallback's scene geometry. Readiness, status,
+// failure, and cleanup keep the PORCH-095 boot machinery. LanternLoader
+// remains the small animated webp in reserved in-app loading space.
 //
 // Hierarchy rule: LanternLoader renders only in its own reserved,
 // centered space — it is never fixed, never overlays the feed, and never
@@ -45,26 +30,14 @@ const V = {
   bg: "var(--porch-boot-bg)", ink: "var(--porch-boot-ink)", status: "var(--porch-boot-status-ink)",
 };
 
-// CSS only: the mark animates from its own webp frames; the dusk lighting
-// (halo, floor glow), the firefly orbits, the breathing rhythm, and the
-// status crossfade are keyframe/transition CSS. The scene layers are
-// separate: the mark sits on top of the scene (z-index 2, full opacity) and never carries a filter
-// or blur; only the light layers are animated, opacity-only, so the mark
-// never moves. This block mirrors the pre-JS canvas in index.html (the
-// static layer carries the same rules because it paints before JS).
+// Lighting, firefly orbits, and status crossfades are CSS. The boot mark
+// itself is a still image above the effects, not an animated webp.
 const CSS = `
 @keyframes porch95-fade { from { opacity: 1; } to { opacity: 0; } }
 .porch118-webp { display: block; }
 .porch118-webp-still { display: none; }
-/* PORCH-119 dusk scene — mirrors the pre-JS canvas in index.html rule for
-   rule, amended Oct 22 (Brian): the lantern doubles (184px), the mark
-   stacks on top of every layer at full opacity, and the particles become
-   fireflies orbiting the lantern. */
-.porch-dusk-scene { position: relative; width: 300px; height: 340px; display: flex; align-items: center; justify-content: center; }
-/* Brian, Oct 22: the lantern image sits on top of all others (z-index) and
-   shows at 100% opacity — breathing modulates the light layers only,
-   never the mark, so its opacity pins at 1. */
-.porch-dusk-scene > img { position: relative; z-index: 2; opacity: 1; }
+.porch-dusk-scene { position: relative; isolation: isolate; width: 300px; height: 340px; display: flex; align-items: center; justify-content: center; }
+.porch-dusk-mark { position: relative; z-index: 3; opacity: 1; display: block; }
 .porch-dusk-halo {
   position: absolute; left: 50%; top: 50%; width: 320px; height: 330px; z-index: 0;
   transform: translate(-50%, -50%); border-radius: 50%;
@@ -150,8 +123,7 @@ const CSS = `
    mechanism from the theme baseline (the PORCH-035 rule layer) — no
    per-screen styling of its own here. */
 .porch95-retry:hover { background: var(--porch-boot-dusk-hover); }
-/* prefers-reduced-motion: both load states render the asset's static
-   first frame (the plain fade/dissolve itself stays live). */
+/* Only the in-app animated loader swaps to its still frame. */
 @media (prefers-reduced-motion: reduce) {
   .porch118-webp { display: none; }
   .porch118-webp-still { display: block; }
@@ -165,8 +137,14 @@ const CSS = `
 }
 `;
 
+/** The boot uses the original full-resolution static app icon. */
+function BootMark() {
+  return <img className="porch-dusk-mark" src="/icon-512.png" width={512} height={512}
+    alt="" aria-hidden="true" focusable="false" style={{ height: BOOT_MARK_H, width: BOOT_MARK_H }} />;
+}
+
 /** The loader mark — the animated webp of record, still frame under reduced motion. */
-function Mark({ height = BOOT_MARK_H }) {
+function Mark({ height = LOADER_MARK_H }) {
   const style = { height, width: "auto" };
   return (
     <>
@@ -207,12 +185,9 @@ export function swapStatusLine(box, text) {
 
 /**
  * LanternBoot — variant="boot" (default) is the app's first paint. The
- * animated webp and the whole dusk scene live in the static pre-JS canvas
- * (index.html): the boot's only guaranteed window on a cold load is the
- * bundle-download span, and the scene plays there from the first byte. The
- * app's first surface becomes ready in the same commit LanternBoot mounts
- * (readiness is React mount), so the React layer never replays the scene on
- * a healthy load — it *adopts* the static canvas: manages the status lines
+ * still icon and dusk scene live in the static pre-JS canvas (index.html).
+ * React adopts it during startup and renders the same scene as a fallback.
+ * It manages the status lines
  * past the copy threshold (elapsed measured from navigation start — the
  * boot's true start), rides readiness, dissolves the canvas, and removes
  * it. When no static canvas exists (the React layer renders standalone,
@@ -379,7 +354,7 @@ export function LanternBoot({
         <div className="porch-dusk-particles">
           {[...Array(6)].map((_, i) => <span key={i} className="porch-dusk-particle"></span>)}
         </div>
-        <Mark />
+        <BootMark />
       </div>
       <div className="porch95-wordmark" aria-hidden="true">porchlight</div>
       {surface

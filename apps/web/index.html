@@ -31,48 +31,18 @@
     </script>
   </head>
   <body>
-    <!-- PORCH-118/119: the boot surface, first paint and pre-JS — the
-         loader mark animates from its own webp frames (the asset of record,
-         public/loader.webp: Brian's supplied animated webp committed at
-         build) from the first byte, over the dusk scene (PORCH-119, Brian
-         Oct 21, 2026: deep navy canvas, soft amber halo behind the mark, a
-         wider flattened amber glow beneath suggesting the porch floor
-         without drawing one, sparse drifting particles with bright heads
-         and fading tails). Separate layers by construction: halo, floor
-         glow, particles, mark, wordmark, status text — the mark and the
-         typography never carry a blur or filter, and breathing animates the
-         light layers' opacity only, never the mark's position or scale
-         (the webp keeps animating its own frames). The wordmark renders
-         lowercase on this surface per the ruling. prefers-reduced-motion
-         swaps the animated asset for its static first frame
-         (public/loader-still.webp), rests the particles and the breathing,
-         and makes status swaps instant. React's LanternBoot
-         (src/lantern.jsx) adopts this node: it manages status lines past
-         the copy threshold (src/loader-assets.js), rides app readiness,
-         holds the earned failure state with a retry action (ac-11), takes
-         the dissolve, and removes the node — it never re-renders a second
-         canvas over a healthy load. No flash of another color precedes it
-         in either display mode (the pre-hydration mode script cannot flash
-         through a full-viewport fixed layer). The palette of record:
-         src/theme.js bootTokens (--porch-boot-*), mirrored here as literals
-         only because this canvas must paint before JS. -->
+    <!-- The static first paint is the dusk boot: a real, still Porchlight
+         icon above separate ambient lighting and orbiting fireflies.
+         LanternBoot adopts this canvas until the app is ready. -->
     <style>
       @keyframes porch95-fade { from { opacity: 1; } to { opacity: 0; } }
-      .porch118-webp { display: block; }
-      .porch118-webp-still { display: none; }
       /* Readiness dissolve: LanternBoot adds this class the moment the
          app's first surface is ready — never a timer. Keep the duration
          in step with BOOT_FADE_MS (src/loader-assets.js). */
       .porch95-boot-fade { animation: porch95-fade 250ms ease-out forwards; }
-      /* PORCH-119 dusk scene — mirrors the React fallback's CSS template
-         (src/lantern.jsx) rule for rule, amended Oct 22 (Brian):
-         lantern 200% bigger (184px), mark on top of every layer at 100%
-         opacity, firefly orbits around the lantern. */
-      .porch-dusk-scene { position: relative; width: 300px; height: 340px; display: flex; align-items: center; justify-content: center; }
-      /* Brian, Oct 22: the lantern image sits on top of all others
-         (z-index) at 100% opacity — breathing modulates the light layers
-         only, never the mark. */
-      .porch-dusk-scene > img { position: relative; z-index: 2; opacity: 1; }
+      /* Keep the same scene geometry on the pre-JS canvas and React fallback. */
+      .porch-dusk-scene { position: relative; isolation: isolate; width: 300px; height: 340px; display: flex; align-items: center; justify-content: center; }
+      .porch-dusk-mark { position: relative; z-index: 3; opacity: 1; display: block; }
       .porch-dusk-halo {
         position: absolute; left: 50%; top: 50%; width: 320px; height: 330px; z-index: 0;
         transform: translate(-50%, -50%); border-radius: 50%;
@@ -146,12 +116,6 @@
         font-family: Inter, system-ui, sans-serif; font-size: 15px; font-weight: 600; padding: 9px 24px;
       }
       .porch95-retry:hover { background: rgba(255,190,87,.12); }
-      /* prefers-reduced-motion: the asset's static first frame with the
-         plain fade into the app (the dissolve class itself stays live). */
-      @media (prefers-reduced-motion: reduce) {
-        .porch118-webp { display: none; }
-        .porch118-webp-still { display: block; }
-      }
       /* PORCH-119 reduced motion ac-8: static lighting, no particles,
          instant status swaps. */
       @media (prefers-reduced-motion: reduce) {
@@ -173,8 +137,7 @@
           <span class="porch-dusk-particle"></span>
           <span class="porch-dusk-particle"></span>
         </div>
-        <img class="porch118-webp" src="/loader.webp" width="137" height="170" alt="" aria-hidden="true" focusable="false" style="height:184px;width:auto" />
-        <img class="porch118-webp-still" src="/loader-still.webp" width="137" height="170" alt="" aria-hidden="true" focusable="false" style="height:184px;width:auto" />
+        <img class="porch-dusk-mark" src="/icon-512.png" width="512" height="512" alt="" aria-hidden="true" focusable="false" style="height:184px;width:184px" />
       </div>
       <div class="porch95-wordmark" aria-hidden="true">porchlight</div>
       <div class="porch95-statusbox" aria-hidden="true"></div>

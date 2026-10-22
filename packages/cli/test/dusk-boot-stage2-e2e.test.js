@@ -66,9 +66,8 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
 
     await runStep("hub healthy", waitHealthy(base));
 
-    // The served first paint: the pre-JS porch-boot canvas carries the full
-    // dusk scene — deep navy canvas, the webp of record, lowercase wordmark,
-    // layered lighting, the polite announcement, and the fixed-height box.
+    // The served first paint: navy, static app icon, lowercase wordmark,
+    // layered lighting, polite announcement, and fixed-height status.
     const page = await runStep("GET /", (async () => {
       const res = await fetch(base);
       assert.equal(res.status, 200, `the SPA shell serves (${res.status})`);
@@ -79,7 +78,7 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
       assert.match(boot, /class="porch-dusk-halo"/, "the halo layer serves pre-JS");
       assert.match(boot, /class="porch-dusk-glow"/, "the floor-glow layer serves pre-JS");
       assert.match(boot, /class="porch-dusk-particle"/, "the particle layer serves pre-JS");
-      assert.match(boot, /class="porch118-webp" src="\/loader\.webp"/, "the animated webp of record serves");
+      assert.match(boot, /class="porch-dusk-mark" src="\/icon-512\.png"/, "the actual still Porchlight icon serves");
       assert.match(boot, />porchlight</, "the wordmark is lowercase on this surface");
       assert.match(boot, /<span class="porch95-announce">Porchlight is loading<\/span>/, "the polite announcement serves");
       assert.match(boot, /class="porch95-statusbox" aria-hidden="true"/, "the fixed-height status box serves");
@@ -87,16 +86,13 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
       return html;
     })());
 
-    // The assets the boot pulls: the animated webp and its still frame.
-    for (const [name, animated] of [["/loader.webp", true], ["/loader-still.webp", false]]) {
-      await runStep(`GET ${name}`, (async () => {
-        const res = await fetch(base + name);
-        assert.equal(res.status, 200, `${name} serves (${res.status})`);
-        const bytes = Buffer.from(await res.arrayBuffer());
-        assert.ok(bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP", `${name} is a webp`);
-        assert.equal(bytes.includes(Buffer.from("ANIM")), animated, `${name} animated=${animated}`);
-      })());
-    }
+    // The original icon must load as a PNG on the deployed hub.
+    await runStep("GET /icon-512.png", (async () => {
+      const res = await fetch(base + "/icon-512.png");
+      assert.equal(res.status, 200, "the boot icon serves");
+      const bytes = Buffer.from(await res.arrayBuffer());
+      assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "the boot icon is a PNG");
+    })());
 
     // The bundle: the React boot layer rides the same dusk contract, with
     // the scene paint on the boot tokens (screens carry no literal color).

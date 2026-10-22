@@ -103,6 +103,8 @@ After `start`:
 2. Follow the bootstrap prompts: create the owner account (first and last name required) and name your first network; you become the network's owner in the same step.
 3. From there, you are inside the hub: create members, issue invites, and set quotas in the owner settings.
 
+The first-load dusk screen shows the still Porchlight icon above a quiet amber glow while the hub opens. Fireflies and light movement rest when reduced motion is enabled. If startup cannot reach the hub after its connection attempts, the screen holds a retry action instead of flashing an error.
+
 If bootstrap is interrupted, it is resumable: run `porchlight bootstrap` again and it continues from the last completed step instead of starting over. Diagnostics at any time: `porchlight status`.
 
 ### A stable address for your hub
