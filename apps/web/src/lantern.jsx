@@ -1,6 +1,6 @@
 // PORCH-119: the first-paint dusk boot uses the display-sized static
-// Porchlight icon (Brian, Oct 22 reference feedback). The mark stays opaque
-// above every lighting layer; breathing modulates only the ambient light.
+// Porchlight icon (Brian, Oct 22 reference feedback). The mark fades in
+// once loaded, above every lighting layer; breathing modulates ambient light.
 // The static pre-JS canvas in index.html is adopted by
 // LanternBoot and shares the fallback's scene geometry. Readiness, status,
 // failure, and cleanup keep the PORCH-095 boot machinery. LanternLoader
@@ -37,7 +37,8 @@ const CSS = `
 .porch118-webp { display: block; }
 .porch118-webp-still { display: none; }
 .porch-dusk-scene { position: relative; isolation: isolate; width: 300px; height: 340px; display: flex; align-items: center; justify-content: center; }
-.porch-dusk-mark { position: relative; z-index: 3; opacity: 1; display: block; }
+.porch-dusk-mark { position: relative; z-index: 3; opacity: 0; display: block; transition: opacity 300ms ease-out; }
+.porch-dusk-mark-loaded { opacity: 1; }
 .porch-dusk-halo {
   position: absolute; left: 50%; top: 50%; width: 320px; height: 330px; z-index: 0;
   transform: translate(-50%, -50%); border-radius: 50%;
@@ -68,15 +69,6 @@ const CSS = `
   animation: porch-dusk-orbit var(--d, 21s) ease-in-out infinite;
 }
 .porch-dusk-particle:nth-child(even) { animation-direction: reverse; }
-/* A curved, fading streak turns with the orbit's tangent; reverse flyers
-   keep the tail behind them instead of dragging it ahead of the head. */
-.porch-dusk-particle::after {
-  content: ""; position: absolute; left: -12px; top: -1px; width: 15px; height: 5px;
-  border-bottom: 1px solid var(--porch-boot-dusk-trail-edge); border-radius: 50%;
-  background: var(--porch-boot-dusk-tail);
-  transform: rotate(var(--tail-flip, 0deg));
-}
-.porch-dusk-particle:nth-child(even)::after { --tail-flip: 180deg; }
 /* The elliptical orbit: four eased waypoints around the anchor with a
    gentle rotate wiggle — curved everywhere, never a straight strobe. */
 @keyframes porch-dusk-orbit {
@@ -137,14 +129,20 @@ const CSS = `
 @media (prefers-reduced-motion: reduce) {
   .porch-dusk-particle { display: none; }
   .porch-dusk-halo, .porch-dusk-glow { animation: none; opacity: .85; }
-  .porch95-status { transition: none; }
+  .porch-dusk-mark, .porch95-status { transition: none; }
 }
 `;
 
 /** The boot uses the display-sized static app icon, preloaded in index.html. */
 function BootMark() {
   return <img className="porch-dusk-mark" src="/icon-192.png" fetchPriority="high" width={192} height={192}
-    alt="" aria-hidden="true" focusable="false" style={{ height: BOOT_MARK_H, width: BOOT_MARK_H }} />;
+    alt="" aria-hidden="true" focusable="false" style={{ height: BOOT_MARK_H, width: BOOT_MARK_H }}
+    onLoad={(event) => {
+      const mark = event.currentTarget;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (mark.isConnected) mark.classList.add("porch-dusk-mark-loaded");
+      }));
+    }} />;
 }
 
 /** The loader mark — the animated webp of record, still frame under reduced motion. */

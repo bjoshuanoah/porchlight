@@ -123,7 +123,22 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
 
     console.log("✓ dusk boot served by the deployed hub");
   } finally {
-    if (hub && !hub.killed) hub.kill("SIGTERM");
-    if (!keep) await rm(home, { recursive: true, force: true });
+    if (hub && hub.exitCode === null) {
+      hub.kill("SIGTERM");
+      await new Promise((resolve) => hub.once("exit", resolve));
+    }
+    if (!keep) {
+      // Hub children finish shutting down after the supervisor exits.
+      // Do not turn a successful deployed-hub proof into an ENOTEMPTY race.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          await rm(home, { recursive: true, force: true });
+          break;
+        } catch (error) {
+          if (error.code !== "ENOTEMPTY" || attempt === 4) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+    }
   }
 });

@@ -34,9 +34,8 @@
     </script>
   </head>
   <body>
-    <!-- The static first paint is the dusk boot: the display-sized still
-         icon above separate ambient lighting and orbiting fireflies.
-         LanternBoot adopts this canvas until the app is ready. -->
+    <!-- The static dusk canvas paints before the SPA bundle; LanternBoot
+         adopts it until readiness. -->
     <style>
       @keyframes porch95-fade { from { opacity: 1; } to { opacity: 0; } }
       /* Readiness dissolve: LanternBoot adds this class the moment the
@@ -45,7 +44,8 @@
       .porch95-boot-fade { animation: porch95-fade 250ms ease-out forwards; }
       /* Keep the same scene geometry on the pre-JS canvas and React fallback. */
       .porch-dusk-scene { position: relative; isolation: isolate; width: 300px; height: 340px; display: flex; align-items: center; justify-content: center; }
-      .porch-dusk-mark { position: relative; z-index: 3; opacity: 1; display: block; }
+      .porch-dusk-mark { position: relative; z-index: 3; opacity: 0; display: block; transition: opacity 300ms ease-out; }
+      .porch-dusk-mark-loaded { opacity: 1; }
       .porch-dusk-halo {
         position: absolute; left: 50%; top: 50%; width: 320px; height: 330px; z-index: 0;
         transform: translate(-50%, -50%); border-radius: 50%;
@@ -69,17 +69,10 @@
       .porch-dusk-particle {
         position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; border-radius: 50%; opacity: .9;
         background: radial-gradient(circle at 40% 40%, #FFF6D8 0%, #FFE2B0 40%, #FFBE57 75%, rgba(255,190,87,0) 100%);
-        box-shadow: 0 0 5px 1px rgba(255,226,176,.65), 0 0 12px 3px rgba(255,190,87,.23);
+        box-shadow: 0 0 6px 2px rgba(255,226,176,.75), 0 0 18px 5px rgba(255,190,87,.28);
         animation: porch-dusk-orbit var(--d, 21s) ease-in-out infinite;
       }
       .porch-dusk-particle:nth-child(even) { animation-direction: reverse; }
-      .porch-dusk-particle::after {
-        content: ""; position: absolute; left: -12px; top: -1px; width: 15px; height: 5px;
-        border-bottom: 1px solid rgba(255,226,176,.55); border-radius: 50%;
-        background: linear-gradient(to right, rgba(255,190,87,0), rgba(255,190,87,.18) 70%, rgba(255,226,176,.38));
-        transform: rotate(var(--tail-flip, 0deg));
-      }
-      .porch-dusk-particle:nth-child(even)::after { --tail-flip: 180deg; }
       /* The elliptical orbit: four eased waypoints around the anchor with
          a gentle rotate wiggle — curved everywhere, never a straight run. */
       @keyframes porch-dusk-orbit {
@@ -127,7 +120,7 @@
       @media (prefers-reduced-motion: reduce) {
         .porch-dusk-particle { display: none; }
         .porch-dusk-halo, .porch-dusk-glow { animation: none; opacity: .85; }
-        .porch95-status { transition: none; }
+        .porch-dusk-mark, .porch95-status { transition: none; }
       }
     </style>
     <div id="porch-boot" role="status" style="position:fixed;top:0;right:0;bottom:0;left:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:var(--porch-boot-bg,#0B1622);z-index:2147483000;pointer-events:none;overflow:hidden">
@@ -144,6 +137,21 @@
           <span class="porch-dusk-particle"></span>
         </div>
         <img class="porch-dusk-mark" src="/icon-192.png" fetchpriority="high" width="192" height="192" alt="" aria-hidden="true" focusable="false" style="height:184px;width:184px" />
+      <script>
+        // The icon may finish before this script runs (especially from cache).
+        // Reveal only after its bytes are ready, never after a boot timer.
+        (function (mark) {
+          function reveal() {
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () {
+                if (mark.isConnected) mark.classList.add("porch-dusk-mark-loaded");
+              });
+            });
+          }
+          if (mark.complete && mark.naturalWidth) reveal();
+          else mark.addEventListener("load", reveal, { once: true });
+        })(document.currentScript.previousElementSibling);
+      </script>
       </div>
       <div class="porch95-wordmark" aria-hidden="true">porchlight</div>
       <div class="porch95-statusbox" aria-hidden="true"></div>

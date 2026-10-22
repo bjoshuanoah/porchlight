@@ -7,7 +7,7 @@ heading is missing).
 
 ## Unreleased
 
-- **The porch light arrives with the page.** The dusk boot preloads a display-sized still lantern and reuses it across repeat visits without waiting on the app bundle or revalidating the image on every open. Warm, orbiting fireflies now have soft glows and short curved trails against the quiet navy canvas; reduced-motion visitors keep a still scene.
+- **The porch light arrives with the page.** The dusk boot preloads a display-sized still lantern and reuses it across repeat visits without waiting on the app bundle or revalidating the image on every open. The lantern fades in over 300ms when its image loads instead of appearing abruptly; six slow orbiting fireflies glow softly without tails against the quiet navy canvas. Reduced-motion visitors see the still mark immediately after loading.
 
 ## v0.5.0 — 2026-10-20
 
