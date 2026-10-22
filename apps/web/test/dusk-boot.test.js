@@ -108,6 +108,23 @@ test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, m
   assert.ok(haloAt < glowAt && glowAt < partsAt && partsAt < markAt, "lighting renders behind the mark");
 });
 
+test("ac-3 amendment (Brian, Oct 22): particle count +300% and spread +200%", async () => {
+  await withLantern(async ({ LanternBoot }) => {
+    const html = renderToString(React.createElement(LanternBoot));
+    const css = styleOf(html);
+    // Count +300%: the field carries 24 motes (6 × 4).
+    assert.equal((html.match(/class="porch-dusk-particle"/g) ?? []).length, 24, "the field carries 24 motes (6 × 4, +300%)");
+    // The ruled amendment pins both canvases: 24 per-mote orbit rows, the
+    // widest sweeping exactly 3× the prior 128px ceiling.
+    for (const text of [css, await readFile(join(webRoot, "index.html"), "utf8")]) {
+      const rows = text.match(/\.porch-dusk-particle:nth-child\((?!even)\d+\) \{[^}]*\}/g) ?? [];
+      assert.equal(rows.length, 24, `both canvases carry 24 orbit rows (${rows.length} found)`);
+      const radii = rows.map((row) => Number(row.match(/--r:\s*(\d+)px/)[1]));
+      assert.equal(Math.max(...radii), 384, "the widest orbit is 384px — 3× the prior 128px ceiling");
+    }
+  });
+});
+
 test("ac-4: breathing modulates the light layers only — never the mark's position or scale", async () => {
   await withLantern(async ({ LanternBoot }) => {
     const css = styleOf(renderToString(React.createElement(LanternBoot)));
