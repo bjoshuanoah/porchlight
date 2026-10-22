@@ -75,9 +75,9 @@ test("ac-1: every offline set gates on the boot hold — loading covers connecti
 	const renewCatch = source.slice(source.indexOf("membershipFailed = failed;"), source.indexOf("next.renewedAt ="));
 	assert.match(renewCatch, /if \(!bootHoldRef\.current\) setOffline\(true\);/,
 		"a renewal failure during the hold renders the loading surface only");
-	const onStateBlock = source.slice(source.indexOf("onState: ({ connected }) => {"), source.indexOf("void catchUpOrigin(eventUrl"));
-	assert.match(onStateBlock, /if \(!membershipEndedRef\.current && !bootHoldRef\.current\) setOffline\(true\);/,
-		"a transport flap mid-boot never banners");
+	const onStateBlock = source.slice(source.indexOf("onState: ({ connected, established }) => {"), source.indexOf("void catchUpOrigin(eventUrl"));
+	assert.match(onStateBlock, /if \(established && !membershipEndedRef\.current && !bootHoldRef\.current\) setOffline\(true\);/,
+		"a transport flap mid-boot never banners; only an established-then-lost outage earns the state");
 	const catchUpBlock = source.slice(source.indexOf("const catchUpOrigin = useCallback"), source.indexOf("const liveSig ="));
 	assert.match(catchUpBlock, /if \(!bootHoldRef\.current\) setOffline\(true\);/,
 		"a failed replay resolve during the hold renders loading only");
@@ -135,6 +135,21 @@ test("ac-3: the notice variant is gone — the offline Alert carries the verbati
 		assert.doesNotMatch(text, /Your family server is unreachable\. Showing saved moments where available\./);
 	}
 	assert.doesNotMatch(main, /setNotice\(noticeText\)|noticeText/, "applyFeeds no longer renders an unreachable notice");
+});
+
+test("ac-1 follow-up: realtime establishment never earns the banner — only an established-then-lost outage does (Brian Oct 22: 'is it socket errors')", async () => {
+	const realtime = await src("realtime.js");
+	assert.match(realtime, /entry = \{ socket, refs, connected: false, established: false \};/,
+		"a fresh stream starts unestablished");
+	assert.match(realtime, /entry\.established = true;/,
+		"only the connect handler proves establishment");
+	for (const callback of realtime.matchAll(/ref\.onState\?\.\((\{[^}]*\})\)/g)) {
+		assert.match(callback[1], /established:/, "every state callback carries the establishment fact");
+	}
+	const main = await src("main.jsx");
+	const onStateBlock = main.slice(main.indexOf("onState: ({ connected, established }) => {"), main.indexOf("void catchUpOrigin(eventUrl"));
+	assert.match(onStateBlock, /if \(established && !membershipEndedRef\.current && !bootHoldRef\.current\) setOffline\(true\);/,
+		"a never-established stream's connect attempts render loading only — a first-attempt connect_error never flashes the unreachable banner");
 });
 
 test("ac-4: error surfaces are never dismissed by a timer alone", async () => {

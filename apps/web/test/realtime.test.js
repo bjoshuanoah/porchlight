@@ -70,7 +70,7 @@ test("a transport loss re-establishes with backoff and re-reads the CURRENT cred
     url: `http://127.0.0.1:${hub.port}`,
     identityId: "did_1",
     getAuth: () => ({ networkId: "net_family", token }),
-    onState: (state) => states.push(state.connected),
+    onState: (state) => states.push(state),
   });
   while (!stream.state()) await new Promise((resolve) => setTimeout(resolve, 25));
   // A transport loss (engine close — a hub dying mid-conversation): the
@@ -83,7 +83,11 @@ test("a transport loss re-establishes with backoff and re-reads the CURRENT cred
     { networkId: "net_family", token: "t1" },
     { networkId: "net_family", token: "t2" },
   ], "every handshake reads the live credential, never a stale closure");
-  assert.equal(states.at(-1), true, "reconnected");
+  assert.equal(states.at(-1)?.connected, true, "reconnected");
+  assert.ok(states.every((state) => typeof state.established === "boolean"),
+    "every connection state carries the establishment fact (PORCH-117 follow-up)");
+  assert.ok(states.some((state) => state.connected && state.established),
+    "an established stream reports its establishment");
   // A POLICY close (the revocation kill, PORCH-047) is server truth: the
   // subscription is closed and no reconnect-loop rides back inside the
   // backoff ceiling — the ONE scheduled re-open (hub-restart recovery) is
@@ -95,6 +99,28 @@ test("a transport loss re-establishes with backoff and re-reads the CURRENT cred
   assert.equal(stream.state(), false, "the connection fact reports the closure truthfully");
   stream.close();
   await hub.close();
+});
+
+test("an establishment still in flight reports established: false — a first-attempt connect_error never claims a lost connection (PORCH-117 follow-up)", async (t) => {
+  t.after(() => closeEventStreams());
+  // Nothing listens on this port: every websocket attempt fails before a
+  // handshake — exactly Brian's report window ("not enough time to have
+  // established a connection").
+  const states = [];
+  const stream = openEventStream({
+    url: "http://127.0.0.1:1",
+    identityId: "did_est",
+    getAuth: () => ({ networkId: "net_family", token: "t1" }),
+    onState: (state) => states.push(state),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  stream.close();
+  assert.ok(states.length >= 1, "the failed establishment reached the consumer");
+  for (const state of states) {
+    assert.equal(state.connected, false);
+    assert.equal(state.established, false,
+      "no handshake ever completed — connection trouble here renders loading only, never the earned banner");
+  }
 });
 
 test("closeEventStreams tears down every manager (module teardown seam)", async (t) => {

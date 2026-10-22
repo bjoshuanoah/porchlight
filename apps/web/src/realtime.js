@@ -34,6 +34,14 @@ const sockets = new Map();
  * let the hub refuse (an absent credential is refused, never guessed).
  * Returns a handle: `state()` reports the connection fact, `close()`
  * releases this consumer's reference (the last one disconnects the socket).
+ *
+ * Every `onState` callback carries `established` alongside `connected`
+ * (PORCH-117, Brian Oct 22, 2026 follow-up): true only after this stream
+ * has completed at least one successful handshake. An establishment still
+ * in flight — connect attempts failing or pending before the first
+ * connect — is loading, never an earned error; the transport's own backoff
+ * keeps working the state. Only an established-then-lost connection is a
+ * definitive outage of record.
  */
 export function openEventStream({ url, identityId, getAuth, onEvent, onState, log = console } = {}) {
   const origin = new URL(url).origin;
@@ -55,11 +63,12 @@ export function openEventStream({ url, identityId, getAuth, onEvent, onState, lo
     });
     socket.on("connect", () => {
       if (entry) entry.connected = true;
-      for (const ref of refs) ref.onState?.({ connected: true });
+      if (entry) entry.established = true;
+      for (const ref of refs) ref.onState?.({ connected: true, established: true });
     });
     socket.on("disconnect", (reason) => {
       if (entry) entry.connected = false;
-      for (const ref of refs) ref.onState?.({ connected: false });
+      for (const ref of refs) ref.onState?.({ connected: false, established: Boolean(entry?.established) });
       // PORCH-047 contract: a POLICY close (the revocation kill, a hub
       // closure/restart) is not a transport loss — socket.io does not
       // re-establish it itself, and the room must not reconnect-loop a dead
@@ -80,9 +89,9 @@ export function openEventStream({ url, identityId, getAuth, onEvent, onState, lo
       // / an unreachable hub class). Every open consumer sees it once; the
       // backoff re-establishes — no poll cycle is invented to compensate.
       if (log?.debug && error?.message) log.debug(`realtime unavailable (${error.message})`);
-      for (const ref of refs) ref.onState?.({ connected: false, error: error?.message ?? null });
+      for (const ref of refs) ref.onState?.({ connected: false, established: Boolean(entry?.established), error: error?.message ?? null });
     });
-    entry = { socket, refs, connected: false };
+    entry = { socket, refs, connected: false, established: false };
     sockets.set(key, entry);
   }
   const ref = { onEvent, onState };
