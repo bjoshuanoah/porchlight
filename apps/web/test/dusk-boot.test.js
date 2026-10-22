@@ -2,7 +2,7 @@
 // (Brian, Oct 21, 2026) riding PORCH-118's webp boot machinery and
 // PORCH-095's readiness/dissolve contract, both untouched. The suite pins
 // the ruling's hard edges per acceptance criterion: the layered dusk scene
-// (halo behind the mark, flattened glow beneath, sparse drifted particles)
+// (halo behind the mark, flattened glow beneath, sparse firefly orbits)
 // with the mark and typography never blurred or filtered, the breathing
 // light layers (never the mark), the ruled five-line rotation revealed at
 // 1.5s and crossfaded every 3s in a fixed-height box, the immediate ≤300ms
@@ -83,6 +83,9 @@ test("ac-1: the dusk boot carries the webp mark, the lowercase wordmark, and no 
   assert.match(boot, /var\(--porch-boot-bg,#0B1622\)/, "deep navy rides the boot token pre-JS");
   assert.match(boot, />porchlight</);
   assert.match(boot, /src="\/loader\.webp"/);
+  // Brian, Oct 22: the lantern is 200% bigger — 184px on both canvases.
+  assert.equal(assets.BOOT_MARK_H, 184, "the React boot mark doubles");
+  assert.match(boot, /style="height:184px;width:auto"/, "the pre-JS canvas carries the doubled mark");
 });
 
 test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, mark and typography never blurred", async () => {
@@ -104,9 +107,11 @@ test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, m
     const halo = css.match(/\.porch-dusk-halo \{[^}]*\}/)[0];
     assert.ok(Number(glow.match(/top:\s*(\d+)px/)[1]) > 100, "the glow sits beneath the mark");
     assert.ok(halo.includes("top: 50%"), "the halo sits behind the mark's center");
-    // Separate layers by construction: the mark rides z-above the scene and
-    // neither the mark nor the wordmark/status text carries a blur or filter.
-    assert.match(css, /\.porch-dusk-scene > img \{ position: relative; z-index: 1; \}/);
+    // Separate layers by construction: the mark rides the top of the scene
+    // (Brian, Oct 22: "make sure the lantern image is on top of the others")
+    // at full opacity — and neither the mark nor the wordmark/status text
+    // carries a blur or filter.
+    assert.match(css, /\.porch-dusk-scene > img \{ position: relative; z-index: 2; opacity: 1; \}/);
     for (const sel of ["\\.porch-dusk-scene > img", "\\.porch95-wordmark", "\\.porch95-status \\{", "\\.porch95-status-on"]) {
       const rule = css.match(new RegExp(sel.replace(/[{}\\]/g, (c) => c) + "[^}]*}"));
       assert.ok(rule, `rule for ${sel} exists`);
@@ -127,21 +132,29 @@ test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, m
   assert.ok(haloAt < glowAt && glowAt < partsAt && partsAt < markAt, "lighting renders behind the mark");
 });
 
-test("ac-3: sparse particles drift on slow gently curved paths with bright heads and fading tails", async () => {
+test("ac-3: sparse firefly particles orbit the lantern on slow curved paths with bright heads and fading tails", async () => {
   await withLantern(async ({ LanternBoot }) => {
     const html = renderToString(React.createElement(LanternBoot));
     const css = styleOf(html);
-    // Sparse: six drifting motes, desynced and individually tuned.
+    // Sparse: six orbiting motes, desynced and individually tuned.
     assert.equal((html.match(/class="porch-dusk-particle"/g) ?? []).length, 6, "the field stays sparse");
     // Slow (multi-second durations) with per-particle variation.
-    const durations = [...css.matchAll(/--d:\s*(1[5-9]|2[0-2])s/g)].map((m) => m[1]);
-    assert.ok(durations.length >= 6, "every particle drifts on a multi-second rhythm");
-    // Gently curved: the drift keyframes carry alternating translate
-    // waypoints (never a straight vertical run).
-    const drift = css.match(/@keyframes porch-dusk-drift \{[\s\S]*?\n\}/)[0];
-    const waypoints = [...drift.matchAll(/transform:/g)].length;
+    const durations = [...css.matchAll(/--d:\s*(1[89]|[23]\d)s/g)].map((m) => m[1]);
+    assert.ok(durations.length >= 6, "every firefly orbits on a multi-second rhythm");
+    // Orbiting the lantern (Brian, Oct 22): the motes anchor at the mark's
+    // center and circle it on per-particle elliptical paths.
+    const moteRule = css.match(/\.porch-dusk-particle \{[^}]*\}/)[0];
+    assert.match(moteRule, /left: 50%; top: 50%/, "the motes anchor at the mark's center");
+    const radii = [...css.matchAll(/--r:\s*(\d+)px;.*--ry:\s*(\d+)px/g)].map((m) => [Number(m[1]), Number(m[2])]);
+    assert.ok(radii.length >= 6, "each firefly carries its own orbit radius and squash");
+    assert.ok(radii.every(([r, ry]) => r >= 60 && ry > 0 && ry < r), "the orbits are elliptical — squashed per mote");
+    // Gently curved: the orbit keyframes travel eased waypoints with a
+    // rotate wiggle (never a straight run).
+    const orbitKey = css.match(/@keyframes porch-dusk-orbit \{[\s\S]*?\n\}/)[0];
+    const waypoints = [...orbitKey.matchAll(/transform:/g)].length;
     assert.ok(waypoints >= 4, `the path curves through ${waypoints} waypoints`);
-    assert.match(drift, /rotate/, "the path carries gentle curvature, not a straight line");
+    assert.match(orbitKey, /rotate/, "the path carries gentle curvature");
+    assert.match(css, /animation-direction: reverse/, "half the fireflies orbit the other way — no uniform swim");
     // Bright head, short fading tail — the paint rides the token layer; the
     // pre-JS canvas carries the same literals as fallback-only values.
     const mote = css.match(/\.porch-dusk-particle \{[^}]*\}/)[0];
@@ -326,7 +339,7 @@ test("ac-12: bundle discipline — the scene composes from CSS only, and the sta
   // The dusk scene lives in exactly two places — the pre-JS canvas and the
   // React fallback (no third copy to drift).
   const index = await readFile(join(webRoot, "index.html"), "utf8");
-  for (const cls of ["porch-dusk-halo", "porch-dusk-glow", "porch-dusk-particle", "porch-dusk-drift", "porch-dusk-breathe"]) {
+  for (const cls of ["porch-dusk-halo", "porch-dusk-glow", "porch-dusk-particle", "porch-dusk-orbit", "porch-dusk-breathe"]) {
     assert.match(index, new RegExp(cls));
     assert.match(lantern, new RegExp(cls));
   }
