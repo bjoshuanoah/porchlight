@@ -55,13 +55,14 @@ const CSS = `
    brightening, never flashing, never moving the mark. */
 @keyframes porch-dusk-breathe { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
 .porch-dusk-particles { position: absolute; inset: 0; z-index: 0; }
-/* Brian, Oct 22: the particles orbit the lantern like fireflies. Each mote
-   is anchored at the mark's center and circles it on its own slow
-   elliptical path — per-mote radius, squash, period, and desynced phase,
-   alternating direction — never a uniform swarm. The orbit composes from
-   translate waypoints so the mark's own layers stay untouched, and the
-   motes stay z-under the mark: passing "behind" the lantern reads as the
-   orbit wrapping it. */
+/* Brian, Oct 22, second amendment: count +300% (6 → 24 motes) and
+   spread +200% (each mote's field extent ×3 — the widest orbit now
+   sweeps 384px, 3× the prior 128px ceiling). The tiered radii keep
+   near-lantern depth against the wide field, per-mote period and
+   desynced phase stay, alternating direction — never a uniform swarm.
+   The orbit composes from translate waypoints so the mark's own layers
+   stay untouched, and the motes stay z-under the mark: passing "behind"
+   the lantern reads as the orbit wrapping it. */
 .porch-dusk-particle {
   position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; border-radius: 50%; opacity: .9;
   background: var(--porch-boot-dusk-mote);
@@ -78,12 +79,30 @@ const CSS = `
   75%  { transform: translate(calc(var(--r, 88px) * -.06), var(--ry, 40px)) rotate(-360deg); }
   100% { transform: translate(var(--r, 88px), 0) rotate(-450deg); }
 }
-.porch-dusk-particle:nth-child(1) { --r: 88px;  --ry: 38px; --d: 21s; animation-delay: -4s; }
-.porch-dusk-particle:nth-child(2) { --r: 112px; --ry: 52px; --d: 27s; animation-delay: -13s; }
-.porch-dusk-particle:nth-child(3) { --r: 74px;  --ry: 30px; --d: 18s; animation-delay: -9s; }
-.porch-dusk-particle:nth-child(4) { --r: 128px; --ry: 58px; --d: 30s; animation-delay: -2s; }
-.porch-dusk-particle:nth-child(5) { --r: 96px;  --ry: 44px; --d: 23s; animation-delay: -17s; }
-.porch-dusk-particle:nth-child(6) { --r: 108px; --ry: 34px; --d: 26s; animation-delay: -21s; }
+.porch-dusk-particle:nth-child(1) { --r: 264px; --ry: 114px; --d: 21s; animation-delay: -4s; }
+.porch-dusk-particle:nth-child(2) { --r: 336px; --ry: 156px; --d: 27s; animation-delay: -13s; }
+.porch-dusk-particle:nth-child(3) { --r: 222px; --ry: 90px;  --d: 18s; animation-delay: -9s; }
+.porch-dusk-particle:nth-child(4) { --r: 384px; --ry: 174px; --d: 30s; animation-delay: -2s; }
+.porch-dusk-particle:nth-child(5) { --r: 288px; --ry: 132px; --d: 23s; animation-delay: -17s; }
+.porch-dusk-particle:nth-child(6) { --r: 324px; --ry: 102px; --d: 26s; animation-delay: -21s; }
+.porch-dusk-particle:nth-child(7) { --r: 148px; --ry: 64px;  --d: 16s; animation-delay: -1s; }
+.porch-dusk-particle:nth-child(8) { --r: 232px; --ry: 96px;  --d: 22s; animation-delay: -11s; }
+.porch-dusk-particle:nth-child(9) { --r: 110px; --ry: 48px;  --d: 15s; animation-delay: -7s; }
+.porch-dusk-particle:nth-child(10) { --r: 300px; --ry: 128px; --d: 28s; animation-delay: -19s; }
+.porch-dusk-particle:nth-child(11) { --r: 186px; --ry: 78px;  --d: 19s; animation-delay: -3s; }
+.porch-dusk-particle:nth-child(12) { --r: 344px; --ry: 148px; --d: 29s; animation-delay: -25s; }
+.porch-dusk-particle:nth-child(13) { --r: 132px; --ry: 56px;  --d: 17s; animation-delay: -14s; }
+.porch-dusk-particle:nth-child(14) { --r: 258px; --ry: 108px; --d: 24s; animation-delay: -6s; }
+.porch-dusk-particle:nth-child(15) { --r: 96px;  --ry: 42px;  --d: 14s; animation-delay: -10s; }
+.porch-dusk-particle:nth-child(16) { --r: 312px; --ry: 136px; --d: 27s; animation-delay: -22s; }
+.porch-dusk-particle:nth-child(17) { --r: 210px; --ry: 88px;  --d: 20s; animation-delay: -15s; }
+.porch-dusk-particle:nth-child(18) { --r: 358px; --ry: 160px; --d: 31s; animation-delay: -8s; }
+.porch-dusk-particle:nth-child(19) { --r: 122px; --ry: 52px;  --d: 16s; animation-delay: -5s; }
+.porch-dusk-particle:nth-child(20) { --r: 274px; --ry: 120px; --d: 25s; animation-delay: -24s; }
+.porch-dusk-particle:nth-child(21) { --r: 170px; --ry: 72px;  --d: 18s; animation-delay: -12s; }
+.porch-dusk-particle:nth-child(22) { --r: 368px; --ry: 168px; --d: 32s; animation-delay: -18s; }
+.porch-dusk-particle:nth-child(23) { --r: 200px; --ry: 84px;  --d: 21s; animation-delay: -20s; }
+.porch-dusk-particle:nth-child(24) { --r: 288px; --ry: 118px; --d: 26s; animation-delay: -16s; }
 /* Fixed-height status box (ac-6): crossfading children swap in place, the
    surrounding layout never shifts. */
 .porch95-statusbox { position: relative; height: 20px; width: 300px; }
@@ -354,7 +373,7 @@ export function LanternBoot({
         <div className="porch-dusk-halo"></div>
         <div className="porch-dusk-glow"></div>
         <div className="porch-dusk-particles">
-          {[...Array(6)].map((_, i) => <span key={i} className="porch-dusk-particle"></span>)}
+          {[...Array(24)].map((_, i) => <span key={i} className="porch-dusk-particle"></span>)}
         </div>
         <BootMark />
       </div>
