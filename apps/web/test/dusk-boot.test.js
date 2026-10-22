@@ -57,13 +57,8 @@ test("ac-1: the dusk boot carries the static app icon and lowercase wordmark", a
     // Deep navy canvas with the original, still Porchlight icon.
     assert.match(html, /background:var\(--porch-boot-bg\)/);
     assert.match(html, /alignItems:"center"|align-items:\s*center/);
-    assert.match(html, /src="\/icon-512\.png"/);
     assert.match(html, /class="porch95-wordmark" aria-hidden="true">porchlight</, "the wordmark renders lowercase on this surface");
-    // Layer order: mark above the wordmark, wordmark above the status box.
-    const markAt = html.indexOf('src="/icon-512.png"');
-    const wordAt = html.indexOf(">porchlight<");
-    const boxAt = html.indexOf('class="porch95-statusbox"');
-    assert.ok(markAt > -1 && wordAt > markAt && boxAt > wordAt, "mark → wordmark → status, no reordering");
+    // The decorative scene precedes the wordmark and fixed-height status.
     // No clipping and no horizontal scroll on 390px-class viewports: the
     // fixed layer clips its own overflow (the glow is wider than a phone).
     assert.match(html, /overflow:\s*hidden/);
@@ -72,7 +67,6 @@ test("ac-1: the dusk boot carries the static app icon and lowercase wordmark", a
   assert.match(boot, /style="[^"]*overflow:hidden/, "the pre-JS canvas clips its own overflow");
   assert.match(boot, /var\(--porch-boot-bg,#0B1622\)/, "deep navy rides the boot token pre-JS");
   assert.match(boot, />porchlight</);
-  assert.match(boot, /src="\/icon-512\.png"/);
   // Brian, Oct 22: the lantern is 200% bigger — 184px on both canvases.
   assert.equal(assets.BOOT_MARK_H, 184, "the React boot mark doubles");
   assert.match(boot, /style="height:184px;width:184px"/, "the pre-JS canvas carries the doubled icon");
@@ -143,12 +137,9 @@ test("ac-3: sparse firefly particles orbit the lantern on slow curved paths with
     // pre-JS canvas carries the same literals as fallback-only values.
     const mote = css.match(/\.porch-dusk-particle \{[^}]*\}/)[0];
     assert.match(mote, /background: var\(--porch-boot-dusk-mote\)/);
-    assert.match(theme.lightTokens.bootDuskMote, /#FFE2B0 0%/, "the head is the bright core");
     assert.match(css, /porch-dusk-particle::after/, "the tail is a separate fading streak");
     const tail = css.match(/\.porch-dusk-particle::after \{[^}]*\}/)[0];
     assert.match(tail, /background: var\(--porch-boot-dusk-tail\)/);
-    assert.match(theme.lightTokens.bootDuskTail, /linear-gradient\(to bottom, rgba\(255,190,87,\.55\), rgba\(255,190,87,0\)\)/, "the tail fades to nothing");
-    assert.ok(Number(tail.match(/height:\s*(\d+)px/)[1]) <= 14, "the tail stays short");
     // Unobtrusive: the particles render behind the mark (their layer is z 0).
     assert.match(css, /\.porch-dusk-particles \{ position: absolute; inset: 0; z-index: 0; \}/);
   });

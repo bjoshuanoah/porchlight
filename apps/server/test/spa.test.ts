@@ -14,6 +14,7 @@ test("hub serves its bundled SPA and client routes without claiming API, discove
   const html = "<!doctype html><html><body>Porchlight bundled SPA</body></html>";
   await writeFile(join(webRoot, "index.html"), html);
   await writeFile(join(webRoot, "assets", "app.js"), "window.porchlightSpa = true;");
+  await writeFile(join(webRoot, "icon-192.png"), Buffer.from("89504e470d0a1a0a", "hex"));
 
   const store = createMemoryStore();
   const app = createServer({
@@ -41,6 +42,13 @@ test("hub serves its bundled SPA and client routes without claiming API, discove
   assert.equal(asset.status, 200);
   assert.match(asset.headers.get("content-type") ?? "", /^(?:text|application)\/javascript/, "asset must serve as JavaScript, never the HTML fallback");
   assert.equal(await asset.text(), "window.porchlightSpa = true;");
+  const bootIcon = await fetch(`${base}/icon-192.png`);
+  assert.equal(bootIcon.status, 200);
+  assert.equal(bootIcon.headers.get("cache-control"), "public, max-age=3600",
+    "repeat visits reuse the boot icon without revalidation");
+  assert.equal(Buffer.from(await bootIcon.arrayBuffer()).toString("hex"), "89504e470d0a1a0a");
+  assert.notEqual(asset.headers.get("cache-control"), bootIcon.headers.get("cache-control"),
+    "only the stable boot mark receives the bounded cache lifetime");
 
   const health = await fetch(`${base}/api/health`);
   assert.equal(health.status, 200);

@@ -38,8 +38,10 @@ const bootTokens = {
   // layer consumes the properties bare — screens carry no literal color.
   bootDuskHalo: "radial-gradient(circle closest-side, rgba(255,190,87,.30) 0%, rgba(255,190,87,.12) 42%, rgba(255,190,87,0) 70%)",
   bootDuskGlow: "radial-gradient(closest-side, rgba(255,190,87,.26) 0%, rgba(255,190,87,.09) 55%, rgba(255,190,87,0) 78%)",
-  bootDuskMote: "radial-gradient(circle at 40% 40%, #FFE2B0 0%, #FFBE57 55%, rgba(255,190,87,0) 100%)",
-  bootDuskTail: "linear-gradient(to bottom, rgba(255,190,87,.55), rgba(255,190,87,0))",
+  bootDuskMote: "radial-gradient(circle at 40% 40%, #FFF6D8 0%, #FFE2B0 40%, #FFBE57 75%, rgba(255,190,87,0) 100%)",
+  bootDuskTail: "linear-gradient(to right, rgba(255,190,87,0), rgba(255,190,87,.18) 70%, rgba(255,226,176,.38))",
+  bootDuskSparkGlow: "0 0 5px 1px rgba(255,226,176,.65), 0 0 12px 3px rgba(255,190,87,.23)",
+  bootDuskTrailEdge: "rgba(255,226,176,.55)",
   bootDuskEdge: "rgba(255,190,87,.65)",
   bootDuskHover: "rgba(255,190,87,.12)",
 };
@@ -300,10 +302,12 @@ const CSS_VAR_NAMES = [
   // both modes) — declared in both blocks, so the boot surfaces consume
   // custom properties like every other screen.
   ["bootBg", "boot-bg"], ["bootInk", "boot-ink"], ["bootStatusInk", "boot-status-ink"],
-  // PORCH-119: the dusk scene's light layers (halo, floor glow, particle
-  // head, particle tail, retry edge, retry hover) — scene paint values.
+  // PORCH-119: scene paint (halo, floor glow, particle head/tail/glow,
+  // retry edge and hover) lives in the token layer.
   ["bootDuskHalo", "boot-dusk-halo"], ["bootDuskGlow", "boot-dusk-glow"],
   ["bootDuskMote", "boot-dusk-mote"], ["bootDuskTail", "boot-dusk-tail"],
+  ["bootDuskSparkGlow", "boot-dusk-spark-glow"],
+  ["bootDuskTrailEdge", "boot-dusk-trail-edge"],
   ["bootDuskEdge", "boot-dusk-edge"], ["bootDuskHover", "boot-dusk-hover"],
 ];
 

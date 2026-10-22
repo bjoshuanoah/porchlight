@@ -5,6 +5,10 @@ under its `## v` heading is the line of record the release workflow copies
 into that release's notes (the npm-publish workflow fails loudly if the
 heading is missing).
 
+## Unreleased
+
+- **The porch light arrives with the page.** The dusk boot preloads a display-sized still lantern and reuses it across repeat visits without waiting on the app bundle or revalidating the image on every open. Warm, orbiting fireflies now have soft glows and short curved trails against the quiet navy canvas; reduced-motion visitors keep a still scene.
+
 ## v0.5.0 — 2026-10-20
 
 - **Release notes render formatted.** The console's Updates card and `porchlight update` show the pending release's notes with real headings, bullets, bold, and links instead of raw markdown symbols. This is the first cut carried by the new renderer, so the screen still running the old release shows the lines below plainly until the update applies; from the next update onward, they render formatted.
