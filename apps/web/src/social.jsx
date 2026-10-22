@@ -20,6 +20,14 @@ import { adaptiveTrackHeight, carouselIndex, photoFirst, videoInlineMasked } fro
 // PORCH-121: the member-owned mute state — the held choice any remounted
 // video element initializes from, and the session-scope hold mirror.
 import { heldSoundOn, holdMute, initialMuted } from './video-mute.js';
+// PORCH-123 (Brian, Oct 22, 2026): playback governance — play state binds
+// to visibility and exactly one inline video plays at a time. Play state
+// only: no mute write rides any pause/resume path (PORCH-121 carries
+// untouched); the registry is client-side only and renders nothing.
+import {
+  newPlaybackSlotKey, registerPlaybackSlot, slotVisibility, notifyPlayback,
+  playbackSlotElementReady, playbackSlotPlayRejected,
+} from './playback-governance.js';
 import {
   renditionSrc, renditionSrcset, timelineImageSizes, detailImageSizes,
   playableVideoUrl, posterUrl, rungKindForViewport, stampedAspect, mediaFileName,
@@ -353,6 +361,11 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
   const [panelOpen, setPanelOpen] = useState(false);
   const [playing, setPlaying] = useState(true);
   const videoRef = useRef(null);
+  // PORCH-123: one instance-unique playback slot per mounted media item —
+  // the same media id on the card and the detail view is two slots, never
+  // one shared element control.
+  const slotKeyRef = useRef(null);
+  if (!slotKeyRef.current) slotKeyRef.current = newPlaybackSlotKey(id);
   // ac-1 reveal: hover on pointer devices drives it (the CSS-hover path on
   // the media bounds); on touch, a photo tap toggles it and a video's
   // playback-panel tap reveals it. Touch-only detection keeps a desktop
@@ -425,7 +438,66 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
     if (typeof element.requestFullscreen === 'function') element.requestFullscreen().catch(() => {});
     else if (typeof element.webkitEnterFullscreen === 'function') element.webkitEnterFullscreen();
   };
-  const watchPlayback = (event) => setPlaying(event.type === 'play');
+  const watchPlayback = (event) => {
+    setPlaying(event.type === 'play');
+    // PORCH-123: the element's play/pause events are the registry's truth.
+    // A pause outside a governance-initiated pause is the member's own
+    // (panel or frame tap): it holds, and no visibility change overrides it;
+    // a member-started play takes the one playing slot over.
+    notifyPlayback(slotKeyRef.current, event.type === 'play');
+  };
+  // The controls the PORCH-123 registry drives: play resumes the already-
+  // initialized element (held mute choice intact — this path writes only
+  // the play state), pause is the plain element call. A play rejection that
+  // is not the benign superseded-abort holds the slot out of candidacy
+  // until its next visibility entry or element remount.
+  const governancePlay = useCallback(() => {
+    const element = videoRef.current;
+    if (!element) return false;
+    const resume = element.play();
+    if (resume?.catch) {
+      resume.catch((error) => {
+        if (error?.name === 'AbortError') return;
+        playbackSlotPlayRejected(slotKeyRef.current);
+      });
+    }
+    return true;
+  }, []);
+  const governancePause = useCallback(() => {
+    const element = videoRef.current;
+    if (element) element.pause();
+  }, []);
+  // One code path for every video element of the slot (direct, re-issued
+  // attempt, blob-loader): attaching initializes mute from the held member
+  // choice (PORCH-121 — the only mute write in this family), then asks the
+  // registry to reconcile — a visible, eligible slot starts playing;
+  // anything else stays paused.
+  const attachVideo = useCallback((element) => {
+    videoRef.current = element;
+    if (!element) return;
+    element.muted = initialMuted(id);
+    playbackSlotElementReady(slotKeyRef.current);
+  }, [id]);
+  // PORCH-123 strictly-viewport playback observer, separate from the
+  // slot-fetch observer above: that one owns bytes (a 160px pre-fetch
+  // margin); this one owns the play state with no margin at half
+  // visibility, so a video that starts (or sounds) is on the member's
+  // screen. Leaving the viewport pauses on its own; entering starts
+  // playback; the registry across the app keeps exactly one element playing.
+  useEffect(() => {
+    if (post.type !== 'video') return undefined;
+    const release = registerPlaybackSlot(slotKeyRef.current, id, { play: governancePlay, pause: governancePause });
+    if (typeof IntersectionObserver !== 'function') {
+      slotVisibility(slotKeyRef.current, true);
+      return release;
+    }
+    const playbackObserver = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      slotVisibility(slotKeyRef.current, entry.isIntersecting);
+    }, { rootMargin: '0px', threshold: 0.5 });
+    playbackObserver.observe(frameRef.current);
+    return () => { playbackObserver.disconnect(); release(); };
+  }, [post.type, id, governancePlay, governancePause]);
   // Sharing on media (Brian, 10/10: "sharing should be built in") rides the
   // ··· overflow menu's Share entry (PORCH-078) since the PORCH-082
   // retirement: the per-image download-and-share text link is gone, and the
@@ -501,16 +573,19 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
       sx={{ ...mediaSx, ...fitSx }} />}
     {directVideo && phase !== 'failed-terminal' && <Box key={`vid-${attempt}`} sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
       <Box component="video" src={videoPlayable} poster={videoPoster}
-        autoPlay muted playsInline preload="metadata" onClick={tapVideo}
+        muted playsInline preload="metadata" onClick={tapVideo}
         // PORCH-121 ac-2 (root removal, named): inline ref callbacks re-run
         // on every render — the shipped ref here re-asserted a hard
         // muted=true over the member's explicit unmute on every commit
         // (panel taps, live events, hover chrome; the element also
         // being the fullscreen viewer, the re-mute was heard inside the
-        // viewer too). The mount now initializes from the held member
-        // choice via initialMuted (a member who has not spoken still gets
-        // the muted autoplay start).
-        ref={(el) => { videoRef.current = el; if (el) el.muted = initialMuted(id); }}
+        // viewer too). The shared attachVideo callback runs on attach only
+        // and initializes from the held member choice via initialMuted (a
+        // member who has not spoken still gets the muted start).
+        // PORCH-123: playback starts from the registry's visibility
+        // decision, not an unconditional autoplay attribute — an element
+        // that mounted off-screen never plays (nothing off-screen plays).
+        ref={attachVideo}
         onLoadedMetadata={(event) => { syncGeometry(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
         onVolumeChange={mirrorMute}
         onError={() => classifyDirectFailure(videoPlayable)}
@@ -519,8 +594,8 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
     </Box>}
     {post.type === 'video' && !direct && resource && <Box sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
       <Box component="video" src={resource.url} poster={resource.posterUrl ?? undefined}
-        autoPlay muted playsInline onClick={tapVideo}
-        ref={(el) => { videoRef.current = el; if (el) el.muted = initialMuted(id); }}
+        muted playsInline onClick={tapVideo}
+        ref={attachVideo}
         onLoadedMetadata={(event) => { syncGeometry(event); slotLoaded(); }} onPlay={watchPlayback} onPause={watchPlayback}
         onVolumeChange={mirrorMute}
         onError={() => slotFailed(0)}

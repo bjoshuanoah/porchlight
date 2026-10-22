@@ -14,6 +14,10 @@ import { mediaFailureClass, mediaRetryDelayMs, MEDIA_RETRY_BUDGET } from './medi
 import { carouselIndex } from './photo-first.js';
 import { mediaFileName, renditionSrc, rungKindForViewport, stampedAspect } from './media-rung.js';
 import { originOf } from './feed-filter.js';
+// PORCH-123: while the full-screen viewer is open its content is the one
+// playing surface — the inline videos beneath pause; closing returns to the
+// ordinary visibility rule with no hand-off machinery.
+import { playbackOverlayOpen, playbackOverlayClose } from './playback-governance.js';
 import { endCardPlan, overlayOriginalAction, shareDeviceClass, shareFileCapable, shareOriginal } from './share-matrix.js';
 import {
   DEFAULT_ZOOM, DOUBLE_TAP_MS, FADE_MS, POSITION_HOLD_MS, motion, viewerTokens,
@@ -308,6 +312,11 @@ export function PhotoViewer({ post, ids, actions, startIndex = 0, onClose }) {
     const prevOverflow = root.style.overflow;
     root.style.overflow = 'hidden';
     window.history.pushState({ porchlightPhotoViewer: true }, '');
+    // PORCH-123: the viewer open is the governance overlay — inline videos
+    // beneath pause and nothing new starts while the viewer holds the
+    // screen; the close (this effect's cleanup, back/Escape included)
+    // reconciles the ordinary visibility rule exactly.
+    playbackOverlayOpen();
     const onPop = () => closeRef.current?.();
     const onKey = (event) => { if (event.key === 'Escape') closeViewer(); };
     window.addEventListener('popstate', onPop);
@@ -316,6 +325,7 @@ export function PhotoViewer({ post, ids, actions, startIndex = 0, onClose }) {
       root.style.overflow = prevOverflow;
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('keydown', onKey);
+      playbackOverlayClose();
     };
   }, [closeViewer]);
 
