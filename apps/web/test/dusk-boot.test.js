@@ -125,6 +125,31 @@ test("ac-3 amendment (Brian, Oct 22): particle count +300% and spread +200%", as
   });
 });
 
+test("ac-3b amendment (Brian, Oct 22): random starting points — every load opens each mote at a random phase", async () => {
+  // Pre-JS canvas: the inline randomizer offsets every mote into a random
+  // fraction of its own duration, per load.
+  const boot = await staticBootSlice();
+  const randomizer = boot.match(/<script>\s*\n\s*\/\/ Random starting points[\s\S]*?<\/script>/)?.[0];
+  assert.ok(randomizer, "the pre-JS canvas carries the random-start script");
+  assert.match(randomizer, /querySelectorAll\("\.porch-dusk-particle"\)/, "it reaches every mote");
+  assert.match(randomizer, /Math\.random\(\)/, "the phase is per-load random");
+  assert.match(randomizer, /animationDuration/, "the phase is a fraction of the mote's own orbit period");
+  assert.match(randomizer, /animationDelay/, "the offset rides animation-delay — geometry untouched");
+  // Fallback layer: the same helper applies on mount.
+  const lantern = await src("lantern.jsx");
+  assert.match(lantern, /export function randomizeMoteStarts/, "the fallback randomizer ships from the boot layer");
+  assert.match(lantern, /randomizeMoteStarts\(partsRef\.current\)/, "the rendered layer randomizes after mount");
+  assert.match(lantern, /Math\.random\(\)/, "the fallback phase is per-load random too");
+  // Geometry pins stand: the previous amendment's field is unchanged —
+  // randomizing the start never moves count, spread, or orbit rows.
+  const index = await readFile(join(webRoot, "index.html"), "utf8");
+  for (const text of [index, lantern]) {
+    const rows = text.match(/\.porch-dusk-particle:nth-child\((?!even)\d+\) \{[^}]*\}/g) ?? [];
+    assert.equal(rows.length, 24, "24 deterministic orbit rows stay");
+    assert.equal(Math.max(...rows.map((row) => Number(row.match(/--r:\s*(\d+)px/)[1]))), 384, "the 3× spread ceiling holds");
+  }
+});
+
 test("ac-4: breathing modulates the light layers only — never the mark's position or scale", async () => {
   await withLantern(async ({ LanternBoot }) => {
     const css = styleOf(renderToString(React.createElement(LanternBoot)));
