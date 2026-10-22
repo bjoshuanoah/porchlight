@@ -127,18 +127,8 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
       hub.kill("SIGTERM");
       await new Promise((resolve) => hub.once("exit", resolve));
     }
-    if (!keep) {
-      // Hub children finish shutting down after the supervisor exits.
-      // Do not turn a successful deployed-hub proof into an ENOTEMPTY race.
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        try {
-          await rm(home, { recursive: true, force: true });
-          break;
-        } catch (error) {
-          if (error.code !== "ENOTEMPTY" || attempt === 4) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-      }
-    }
+    // Hub children finish shutting down after the supervisor exits; fs.rm
+    // retries ENOTEMPTY while their files are still being released.
+    if (!keep) await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
   }
 });
