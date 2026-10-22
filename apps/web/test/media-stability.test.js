@@ -57,8 +57,12 @@ test("PORCH-049 ac-2: media elements reserve the stamped box before and after lo
 test("PORCH-049 ac-3 + Brian's Oct 10 turn: no panel before the first tap, then pause, restart, mute, fullscreen", () => {
   // The direct rendition element and the blob-loader element share the
   // posture: playback begins with the sound off, inline, poster filling
-  // the reserved frame.
-  assert.match(social, /autoPlay muted playsInline/);
+  // the reserved frame. PORCH-123 (Brian, Oct 22, 2026): the start is
+  // visibility-driven — the unconditional autoplay attribute is gone (an
+  // element that mounted off-screen never plays), the registry starts the
+  // visible slot muted, and no `autoPlay` remains on any video element.
+  assert.match(social, /muted playsInline/);
+  assert.doesNotMatch(social.slice(social.indexOf('function MediaItem'), social.indexOf('function mediaShape')), /autoPlay/);
   assert.match(social, /component="video" src=\{videoPlayable\} poster=\{videoPoster\}/);
   // No native chrome ever, and nothing of the panel before the first tap:
   // no `controls` attribute on any video element, and the playback panel
@@ -78,7 +82,7 @@ test("PORCH-049 ac-3 + Brian's Oct 10 turn: no panel before the first tap, then 
   // unmute), the element's volumechange mirrors back into the one state,
   // and the panel's mute toggle writes the element and follows it —
   // no lifecycle re-mute path survives.
-  assert.match(social, /if \(el\) el\.muted = initialMuted\(id\);/);
+  assert.match(social, /element\.muted = initialMuted\(id\);/);
   assert.match(social, /onVolumeChange=\{mirrorMute\}/);
   assert.match(social, /element\.muted = !element\.muted;/);
   // After the first tap the panel owns the playback (Brian, 10/10: pause,
