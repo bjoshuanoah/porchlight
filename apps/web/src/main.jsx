@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ThemeProvider } from "@mui/material/styles";
-import { AppBar, Alert, BottomNavigation, BottomNavigationAction, Button, Container, CssBaseline, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Paper, Snackbar, Stack, Toolbar, Typography } from "@mui/material";
+import { AppBar, Alert, BottomNavigation, BottomNavigationAction, Box, Button, Container, CssBaseline, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Paper, Snackbar, Stack, Toolbar, Typography } from "@mui/material";
 import HomeOutlined from "@mui/icons-material/HomeOutlined";
 import GroupsOutlined from "@mui/icons-material/GroupsOutlined";
 import AddOutlined from "@mui/icons-material/AddOutlined";
@@ -57,6 +57,11 @@ import { enablePush } from "./notifications.js";
 // PORCH-109: the installed-context turn-on-notifications banner rides the
 // shell's content surface; its tap is the same walked enable flow.
 import { NotificationsBanner } from "./notifications.jsx";
+// PORCH-125 (Brian, Oct 22, 2026 — refresh on new versions): the update
+// banner and the refresh flow — the cold open is the ONE automatic apply
+// point, the banner tap is the in-session apply point, and no timer or
+// automatic path ever applies an update or reloads under an active member.
+import { UPDATE_BANNER_COPY, applyPendingUpdate, coldOpenRefresh, startUpdateWatch } from "./refresh.js";
 
 // PORCH-042: both modes' custom properties land in one static <style> block
 // before the first render — component CSS resolves from the token layer with
@@ -108,6 +113,33 @@ function routeOf() {
   // renamed destination; the label and route of record is Settings.
   return next === "/profile" ? "/settings" : next;
 }
+// PORCH-125: the in-session update banner. Renders on detection, never on
+// failure (the error-display discipline is not this surface — an
+// informational affordance, no error-state chrome). Slim, fixed at the top
+// of the page, no content displacement, one instance app-wide (one render
+// condition, one component), holds while the pending update exists with no
+// timeout and never interrupts; click and touch are the same affordance.
+function UpdateBanner({ onRefresh }) {
+  return <Box
+    role="status"
+    sx={{
+      position: "fixed", top: 0, left: 0, right: 0, zIndex: 1300,
+      display: "flex", justifyContent: "center", pt: "env(safe-area-inset-top)",
+      bgcolor: "var(--porch-appbar-bg)", backdropFilter: "blur(12px)",
+      borderBottom: "1px solid", borderColor: "divider",
+    }}
+  >
+    <Button
+      onClick={onRefresh}
+      disableRipple
+      sx={{
+        textTransform: "none", display: "block", px: 2, py: 0.5, minHeight: 0, minWidth: 0,
+        fontFamily: "inherit", fontWeight: 600, color: "primary.main", textAlign: "center",
+      }}
+    >{UPDATE_BANNER_COPY}</Button>
+  </Box>;
+}
+
 function App() {
   const [route, setRoute] = useState(routeOf);
   // PORCH-042: mode is a device-level display setting held in this origin's
@@ -776,6 +808,43 @@ function App() {
   useEffect(() => {
     void registerMediaTransport().then((ready) => setMediaTransport(ready));
   }, []);
+  // PORCH-125: the applied-worker epoch — a claim from an applied update
+  // makes a FRESH worker control this page; the token relay re-posts so
+  // the rendition auth set is never lost on a silent worker activation.
+  const [workerEpoch, setWorkerEpoch] = useState(0);
+  // PORCH-125: the in-session update banner's pending-update fact. Set only
+  // on the waiting-worker detection signal; cleared only by the tap's
+  // apply. No timeout, no auto-dismiss, no timer-driven apply anywhere.
+  const [updatePending, setUpdatePending] = useState(false);
+  useEffect(() => {
+    if (!navigator.serviceWorker) return undefined;
+    let stale = false;
+    void (async () => {
+      // The single registration rides media-transport only; this waits for
+      // its registration (or the browser-held one) and never re-registers.
+      await registerMediaTransport().catch(() => false);
+      const registration = workerRegistration() || await navigator.serviceWorker.getRegistration("/");
+      if (!registration || stale) return;
+      // The cold open (ac-3): the ONE automatic apply point — the boot path
+      // applies a waiting worker before the first content paint, no banner
+      // on this path; a newer hub marker over a stale shell reloads once,
+      // bound to the boot hold, guarded to one automatic reload per session.
+      const cold = await coldOpenRefresh({
+        registration,
+        ownBuild: typeof __PORCHLIGHT_BUILD__ === "undefined" ? null : __PORCHLIGHT_BUILD__,
+        readHubScript: () => fetch("/sw.js").then((script) => script.text()),
+        sessionStorageLike: window.sessionStorage,
+        reload: () => window.location.reload(),
+        stillBooting: () => bootHoldRef.current,
+        onControlled: () => setWorkerEpoch((epoch) => epoch + 1),
+      });
+      if (!stale && cold.pending) setUpdatePending(true);
+      // The in-session detector (ac-1): the waiting-worker signal, one
+      // instance app-wide; apply stays member-owned (the banner tap).
+      startUpdateWatch(registration, () => setUpdatePending(true));
+    })();
+    return () => { stale = true; };
+  }, []);
   // PORCH-105 (share target, ac-1): a share-target launch leaves its staged
   // payload in the worker's own staging store. Compose opens pre-populated
   // the moment an identity is open — a launch with a session already open
@@ -809,7 +878,10 @@ function App() {
   const mediaTokenSignature = identityConnections.map((c) => `${new URL(c.url).origin}:${c.token}`).join("|");
   useEffect(() => {
     syncMediaTransport(Object.fromEntries(identityConnections.map((c) => [new URL(c.url).origin, c.token])));
-  }, [mediaTokenSignature]);
+    // workerEpoch (PORCH-125): the apply's claim swaps the controlling
+    // worker; the relay re-posts so the fresh worker's rendition auth set
+    // is never empty while this session keeps running.
+  }, [mediaTokenSignature, workerEpoch]);
   // Devices load on demand (PORCH-081 ac-1): when the identity opens or its
   // credential re-credentials after a renewal or a membership write — never
   // a timed refetch of device state (the V1 event vocabulary is
@@ -1892,6 +1964,19 @@ function App() {
       if (!choice || choice.outcome !== "accepted") dismissInstall();
     });
   };
+  // PORCH-125: the banner tap — the in-session apply point. The tap clears
+  // the banner first (so it never re-renders on this path), applies the
+  // waiting worker (the apply message is the worker's ONLY skipWaiting
+  // entry), and reloads exactly once into the fresh shell.
+  const applyUpdateNow = () => {
+    setUpdatePending(false);
+    void applyPendingUpdate({
+      registration: workerRegistration(),
+      serviceWorker: navigator.serviceWorker,
+      reload: () => window.location.reload(),
+      onControlled: () => setWorkerEpoch((epoch) => epoch + 1),
+    });
+  };
 
   return <ThemeProvider theme={muiTheme}><CssBaseline />
         {/* PORCH-095: the boot surface — the app's first paint, before route
@@ -1901,6 +1986,13 @@ function App() {
             earned boot failure holds on this surface with a retry that
             re-runs the boot chain (never a flash-then-vanish banner). */}
     <LanternBoot failure={bootFailed} onRetry={retryBoot} />
+    {/* PORCH-125: the in-session update banner — the only in-session
+        refresh surface. Renders on detection, never on failure; fixed at
+        the top of the page, no content displacement, exactly one instance
+        app-wide, holds while the pending update exists (no timeout, no
+        timer-driven apply); the tap applies the waiting worker and reloads
+        once into the fresh shell. */}
+    {updatePending && <UpdateBanner onRefresh={applyUpdateNow} />}
     {!frontDoor && <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(12px)", background: `var(--porch-appbar-bg)` }}>
       <Toolbar sx={{ minHeight: { xs: 56, lg: 64 }, maxWidth: 1180, width: "100%", mx: "auto", px: { xs: 2, lg: 4 }, pt: "env(safe-area-inset-top)" }}>
         {/* Brand lockup (PORCH-032): the new lamp mark plus the navy wordmark. */}

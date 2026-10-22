@@ -78,20 +78,27 @@ test("PORCH-051 ac-2: exactly one service worker registration exists in the app"
   assert.match(transport, /navigator\.serviceWorker\.register\("\/sw\.js", \{ scope: "\/" \}\)/);
 });
 
-test("PORCH-051 ac-2 (repaired PORCH-052): /api/** other than the rendition serve paths is never intercepted or cached; non-2xx is never cached", async () => {
+test("PORCH-051 ac-2 (repaired PORCH-052; amended PORCH-125): /api/** other than the rendition serve paths is never intercepted or cached; non-2xx is never cached", async () => {
   const worker = await src("public/sw.js");
-  // Interception is scoped by the rendition filter alone — and it runs
-  // BEFORE any /api boundary check, because the genuine rendition URLs are
+  // The rendition filter still runs FIRST — the genuine rendition URLs are
   // /api/social/**/renditions/... and their Authorization must ride the
   // worker (the early /api return PORCH-051 shipped 401'd every direct
   // rendition; that ordering bug is the PORCH-052 repair).
+  assert.match(worker, /if \(url\.pathname\.includes\("\/renditions\/"\)\) \{\n?\s*event\.respondWith\(/);
+  // PORCH-125 amendment: the shell serving listener's /api/** boundary
+  // stands — AFTER the rendition filter — so every other /api/** request
+  // is never intercepted and never fulfilled from a cache. The boundary
+  // must not appear before the rendition filter (that is the PORCH-052
+  // 401 class), only after it.
   assert.doesNotMatch(worker, /url\.pathname\.startsWith\("\/api\/"\) return/);
-  // Non-rendition paths (which includes everything else the hub API
-  // serves) never enter respondWith.
-  assert.match(worker, /if \(!url\.pathname\.includes\("\/renditions\/"\)\) return;/);
-  // Only response.ok enters the store — a 401/5xx rendition response can
-  // never poison the cache.
+  const renditionGate = worker.indexOf('if (url.pathname.includes("/renditions/")) {');
+  const shellGate = worker.indexOf('if (url.pathname.startsWith("/api/")) return;');
+  assert.ok(renditionGate >= 0 && shellGate > renditionGate, "the shell /api boundary must follow the rendition filter");
+  // The carry contract: rendition serves cache only ok + v-tagged + tokened
+  // responses; the shell branches (navigate fallback, hashed assets) cache
+  // only response.ok — a 401/5xx can never poison any cache.
   assert.match(worker, /if \(response\.ok && url\.searchParams\.has\("v"\) && token\)/);
+  assert.match(worker, /if \(response\.ok\) await cache\.put\(request, response\.clone\(\)\);/);
   assert.match(worker, /await cache\.put\(request, response\.clone\(\)\)/);
 });
 

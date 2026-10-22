@@ -352,8 +352,16 @@ test("ac-5: source shape — renditions-first boundary untouched, the POST branc
     "the POST branch is scoped to the share target's path, never /api/**");
   assert.match(workerSource, /if \(request\.method !== "GET"\) return;/,
     "every other non-GET still passes through untouched");
-  assert.match(workerSource, /if \(!url\.pathname\.includes\("\/renditions\/"\)\) return;/,
+  // PORCH-125 amendment: the rendition filter is the branch of record — it
+  // still gates BEFORE the /api boundary check inside the one fetch
+  // listener (the boundary follows the branch); renditions first, order
+  // carried, the interception set extended only by the /api-free shell
+  // branches below it.
+  assert.match(workerSource, /if \(url\.pathname\.includes\("\/renditions\/"\)\) \{\n?\s*event\.respondWith\(/,
     "the rendition filter keeps running before any /api boundary check");
+  const renditionGate = workerSource.indexOf('if (url.pathname.includes("/renditions/")) {');
+  const shellGate = workerSource.indexOf('if (url.pathname.startsWith("/api/")) return;');
+  assert.ok(renditionGate >= 0 && shellGate > renditionGate, "the /api shell boundary follows the rendition branch");
 });
 
 test("ac-2: source — every per-media download control is mobile-conditional on both media surfaces", () => {

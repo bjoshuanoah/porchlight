@@ -349,8 +349,10 @@ test("PORCH-060 ac-5: the single worker carries push delivery and tap-through, a
   assert.match(worker, /self\.addEventListener\("notificationclick"/);
   // The push handler intercepts NOTHING: the worker's respondWith calls stay
   // the rendition fetch boundary plus the share-target launch surface's own
-  // POST answer (PORCH-105) — both /api/**-free; no badge machinery exists.
-  assert.equal(worker.match(/respondWith/g).length, 2);
+  // POST answer (PORCH-105) — both /api/**-free; PORCH-125 adds the shell's
+  // navigation fallback and hashed-asset branches (both /api-free too); no
+  // badge machinery exists.
+  assert.equal(worker.match(/respondWith/g).length, 4);
   // Tap-through: focus the existing client (and hand it the target), or
   // open the post target so the SPA's standard open flow runs.
   assert.match(worker, /self\.clients\.matchAll\(\{ type: "window", includeUncontrolled: true \}\)/);
