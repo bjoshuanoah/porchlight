@@ -46,9 +46,9 @@ const V = {
 };
 
 // CSS only: the mark animates from its own webp frames; the dusk lighting
-// (halo, floor glow), the particle drift, the breathing rhythm, and the
+// (halo, floor glow), the firefly orbits, the breathing rhythm, and the
 // status crossfade are keyframe/transition CSS. The scene layers are
-// separate: the mark sits z-above the lighting and never carries a filter
+// separate: the mark sits on top of the scene (z-index 2, full opacity) and never carries a filter
 // or blur; only the light layers are animated, opacity-only, so the mark
 // never moves. This block mirrors the pre-JS canvas in index.html (the
 // static layer carries the same rules because it paints before JS).
@@ -56,8 +56,15 @@ const CSS = `
 @keyframes porch95-fade { from { opacity: 1; } to { opacity: 0; } }
 .porch118-webp { display: block; }
 .porch118-webp-still { display: none; }
-.porch-dusk-scene { position: relative; width: 300px; height: 300px; display: flex; align-items: center; justify-content: center; }
-.porch-dusk-scene > img { position: relative; z-index: 1; }
+/* PORCH-119 dusk scene — mirrors the pre-JS canvas in index.html rule for
+   rule, amended Oct 22 (Brian): the lantern doubles (184px), the mark
+   stacks on top of every layer at full opacity, and the particles become
+   fireflies orbiting the lantern. */
+.porch-dusk-scene { position: relative; width: 300px; height: 340px; display: flex; align-items: center; justify-content: center; }
+/* Brian, Oct 22: the lantern image sits on top of all others (z-index) and
+   shows at 100% opacity — breathing modulates the light layers only,
+   never the mark, so its opacity pins at 1. */
+.porch-dusk-scene > img { position: relative; z-index: 2; opacity: 1; }
 .porch-dusk-halo {
   position: absolute; left: 50%; top: 50%; width: 320px; height: 330px; z-index: 0;
   transform: translate(-50%, -50%); border-radius: 50%;
@@ -65,7 +72,7 @@ const CSS = `
   animation: porch-dusk-breathe 4.8s ease-in-out infinite;
 }
 .porch-dusk-glow {
-  position: absolute; left: 50%; top: 226px; width: 440px; height: 130px; z-index: 0;
+  position: absolute; left: 50%; top: 292px; width: 440px; height: 130px; z-index: 0;
   transform: translate(-50%, -50%) scaleY(.42); border-radius: 50%;
   background: var(--porch-boot-dusk-glow);
   animation: porch-dusk-breathe 4.8s ease-in-out infinite; animation-delay: -2.4s;
@@ -74,32 +81,40 @@ const CSS = `
    brightening, never flashing, never moving the mark. */
 @keyframes porch-dusk-breathe { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
 .porch-dusk-particles { position: absolute; inset: 0; z-index: 0; }
+/* Brian, Oct 22: the particles orbit the lantern like fireflies. Each mote
+   is anchored at the mark's center and circles it on its own slow
+   elliptical path — per-mote radius, squash, period, and desynced phase,
+   alternating direction — never a uniform swarm. The orbit composes from
+   translate waypoints so the mark's own layers stay untouched, and the
+   motes stay z-under the mark: passing "behind" the lantern reads as the
+   orbit wrapping it. */
 .porch-dusk-particle {
-  position: absolute; bottom: 20px; width: 4px; height: 4px; border-radius: 50%; opacity: .8;
+  position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; border-radius: 50%; opacity: .8;
   background: var(--porch-boot-dusk-mote);
-  animation: porch-dusk-drift var(--d, 16s) ease-in-out infinite alternate;
+  animation: porch-dusk-orbit var(--d, 21s) ease-in-out infinite;
 }
-/* Bright head, short fading tail trailing the slow upward drift. */
+.porch-dusk-particle:nth-child(even) { animation-direction: reverse; }
+/* Bright head, short fading tail trailing the orbit. */
 .porch-dusk-particle::after {
   content: ""; position: absolute; top: 3px; left: 50%; width: 2px; height: 13px;
   transform: translateX(-50%); border-radius: 1px;
   background: var(--porch-boot-dusk-tail);
 }
-/* Slow, gently curved paths (ac-3): alternating translate waypoints make
-   the drift curve; per-particle vars, durations, and negative delays keep
-   the field sparse and desynced — never a uniform swarm. */
-@keyframes porch-dusk-drift {
-  0%   { transform: translate(0, 0) rotate(0deg); }
-  30%  { transform: translate(var(--px, 24px), calc(var(--py, -90px) * .35)) rotate(10deg); }
-  60%  { transform: translate(calc(var(--px, 24px) * -.7), calc(var(--py, -90px) * .7)) rotate(-8deg); }
-  100% { transform: translate(calc(var(--px, 24px) * .5), var(--py, -90px)) rotate(6deg); }
+/* The elliptical orbit: four eased waypoints around the anchor with a
+   gentle rotate wiggle — curved everywhere, never a straight strobe. */
+@keyframes porch-dusk-orbit {
+  0%   { transform: translate(var(--r, 88px), 0) rotate(0deg); }
+  25%  { transform: translate(calc(var(--r, 88px) * .12), calc(var(--ry, 40px) * -1)) rotate(9deg); }
+  50%  { transform: translate(calc(var(--r, 88px) * -.92), calc(var(--ry, 40px) * -.12)) rotate(0deg); }
+  75%  { transform: translate(calc(var(--r, 88px) * -.06), var(--ry, 40px)) rotate(-9deg); }
+  100% { transform: translate(var(--r, 88px), 0) rotate(0deg); }
 }
-.porch-dusk-particle:nth-child(1) { left: 22%; --px: 26px;  --py: -120px; --d: 17s; animation-delay: -3s; }
-.porch-dusk-particle:nth-child(2) { left: 36%; --px: -22px; --py: -150px; --d: 21s; animation-delay: -9s; }
-.porch-dusk-particle:nth-child(3) { left: 50%; --px: 18px;  --py: -100px; --d: 15s; animation-delay: -6s; }
-.porch-dusk-particle:nth-child(4) { left: 64%; --px: -26px; --py: -135px; --d: 19s; animation-delay: -12s; }
-.porch-dusk-particle:nth-child(5) { left: 76%; --px: 22px;  --py: -105px; --d: 16s; animation-delay: -2s; }
-.porch-dusk-particle:nth-child(6) { left: 88%; --px: -18px; --py: -125px; --d: 22s; animation-delay: -15s; }
+.porch-dusk-particle:nth-child(1) { --r: 88px;  --ry: 38px; --d: 21s; animation-delay: -4s; }
+.porch-dusk-particle:nth-child(2) { --r: 112px; --ry: 52px; --d: 27s; animation-delay: -13s; }
+.porch-dusk-particle:nth-child(3) { --r: 74px;  --ry: 30px; --d: 18s; animation-delay: -9s; }
+.porch-dusk-particle:nth-child(4) { --r: 128px; --ry: 58px; --d: 30s; animation-delay: -2s; }
+.porch-dusk-particle:nth-child(5) { --r: 96px;  --ry: 44px; --d: 23s; animation-delay: -17s; }
+.porch-dusk-particle:nth-child(6) { --r: 108px; --ry: 34px; --d: 26s; animation-delay: -21s; }
 /* Fixed-height status box (ac-6): crossfading children swap in place, the
    surrounding layout never shifts. */
 .porch95-statusbox { position: relative; height: 20px; width: 300px; }

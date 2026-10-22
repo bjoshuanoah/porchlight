@@ -21,8 +21,10 @@ export const LOADER_ANIM_W = 137;
 export const LOADER_ANIM_H = 170;
 
 // The mark reads fairly small on the boot (above the wordmark), much
-// smaller in-app (reserved space).
-export const BOOT_MARK_H = 92;
+// smaller in-app (reserved space). Brian, Oct 22, 2026: the boot lantern
+// doubles — 200% bigger than the tuned 92px boot size; the in-app loader
+// mark is untouched.
+export const BOOT_MARK_H = 184;
 export const LOADER_MARK_H = 40;
 
 // Crossfade into the app: a quick dissolve (~250ms), never a blank — the

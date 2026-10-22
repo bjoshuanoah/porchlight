@@ -83,7 +83,7 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
       assert.match(boot, />porchlight</, "the wordmark is lowercase on this surface");
       assert.match(boot, /<span class="porch95-announce">Porchlight is loading<\/span>/, "the polite announcement serves");
       assert.match(boot, /class="porch95-statusbox" aria-hidden="true"/, "the fixed-height status box serves");
-      assert.match(html, /@keyframes porch-dusk-drift/, "the drift keyframes serve with the canvas");
+      assert.match(html, /@keyframes porch-dusk-orbit/, "the orbit keyframes serve with the canvas");
       return html;
     })());
 
