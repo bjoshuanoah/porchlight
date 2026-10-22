@@ -5,6 +5,13 @@ under its `## v` heading is the line of record the release workflow copies
 into that release's notes (the npm-publish workflow fails loudly if the
 heading is missing).
 
+## v0.5.2 — 2026-10-22
+
+- **Videos play only when you can see them.** A video in the timeline scrolls off your screen and it pauses on its own — no stray sound, nothing playing you can't find. When it scrolls back into view it starts playing again exactly as you left it: quiet if you had it muted, with sound if you turned the sound on.
+- **One video at a time, everywhere.** Start a video anywhere in the app and any other playing video pauses by itself — you never have to hunt down which one was making noise.
+- **The sound is always the video you're looking at.** If a video has sound, it's the one on your screen — the "where is that sound coming from?" puzzle in the timeline is gone for good.
+- **Scrolling just works.** Browsing photos, paging through a post, or scrolling the feed never interrupts itself with a surprise video — playback follows your eyes, not a timer.
+
 ## v0.5.1 — 2026-10-22
 
 - **Your porch light is named in your notifications.** Replies, mentions, reactions, and new group moments now arrive on your lock screen with your porch's own name as the main line — never an app name — followed by who sent what: reactions carry the emoji exactly as chosen, replies and mentions carry the sentence that mentions you, and photos arrive without a stray half-written file. This is the first cut the hub composes a notification for, so everything a notification says was written by your own porch.

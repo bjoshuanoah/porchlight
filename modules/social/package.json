@@ -1,6 +1,6 @@
 {
   "name": "@porchlight/social",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Porchlight social domain — routes → controllers → services → models. Owns all social models; shares zero models with identity.",
   "license": "MIT",
   "author": "Brian Noah",
@@ -30,7 +30,7 @@
     "directory": "modules/social"
   },
   "dependencies": {
-    "@porchlight/shared": "0.5.1",
+    "@porchlight/shared": "0.5.2",
     "express": "^4.19.2",
     "ffmpeg-static": "^5.3.0",
     "ffprobe-static": "^3.1.0",
