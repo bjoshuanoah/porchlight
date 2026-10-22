@@ -42,6 +42,16 @@ const sockets = new Map();
  * connect — is loading, never an earned error; the transport's own backoff
  * keeps working the state. Only an established-then-lost connection is a
  * definitive outage of record.
+ *
+ * Every `onState` callback also carries `attempts` (PORCH-117, Brian
+ * Oct 22, 2026 — "Still getting it on load"): the number of consecutive
+ * failed re-establishment attempts since the last completed handshake.
+ * An outage earns the unreachable render only when these attempts are
+ * spent — the standing bounded backoff of record (three, the PORCH-102
+ * exhaustion law), so while the transport is still working its state no
+ * error element exists at any frame. `connect` resets the count; a lost
+ * connection whose hub restart schedules one re-open reports attempts 0
+ * until that re-open's own attempt fails.
  */
 export function openEventStream({ url, identityId, getAuth, onEvent, onState, log = console } = {}) {
   const origin = new URL(url).origin;
@@ -49,6 +59,7 @@ export function openEventStream({ url, identityId, getAuth, onEvent, onState, lo
   let entry = sockets.get(key);
   if (!entry) {
     const refs = new Set();
+    let attempts = 0;
     const socket = io(origin, {
       transports: ["websocket"],
       ...RECONNECT_CONFIG,
@@ -64,11 +75,12 @@ export function openEventStream({ url, identityId, getAuth, onEvent, onState, lo
     socket.on("connect", () => {
       if (entry) entry.connected = true;
       if (entry) entry.established = true;
-      for (const ref of refs) ref.onState?.({ connected: true, established: true });
+      attempts = 0;
+      for (const ref of refs) ref.onState?.({ connected: true, established: true, attempts: 0 });
     });
     socket.on("disconnect", (reason) => {
       if (entry) entry.connected = false;
-      for (const ref of refs) ref.onState?.({ connected: false, established: Boolean(entry?.established) });
+      for (const ref of refs) ref.onState?.({ connected: false, established: Boolean(entry?.established), attempts });
       // PORCH-047 contract: a POLICY close (the revocation kill, a hub
       // closure/restart) is not a transport loss — socket.io does not
       // re-establish it itself, and the room must not reconnect-loop a dead
@@ -88,8 +100,12 @@ export function openEventStream({ url, identityId, getAuth, onEvent, onState, lo
       // The refusal is server-side truth (E_MUST_SIGN_IN / E_NOT_PERMITTED
       // / an unreachable hub class). Every open consumer sees it once; the
       // backoff re-establishes — no poll cycle is invented to compensate.
+      // PORCH-117: each failed attempt increments the outage's spent
+      // attempts (the fact the app's earned-error gate reads); the
+      // establishment backoff keeps working the state meanwhile.
       if (log?.debug && error?.message) log.debug(`realtime unavailable (${error.message})`);
-      for (const ref of refs) ref.onState?.({ connected: false, established: Boolean(entry?.established), error: error?.message ?? null });
+      attempts += 1;
+      for (const ref of refs) ref.onState?.({ connected: false, established: Boolean(entry?.established), attempts, error: error?.message ?? null });
     });
     entry = { socket, refs, connected: false, established: false };
     sockets.set(key, entry);

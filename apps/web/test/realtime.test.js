@@ -101,6 +101,36 @@ test("a transport loss re-establishes with backoff and re-reads the CURRENT cred
   await hub.close();
 });
 
+test("PORCH-117 (Brian Oct 22: 'Still getting it on load'): a lost stream's re-establishment attempts are counted and reset on reconnect — the earned-error bound reads them", async (t) => {
+	t.after(() => closeEventStreams());
+	const source = await readFile(join(here, "..", "src", "realtime.js"), "utf8");
+	assert.match(source, /attempts = 0;/, "a completed handshake resets the outage's spent attempts");
+	assert.match(source, /attempts \+= 1;/, "a failed attempt is one spent attempt of record");
+	const hub = await spawnHub();
+	const states = [];
+	const stream = openEventStream({
+		url: `http://127.0.0.1:${hub.port}`,
+		identityId: "did_count",
+		getAuth: () => ({ networkId: "net_family", token: "t1" }),
+		onState: (state) => states.push(state),
+	});
+	while (!stream.state()) await new Promise((resolve) => setTimeout(resolve, 25));
+	assert.equal(states.at(-1).attempts, 0, "the established stream starts with zero spent attempts");
+	const failuresBefore = states.filter((state) => state.error);
+	assert.ok(failuresBefore.length === 0, "no failed attempt exists before the outage");
+	const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	// The outage of record: the plane dies and every re-establishment
+	// attempt fails (the unreachable-hub class). Each refusal is one
+	// failed attempt — the app's earned-error gate counts them, and no
+	// error element exists while the attempts are still being spent.
+	await hub.close();
+	const failures = () => states.filter((state) => state.connected === false && state.established && state.error);
+	while (failures().length < 3) await sleep(100);
+	assert.deepEqual(failures().map((state) => state.attempts), [1, 2, 3],
+		"each failed attempt increments the outage's spent-attempts count — a success at any attempt renders nothing");
+	stream.close();
+});
+
 test("an establishment still in flight reports established: false — a first-attempt connect_error never claims a lost connection (PORCH-117 follow-up)", async (t) => {
   t.after(() => closeEventStreams());
   // Nothing listens on this port: every websocket attempt fails before a

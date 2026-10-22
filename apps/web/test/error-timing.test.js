@@ -73,18 +73,39 @@ test("ac-2: the boot never strands — exhaustion and thrown attempts still sett
 test("ac-1: every offline set gates on the boot hold — loading covers connection trouble", async () => {
 	const source = await src("main.jsx");
 	const renewCatch = source.slice(source.indexOf("membershipFailed = failed;"), source.indexOf("next.renewedAt ="));
-	assert.match(renewCatch, /if \(!bootHoldRef\.current\) setOffline\(true\);/,
-		"a renewal failure during the hold renders the loading surface only");
-	const onStateBlock = source.slice(source.indexOf("onState: ({ connected, established }) => {"), source.indexOf("void catchUpOrigin(eventUrl"));
-	assert.match(onStateBlock, /if \(established && !membershipEndedRef\.current && !bootHoldRef\.current\) setOffline\(true\);/,
+	assert.match(renewCatch, /if \(!bootHoldRef\.current\) startConnectivityRecovery\(\);/,
+		"a renewal failure during the hold renders the loading surface only; after the boot it rides the standing bounded chain, never an instant earn");
+	const onStateBlock = source.slice(source.indexOf("onState: ({ connected, established, attempts = 0 }) => {"), source.indexOf("void catchUpOrigin(eventUrl"));
+	assert.match(onStateBlock, /attempts >= STALE_RECOVERY_MAX_ATTEMPTS/,
+		"a transport loss earns the state only when the transport's re-establishment attempts are spent — no error element while the backoff retries");
+	assert.match(onStateBlock, /&& !membershipEndedRef\.current && !bootHoldRef\.current\)/,
 		"a transport flap mid-boot never banners; only an established-then-lost outage earns the state");
 	const catchUpBlock = source.slice(source.indexOf("const catchUpOrigin = useCallback"), source.indexOf("const liveSig ="));
-	assert.match(catchUpBlock, /if \(!bootHoldRef\.current\) setOffline\(true\);/,
-		"a failed replay resolve during the hold renders loading only");
+	assert.match(catchUpBlock, /if \(!bootHoldRef\.current\) startConnectivityRecovery\(\);/,
+		"a failed replay resolve during the hold renders loading only; after the boot it rides the standing bounded chain, never an instant earn");
 	// The boot hold exists and settles through the boot chain, not at mount.
 	assert.match(source, /const bootHoldRef = useRef\(true\);/);
 	assert.match(source, /import \{ runBootSequence \} from "\.\/boot-sequence\.js";/);
 	assert.match(source, /onSettle: settleBoot,/);
+});
+
+test("ac-1: a connectivity-loss event rides the standing bounded chain — no instant offline earn anywhere (Brian Oct 22: 'Still getting it on load')", async () => {
+	const source = await src("main.jsx");
+	// The renewal failure's re-proof is the bounded re-serve chain: three
+	// attempts with the standing backoff, exhaustion applies once. No
+	// single-attempt setOffline(true) survives on the event burst.
+	const renewCatch = source.slice(source.indexOf("membershipFailed = failed;"), source.indexOf("next.renewedAt ="));
+	assert.doesNotMatch(renewCatch, /setOffline\(true\)/);
+	const catchUpBlock = source.slice(source.indexOf("const catchUpOrigin = useCallback"), source.indexOf("const liveSig ="));
+	assert.doesNotMatch(catchUpBlock, /setOffline\(true\)/);
+	// The browser online event re-proves through the same chain (the
+	// immediate re-serve is the chain's attempt one; a failure defers).
+	const onlineEffect = source.slice(source.indexOf('const online = () => void startConnectivityRecovery();'), source.indexOf("}, [startConnectivityRecovery]);"));
+	assert.ok(onlineEffect, "the online listener exists and routes the recovery chain");
+	// The recovery chain is the one post-boot earn owner.
+	assert.match(source, /const startConnectivityRecovery = useCallback/, "the generalized chain exists");
+	assert.match(source, /setOffline\(true\);\s*\n\s*return;\s*\n\s*\}\s*\n\s*setOffline\(false\);/,
+		"the onState earn is the only transport earn, at exhaustion");
 });
 
 test("ac-1: the boot chain and the recovery driver run deferred attempts — failure applies at exhaustion only", async () => {
@@ -99,7 +120,7 @@ test("ac-1: the boot chain and the recovery driver run deferred attempts — fai
 	assert.match(source, /const reload = useCallback\(async \(\{ deferFailure = false \} = \{\}\) => \{/);
 	const deferLine = source.slice(source.indexOf("if (deferFailure && !feedsServed)"));
 	assert.match(deferLine, /deferredFeedsFailure\.current = result;/);
-	const recoveryBlock = source.slice(source.indexOf("startStaleRecovery = useCallback"), source.indexOf("// Live consumption"));
+	const recoveryBlock = source.slice(source.indexOf("startConnectivityRecovery = useCallback"), source.indexOf("// The browser's own connectivity event"));
 	assert.match(recoveryBlock, /attempt: \(\) => reloadRef\.current\?\.\(\{ deferFailure: true \}\)/,
 		"recovery retries defer too — no error element while a recovery attempt runs");
 	assert.match(recoveryBlock, /if \(!outcome\.recovered\) \{[\s\S]*?takeDeferredFeedsFailure\(\)/,
@@ -145,11 +166,12 @@ test("ac-1 follow-up: realtime establishment never earns the banner — only an 
 		"only the connect handler proves establishment");
 	for (const callback of realtime.matchAll(/ref\.onState\?\.\((\{[^}]*\})\)/g)) {
 		assert.match(callback[1], /established:/, "every state callback carries the establishment fact");
+		assert.match(callback[1], /attempts/, "every state callback carries the spent-attempts fact (the earned-error gate's bound reads it)");
 	}
 	const main = await src("main.jsx");
-	const onStateBlock = main.slice(main.indexOf("onState: ({ connected, established }) => {"), main.indexOf("void catchUpOrigin(eventUrl"));
-	assert.match(onStateBlock, /if \(established && !membershipEndedRef\.current && !bootHoldRef\.current\) setOffline\(true\);/,
-		"a never-established stream's connect attempts render loading only — a first-attempt connect_error never flashes the unreachable banner");
+	const onStateBlock = main.slice(main.indexOf("onState: ({ connected, established, attempts = 0 }) => {"), main.indexOf("void catchUpOrigin(eventUrl"));
+	assert.match(onStateBlock, /attempts >= STALE_RECOVERY_MAX_ATTEMPTS/,
+		"a never-established stream's connect attempts render loading only — and an established stream earns only when its re-establishment attempts are spent (Brian Oct 22: 'Still getting it on load')");
 });
 
 test("ac-4: error surfaces are never dismissed by a timer alone", async () => {

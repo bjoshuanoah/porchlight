@@ -34,7 +34,7 @@ import { openEventStream } from "./realtime.js";
 // PORCH-102: the bounded freshness-note auto-recovery driver — the
 // beyond-window catch-up re-serves fresh over REST by itself, event-driven
 // on reconnect, bounded retries with exponential backoff, never a cadence.
-import { runStaleRecovery } from "./stale-recovery.js";
+import { runStaleRecovery, STALE_RECOVERY_MAX_ATTEMPTS } from "./stale-recovery.js";
 import { runBootSequence } from "./boot-sequence.js";
 import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./scroll.js";
 import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
@@ -382,9 +382,14 @@ function App() {
     } catch {
       // PORCH-117: while the boot hold is up, connection trouble renders
       // the loading surface only — the first-fetch chain owns the earned
-      // offline render. After the boot, a renewal failure is a spent
-      // attempt and earns the state under the standing degrade law.
-      if (!bootHoldRef.current) setOffline(true);
+      // offline render. After the boot, a renewal failure no longer earns
+      // the state on a single failed attempt (Brian, Oct 22, 2026 — the
+      // flash-at-load class: the app-open event burst rides visibility and
+      // online into this catch, one failed renew earned the banner
+      // instantly, and the next connected handshake cleared it a second
+      // later). The failure re-proves the hub on the standing bounded
+      // re-serve chain; only that chain's exhaustion renders the state.
+      if (!bootHoldRef.current) startConnectivityRecovery();
       return false;
     }
     next.renewedAt = membershipFailed ? undefined : Date.now();
@@ -562,21 +567,21 @@ function App() {
   // step resolves — it can never see an unset ref.
   const reloadRef = useRef(null);
   useEffect(() => { reloadRef.current = reload; }, [reload]);
-  useEffect(() => {
-    const online = () => void reload();
-    window.addEventListener("online", online);
-    return () => window.removeEventListener("online", online);
-  }, [reload]);
-  // PORCH-102: the freshness-note auto-recovery. The trigger is the
-  // reconnect replay resolving beyond the server's retained window (the
-  // stale event in catchUpOrigin) — event-driven, exactly the trigger class
-  // PORCH-081 ac-1 mandates; a bounded backoff chain while recovery is
-  // active is not a cadence, nothing here re-arms after exhausting, and no
-  // interval exists on this path. reload is read through a ref (the
-  // renewRef pattern) so recovery never waits out a stale closure, and a
-  // second concurrent stale event never stacks a second driver run.
+  // PORCH-102: the standing bounded re-serve chain. Brian's Oct 21, 2026
+  // error-display ruling names the original trigger (the reconnect replay
+  // resolving beyond the server's retained window, the stale event in
+  // catchUpOrigin) and PORCH-117's follow-up generalizes the trigger class
+  // to every post-boot connectivity-loss event: a failed re-credential
+  // (the app-open event burst), a failed catch-up resolve, a browser
+  // online re-serve that fails. Each event rides THIS chain —
+  // event-driven, exactly the trigger class PORCH-081 ac-1 mandates; a
+  // bounded backoff chain while recovery is active is not a cadence,
+  // nothing here re-arms after exhausting, and no interval exists on this
+  // path. reload is read through a ref (the renewRef pattern) so recovery
+  // never waits out a stale closure, and a second concurrent event never
+  // stacks a second driver run.
   const staleRecoveryBusy = useRef(false);
-  const startStaleRecovery = useCallback(() => {
+  const startConnectivityRecovery = useCallback(() => {
     if (staleRecoveryBusy.current) return;
     staleRecoveryBusy.current = true;
     void (async () => {
@@ -600,6 +605,15 @@ function App() {
       }
     })();
   }, []);
+  // The browser's own connectivity event re-proves the network through the
+  // same bounded chain: the immediate re-serve (attempt one) runs at once,
+  // and a failed re-serve no longer earns the offline render on a single
+  // attempt — the chain's exhaustion owns the earned state (PORCH-117).
+  useEffect(() => {
+    const online = () => void startConnectivityRecovery();
+    window.addEventListener("online", online);
+    return () => window.removeEventListener("online", online);
+  }, [startConnectivityRecovery]);
   // Live consumption (PORCH-081 ac-1): the socket feed replaces the deleted
   // fixed-interval degrade cadence. One app-scope subscription per live
   // origin connection of the open identity — websocket-only transport with
@@ -655,20 +669,26 @@ function App() {
       setBehind(result.stale);
       // PORCH-102: beyond the retained window the member never has to tap —
       // the recovery re-serves fresh over REST automatically (bounded, see
-      // startStaleRecovery); fresh state landing clears the note in
+      // startConnectivityRecovery); fresh state landing clears the note in
       // applyFeeds. Past the recovery bound the note and its Check again CTA
       // persist as the manual path.
-      if (result.stale) startStaleRecovery();
+      if (result.stale) startConnectivityRecovery();
       setOffline(false);
     } catch {
       // Named outage class: the delta could not be resolved; the alert
       // surfaces stay visible until a successful (re)connect resolves it.
       // PORCH-117: during the boot hold the loading surface owns the
-      // state — the first-fetch chain earns the offline render.
-      if (!bootHoldRef.current) setOffline(true);
+      // state — the first-fetch chain earns the offline render. After the
+      // boot one failed resolve no longer earns the banner (Brian,
+      // Oct 22, 2026 — the flash-at-load class: a first connected
+      // handshake fired the resolve, one failure earned the banner, and
+      // the next connected handshake's success cleared it a moment
+      // later); the failure rides the standing bounded re-serve chain and
+      // only exhausted attempts render the state.
+      if (!bootHoldRef.current) startConnectivityRecovery();
     }
     if (before) requestAnimationFrame(() => applyFeedCompensation(before, captureFeedAnchor()));
-  }, [startStaleRecovery]);
+  }, [startConnectivityRecovery]);
   const liveSig = identityConnections
     .map((connection) => `${new URL(connection.url).origin}#${connection.networkId ?? ""}`)
     .join("|");
@@ -688,7 +708,7 @@ function App() {
           return match ? { networkId: match.networkId ?? null, token: match.token } : null;
         },
         onEvent: (envelope) => mergeArrival(envelope, connection),
-        onState: ({ connected, established }) => {
+        onState: ({ connected, established, attempts = 0 }) => {
           // The connection fact renders visibly (ac-4): a realtime outage
           // shows the outage state and serves the cached river; a dead
           // credential keeps its own honest state instead of masquerading
@@ -703,15 +723,19 @@ function App() {
             // PORCH-117: during the boot hold the loading surface is the
             // connection state — the first-fetch chain owns the earned
             // offline render, so a transport flap mid-boot never banners.
-            // PORCH-117 follow-up (Brian, Oct 22, 2026 — "is it socket
-            // errors?"): establishment is not an error either. A stream
-            // that has never completed a handshake is still working its
-            // state — its connect attempts render loading only (the
-            // transport's own backoff); a first-attempt connect_error
-            // before any handshake must never flash the unreachable
-            // banner. Only an established-then-lost connection is a
-            // definitive outage that earns the state.
-            if (established && !membershipEndedRef.current && !bootHoldRef.current) setOffline(true);
+            // PORCH-117 (Brian Oct 22, "is it socket errors?"): the
+            // establishment itself is loading, never an error — only an
+            // established-then-lost outage earns the state.
+            // PORCH-117 (Brian Oct 22, "still getting it on load"): the
+            // loss event alone still earns nothing — the transport's
+            // re-establishment backoff is working the state just like any
+            // fetch retry. The banner renders only when those attempts
+            // are spent (the standing bound of record, the PORCH-102
+            // exhaustion law); a success at any attempt clears the count
+            // and the state, so a flap that resolves inside the bound
+            // rendered no error element at any frame.
+            if (established && attempts >= STALE_RECOVERY_MAX_ATTEMPTS
+              && !membershipEndedRef.current && !bootHoldRef.current) setOffline(true);
             return;
           }
           setOffline(false);
