@@ -39,9 +39,7 @@ const bootTokens = {
   bootDuskHalo: "radial-gradient(circle closest-side, rgba(255,190,87,.30) 0%, rgba(255,190,87,.12) 42%, rgba(255,190,87,0) 70%)",
   bootDuskGlow: "radial-gradient(closest-side, rgba(255,190,87,.26) 0%, rgba(255,190,87,.09) 55%, rgba(255,190,87,0) 78%)",
   bootDuskMote: "radial-gradient(circle at 40% 40%, #FFF6D8 0%, #FFE2B0 40%, #FFBE57 75%, rgba(255,190,87,0) 100%)",
-  bootDuskTail: "linear-gradient(to right, rgba(255,190,87,0), rgba(255,190,87,.18) 70%, rgba(255,226,176,.38))",
-  bootDuskSparkGlow: "0 0 5px 1px rgba(255,226,176,.65), 0 0 12px 3px rgba(255,190,87,.23)",
-  bootDuskTrailEdge: "rgba(255,226,176,.55)",
+  bootDuskSparkGlow: "0 0 6px 2px rgba(255,226,176,.75), 0 0 18px 5px rgba(255,190,87,.28)",
   bootDuskEdge: "rgba(255,190,87,.65)",
   bootDuskHover: "rgba(255,190,87,.12)",
 };
@@ -302,12 +300,10 @@ const CSS_VAR_NAMES = [
   // both modes) — declared in both blocks, so the boot surfaces consume
   // custom properties like every other screen.
   ["bootBg", "boot-bg"], ["bootInk", "boot-ink"], ["bootStatusInk", "boot-status-ink"],
-  // PORCH-119: scene paint (halo, floor glow, particle head/tail/glow,
+  // PORCH-119: scene paint (halo, floor glow, glowing particle heads,
   // retry edge and hover) lives in the token layer.
   ["bootDuskHalo", "boot-dusk-halo"], ["bootDuskGlow", "boot-dusk-glow"],
-  ["bootDuskMote", "boot-dusk-mote"], ["bootDuskTail", "boot-dusk-tail"],
-  ["bootDuskSparkGlow", "boot-dusk-spark-glow"],
-  ["bootDuskTrailEdge", "boot-dusk-trail-edge"],
+  ["bootDuskMote", "boot-dusk-mote"], ["bootDuskSparkGlow", "boot-dusk-spark-glow"],
   ["bootDuskEdge", "boot-dusk-edge"], ["bootDuskHover", "boot-dusk-hover"],
 ];
 

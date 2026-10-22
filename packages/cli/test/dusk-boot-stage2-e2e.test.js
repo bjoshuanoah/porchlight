@@ -123,7 +123,12 @@ test("dusk boot, deployed-hub stage 2: the loading surface serves the porch-ligh
 
     console.log("✓ dusk boot served by the deployed hub");
   } finally {
-    if (hub && !hub.killed) hub.kill("SIGTERM");
-    if (!keep) await rm(home, { recursive: true, force: true });
+    if (hub && hub.exitCode === null) {
+      hub.kill("SIGTERM");
+      await new Promise((resolve) => hub.once("exit", resolve));
+    }
+    // Hub children finish shutting down after the supervisor exits; fs.rm
+    // retries ENOTEMPTY while their files are still being released.
+    if (!keep) await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
   }
 });

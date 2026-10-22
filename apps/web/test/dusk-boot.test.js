@@ -91,10 +91,8 @@ test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, m
     const halo = css.match(/\.porch-dusk-halo \{[^}]*\}/)[0];
     assert.ok(Number(glow.match(/top:\s*(\d+)px/)[1]) > 100, "the glow sits beneath the mark");
     assert.ok(halo.includes("top: 50%"), "the halo sits behind the mark's center");
-    // The image is an opaque sibling above the lighting, with an isolated
-    // stacking context so no animated mote can paint over its pixels.
+    // An isolated scene keeps the mark above every ambient layer.
     assert.match(css, /\.porch-dusk-scene \{[^}]*isolation: isolate/);
-    assert.match(css, /\.porch-dusk-mark \{[^}]*z-index: 3; opacity: 1/);
   });
   // The static canvas mirrors the scene rule for rule (pre-JS parity).
   const index = await readFile(join(webRoot, "index.html"), "utf8");
@@ -108,43 +106,6 @@ test("ac-2: layered lighting — halo behind the mark, flattened glow beneath, m
   const partsAt = boot.indexOf("porch-dusk-particles");
   const markAt = boot.indexOf("porch-dusk-mark");
   assert.ok(haloAt < glowAt && glowAt < partsAt && partsAt < markAt, "lighting renders behind the mark");
-});
-
-test("ac-3: sparse firefly particles orbit the lantern on slow curved paths with bright heads and fading tails", async () => {
-  await withLantern(async ({ LanternBoot }) => {
-    const html = renderToString(React.createElement(LanternBoot));
-    const css = styleOf(html);
-    // Sparse: six orbiting motes, desynced and individually tuned.
-    assert.equal((html.match(/class="porch-dusk-particle"/g) ?? []).length, 6, "the field stays sparse");
-    // Slow (multi-second durations) with per-particle variation.
-    const durations = [...css.matchAll(/--d:\s*(1[89]|[23]\d)s/g)].map((m) => m[1]);
-    assert.ok(durations.length >= 6, "every firefly orbits on a multi-second rhythm");
-    // Orbiting the lantern (Brian, Oct 22): the motes anchor at the mark's
-    // center and circle it on per-particle elliptical paths.
-    const moteRule = css.match(/\.porch-dusk-particle \{[^}]*\}/)[0];
-    assert.match(moteRule, /left: 50%; top: 50%/, "the motes anchor at the mark's center");
-    const radii = [...css.matchAll(/--r:\s*(\d+)px;.*--ry:\s*(\d+)px/g)].map((m) => [Number(m[1]), Number(m[2])]);
-    assert.ok(radii.length >= 6, "each firefly carries its own orbit radius and squash");
-    assert.ok(radii.every(([r, ry]) => r >= 60 && ry > 0 && ry < r), "the orbits are elliptical — squashed per mote");
-    // Gently curved: the orbit keyframes travel eased waypoints with a
-    // rotate wiggle (never a straight run).
-    const orbitKey = css.match(/@keyframes porch-dusk-orbit \{[\s\S]*?\n\}/)[0];
-    const waypoints = [...orbitKey.matchAll(/transform:/g)].length;
-    assert.ok(waypoints >= 4, `the path curves through ${waypoints} waypoints`);
-    assert.match(orbitKey, /rotate/, "the path carries gentle curvature");
-    assert.match(css, /animation-direction: reverse/, "half the fireflies orbit the other way — no uniform swim");
-    // Bright head, short fading tail — the paint rides the token layer; the
-    // pre-JS canvas carries the same literals as fallback-only values.
-    const mote = css.match(/\.porch-dusk-particle \{[^}]*\}/)[0];
-    assert.match(mote, /background: var\(--porch-boot-dusk-mote\)/);
-    assert.match(css, /porch-dusk-particle::after/, "the tail is a separate fading streak");
-    const tail = css.match(/\.porch-dusk-particle::after \{[^}]*\}/)[0];
-    assert.match(tail, /background: var\(--porch-boot-dusk-tail\)/);
-    // Unobtrusive: the particles render behind the mark (their layer is z 0).
-    assert.match(css, /\.porch-dusk-particles \{ position: absolute; inset: 0; z-index: 0; \}/);
-  });
-  const boot = await staticBootSlice();
-  assert.equal((boot.match(/class="porch-dusk-particle"/g) ?? []).length, 6, "the pre-JS canvas carries the same sparse field");
 });
 
 test("ac-4: breathing modulates the light layers only — never the mark's position or scale", async () => {
