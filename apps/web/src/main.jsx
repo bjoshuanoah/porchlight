@@ -40,6 +40,8 @@ import { applyFeedCompensation, captureFeedAnchor, createScrollMemory } from "./
 import { registerMediaTransport, syncMediaTransport, workerRegistration } from "./media-transport.js";
 import { signalMediaRecovery } from "./media-recovery.js";
 import { Timeline, Groups, PostDetail, Compose, Albums, Uploads, Search } from "./social.jsx";
+import { ComposeSheet } from "./compose-sheet.jsx";
+import { MOBILE_CLASS_MAX } from "./compose-sheet.js";
 import { Join, Settings, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, UserSwitcher, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
 import { Lockup } from "./brand.jsx";
 // PORCH-095: the boot surface (first paint, before route resolution) and
@@ -225,6 +227,29 @@ function App() {
   const identityEndedRef = useRef(false);
   const [notice, setNotice] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
+  // PORCH-144: the compose surface resolver — the mobile bottom sheet below
+  // 900px (the composer of record there), the existing desktop modal at
+  // ≥900px. The variant freezes while the composer is open: crossing the
+  // breakpoint mid-draft never remounts the surface under the member's
+  // draft, and it re-resolves on the next open. The breakpoint machinery
+  // rides the shell (the same matchMedia layer the mode switcher uses);
+  // the sheet component itself never branches on a viewport or mode query.
+  const [composeVariant, setComposeVariant] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(`(max-width: ${MOBILE_CLASS_MAX}px)`).matches ? "mobile" : "desktop" : "desktop");
+  const composeOpenRef = useRef(composeOpen);
+  useEffect(() => {
+    composeOpenRef.current = composeOpen;
+  }, [composeOpen]);
+  useEffect(() => {
+    const query = window.matchMedia(`(max-width: ${MOBILE_CLASS_MAX}px)`);
+    const sync = () => {
+      if (!composeOpenRef.current) setComposeVariant(query.matches ? "mobile" : "desktop");
+    };
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
   // PORCH-096 (Brian, Oct 16 2026, compose pre-population ruling): the
   // compose card pre-populates its location control from context — the
   // surface the member composes from pre-sets the target. A group page's
@@ -2029,7 +2054,12 @@ function App() {
             : { minWidth: 44 }), ...(route.startsWith(path) ? { "&::before": { content: '""', position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", width: 24, height: 2, borderRadius: 1, bgcolor: "secondary.main" } } : {}) }} />)}
       </BottomNavigation>
     </Paper>}
-    <Compose open={composeOpen} onClose={() => { setComposeOpen(false); setComposeStaging(null); }} target={composeTarget} staged={composeStaging} {...props} />
+    {/* PORCH-144: the compose surface resolves per class — the mobile
+        bottom sheet below 900px, the desktop modal at ≥900px. The variant
+        freezes while open, never remounting under a live draft. */}
+    {composeVariant === "mobile"
+      ? <ComposeSheet open={composeOpen} onClose={() => { setComposeOpen(false); setComposeStaging(null); }} target={composeTarget} staged={composeStaging} {...props} />
+      : <Compose open={composeOpen} onClose={() => { setComposeOpen(false); setComposeStaging(null); }} target={composeTarget} staged={composeStaging} {...props} />}
     <Dialog open={newDevices.length > 0 && newDevices[0]?.did === identity?.id} onClose={() => setNewDevices((pending) => pending.slice(1))}>
       <DialogTitle>A new device was just connected</DialogTitle>
       <DialogContent><Typography>{newDevices[0]?.label || "A device"} was connected to your place in this family. If you do not recognize it, remove it now.</Typography></DialogContent>

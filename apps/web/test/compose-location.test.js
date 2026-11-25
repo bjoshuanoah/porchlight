@@ -78,8 +78,10 @@ test("ac-1: the shell derives the context target from the surface — a group ro
     "the /compose navigation captures the surface it opened from");
   assert.match(shell, /const openCompose = \(\) => \{ setComposeTarget\(composeTargetOfRoute\(route\)\); setComposeOpen\(true\); \}/,
     "the shell compose controls open from the current surface");
-  assert.match(shell, /<Compose open=\{composeOpen\} onClose=\{\(\) => \{ setComposeOpen\(false\); setComposeStaging\(null\); \}\} target=\{composeTarget\} staged=\{composeStaging\} \{\.\.\.props\} \/>/,
-    "the staged context target rides the compose mount; closing compose discards staged share content");
+  assert.match(shell, /<ComposeSheet open=\{composeOpen\} onClose=\{\(\) => \{ setComposeOpen\(false\); setComposeStaging\(null\); \}\} target=\{composeTarget\} staged=\{composeStaging\} \{\.\.\.props\} \/>/,
+    "the staged context target rides the mobile compose sheet mount; closing compose discards staged share content");
+  assert.match(shell, /: <Compose open=\{composeOpen\} onClose=\{\(\) => \{ setComposeOpen\(false\); setComposeStaging\(null\); \}\} target=\{composeTarget\} staged=\{composeStaging\} \{\.\.\.props\} \/>/,
+    "the staged context target rides the desktop modal mount unchanged");
 });
 
 test("ac-1: the group surface carries the '+ New post' compose entry riding the pre-populated control", async () => {

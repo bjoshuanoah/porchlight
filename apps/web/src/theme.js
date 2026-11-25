@@ -68,6 +68,13 @@ export const lightTokens = {
   shadowCard: "0 1px 2px rgba(18,32,51,.05), 0 4px 14px rgba(18,32,51,.04)",
   shadowModal: "0 20px 60px rgba(18,32,51,.18)",
   shadowCompose: "0 6px 18px rgba(216,138,36,.28)",
+  // PORCH-144: the mobile composer sheet tokens — the flush sheet's upward
+  // shadow lifts from the page; the staged-media scrim and its ink sit over
+  // photo/video previews (remove control, play glyph, duration chip).
+  shadowSheet: "0 -8px 40px rgba(16,36,58,.26)",
+  mediaOverlay: "rgba(16,36,58,.72)",
+  mediaOverlayHover: "rgba(16,36,58,.88)",
+  mediaOverlayInk: "#FFFFFF",
   appbarBg: "rgba(255,255,255,.96)",
   lampGlow: "rgba(255,190,87,.45)",
   lampGlowSoft: "rgba(255,190,87,.35)",
@@ -99,6 +106,12 @@ export const darkTokens = {
   shadowCard: "0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.28)",
   shadowModal: "0 20px 60px rgba(0,0,0,.5)",
   shadowCompose: "0 6px 18px rgba(232,165,79,.30)",
+  // PORCH-144: the sheet's dark steps stay in the warm family — the scrim
+  // rides the mode's own charcoal ink, never a cold gray.
+  shadowSheet: "0 -8px 40px rgba(0,0,0,.45)",
+  mediaOverlay: "rgba(23,18,14,.72)",
+  mediaOverlayHover: "rgba(23,18,14,.88)",
+  mediaOverlayInk: "#F3EDE6",
   appbarBg: "rgba(23,18,14,.96)",
   lampGlow: "rgba(255,190,87,.32)",
   lampGlowSoft: "rgba(255,190,87,.22)",
@@ -294,6 +307,8 @@ const CSS_VAR_NAMES = [
   ["voteUp", "vote-up"], ["voteDown", "vote-down"],
   ["timelineDivider", "timeline-divider"],
   ["shadowCard", "shadow-card"], ["shadowModal", "shadow-modal"], ["shadowCompose", "shadow-compose"],
+  ["shadowSheet", "shadow-sheet"],
+  ["mediaOverlay", "media-overlay"], ["mediaOverlayHover", "media-overlay-hover"], ["mediaOverlayInk", "media-overlay-ink"],
   ["appbarBg", "appbar-bg"], ["lampGlow", "lamp-glow"], ["lampGlowSoft", "lamp-glow-soft"],
   ["amberInk", "amber-ink"],
   // PORCH-095: the boot's mode-invariant brand palette (one navy canvas,
