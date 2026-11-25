@@ -21,6 +21,9 @@ const FAMILY = "net_family";
 async function selfVoteFixture() {
   const audits = [];
   const fx = fixture({ networkIds: [FAMILY], audit: async (action, payload) => audits.push({ action, payload }) });
+  // PORCH-143: the atomic create gate admits only committed origin media —
+  // this suite's fixed attachment id rides a committed original row.
+  fx.store.collection("media_assets").insertOne({ _id: "med_1", networkId: FAMILY, kind: "original", contentType: "image/jpeg", immutable: true, sha256: "seed_med_1", bytes: 1, blobKey: "seed_med_1", width: 480, height: 320, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
   // Owner-root rule: Susan founds, so restore rides her owner token.
   fx.collections.networks.updateOne({ _id: FAMILY }, { $set: { ownerDid: SUSAN } });
   const devs = { susan: device("dev_s"), june: device("dev_j"), meg: device("dev_m") };

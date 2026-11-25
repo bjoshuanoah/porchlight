@@ -33,7 +33,12 @@ export const socialModels = {
       /** Media references owned by this post alone (media pipeline PORCH-008).
        *  Each ref's served payload carries the media-geometry stamp — display
        *  width, height, computed aspect ratio, durationMs for video — so
-       *  clients reserve the final frame before any byte loads (PORCH-049). */
+       *  clients reserve the final frame before any byte loads (PORCH-049).
+       *  PORCH-143 (mixed posts): the per-reference kind (photo | video |
+       *  audio) is the READ projection of the ingest-stamped asset
+       *  contentType, served inside each ref's mediaMeta entry; a kind-split
+       *  list projects type=mixed at read time only — no data migration, the
+       *  document stays the ordered id list. */
       mediaRefs: { type: "array", items: { type: "string" } },
       caption: { type: ["string", "null"] },
       /** Text body for type=text posts. */

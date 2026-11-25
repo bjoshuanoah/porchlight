@@ -27,8 +27,10 @@ test('PORCH-045 ac-2: release snaps to the nearest slide', () => {
 });
 
 test('PORCH-045 ac-1: multi-image posts render one swipeable carousel, grids stay out', () => {
-  // Media routes multi-image photo posts to the carousel on every breakpoint.
-  assert.match(social, /ids\.length > 1 && post\.type === 'photo'/);
+  // Media routes multi-image posts to the carousel on every breakpoint.
+  // PORCH-143: the gate admits mixed posts beside photo posts; video and
+  // audio single-shape posts keep the stack.
+  assert.match(social, /ids\.length > 1 && \(post\.type === 'photo' \|\| mixed\)/);
   assert.match(social, /\? <MediaCarousel ids=\{ids\} post=\{post\} actions=\{actions\} detail=\{detail\} onExpand=\{onExpand\} \/>/);
   // The snap track is the single carousel shape; slides map the whole set.
   assert.match(social, /scrollSnapType: 'x mandatory'/);
@@ -63,7 +65,9 @@ test('PORCH-045 ac-3: slides obey the photo-first media rules', () => {
   // Slide mode omits its own breakout: the track owns it once, slides are
   // exact media width and never nest in a padded frame.
   assert.match(social, /const breakout = !detail && media && !slide;/);
-  assert.match(social, /<MediaItem id=\{id\} post=\{post\} actions=\{actions\} detail=\{detail\} slide index=\{index\} onExpand=\{onExpand\} \/>/);
+  // PORCH-143: carousel slides are kind-aware — each slide MediaItem
+  // receives that slide's own kind as its post type.
+  assert.match(social, /<MediaItem id=\{id\} post=\{kindPost\(post, id\)\} actions=\{actions\} detail=\{detail\} slide index=\{index\} onExpand=\{onExpand\} \/>/);
   // Natural aspect ratio per slide with the 85vh contain cap rides the
   // existing fitSx; no fixed pixel track height exists in the carousel.
   assert.match(social, /photoFirst\.extremeCap/);

@@ -270,6 +270,7 @@ export class ContentController {
       E_EDIT_MEDIA_IMMUTABLE: 400,
       E_EDIT_TYPE_IMMUTABLE: 400,
       E_EDIT_EMPTY: 400,
+      E_MEDIA_UNCOMMITTED: 422,
     };
     const status = statusByCode[error.code] ?? 500;
     const message =

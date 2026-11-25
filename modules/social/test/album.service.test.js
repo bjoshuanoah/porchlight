@@ -29,6 +29,14 @@ const CHUNK_SIZE = 16;
 function albumFixture() {
   const fx = fixture();
   fx.collections.networks.updateOne({ _id: FAMILY }, { $set: { ownerDid: SUSAN } });
+  // PORCH-143: the atomic create gate admits only committed origin media —
+  // the album fixture's fixed attachment ids ride committed original rows
+  // (the real pipeline commits these exact rows at upload time; the album
+  // tests exercise attachments, not uploads).
+  fx.store.collection("media_assets").insertOne({ _id: "med_orig_a", networkId: FAMILY, kind: "original", contentType: "image/jpeg", immutable: true, sha256: "seed_a", bytes: 1, blobKey: "seed_a", width: 480, height: 320, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
+  fx.store.collection("media_assets").insertOne({ _id: "med_orig_b", networkId: FAMILY, kind: "original", contentType: "image/jpeg", immutable: true, sha256: "seed_b", bytes: 1, blobKey: "seed_b", width: 480, height: 320, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
+  fx.store.collection("media_assets").insertOne({ _id: "med_beach", networkId: FAMILY, kind: "original", contentType: "image/jpeg", immutable: true, sha256: "seed_beach", bytes: 1, blobKey: "seed_beach", width: 480, height: 320, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
+  fx.store.collection("media_assets").insertOne({ _id: "med_lake", networkId: FAMILY, kind: "original", contentType: "image/jpeg", immutable: true, sha256: "seed_lake", bytes: 1, blobKey: "seed_lake", width: 480, height: 320, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
   const mod = assembleSocialModule(fx.store, {
     verifyMemberIdToken: (token) => (token ? { did: token } : null),
     media: { chunkSize: CHUNK_SIZE, diskProbe: async () => ({ totalBytes: 1_000_000, freeBytes: 900_000 }) },

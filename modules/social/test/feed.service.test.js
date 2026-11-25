@@ -15,6 +15,13 @@ const DAY = 24 * HOUR;
 
 function feedFixture() {
   const fx = fixture({ networkIds: [FAMILY, OTHER] });
+  // PORCH-143: the atomic create gate admits only committed origin media —
+  // the feed fixture's fixed attachment ids ride committed original rows
+  // (the search test's post shapes are read fixtures, not upload tests).
+  for (const id of ["med_1", "med_2", "med_3"]) {
+    fx.store.collection("media_assets").insertOne({ _id: id, networkId: FAMILY, kind: "original", contentType: "image/jpeg", immutable: true, sha256: `seed_${id}`, bytes: 1, blobKey: `seed_${id}`, width: 480, height: 320, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
+  }
+  fx.store.collection("media_assets").insertOne({ _id: "med_9", networkId: OTHER, kind: "original", contentType: "image/jpeg", immutable: true, sha256: "seed_med_9", bytes: 1, blobKey: "seed_med_9", width: 480, height: 320, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
   const dev = device("dev_s");
   const juneDev = device("dev_j");
   const megDev = device("dev_m");

@@ -802,7 +802,7 @@ function MediaCarousel({ ids, post, actions, detail = false, onExpand = null }) 
       }} style={adaptiveHeight != null ? { height: adaptiveHeight } : undefined} sx={carouselTrackSx}>
         {ids.map((id, index) => (
           <Box key={`${id}-${index}`} aria-roledescription="slide" aria-label={`Image ${index + 1} of ${count}`} sx={carouselSlideSx}>
-            <MediaItem id={id} post={post} actions={actions} detail={detail} slide index={index} onExpand={onExpand} />
+            <MediaItem id={id} post={kindPost(post, id)} actions={actions} detail={detail} slide index={index} onExpand={onExpand} />
           </Box>
         ))}
       </Box>
@@ -858,31 +858,65 @@ function ComposerPreviewCarousel({ files }) {
 // overlay, so closing it returns to the surface exactly as the member left
 // it: the carousel keeps its scroll position and the page its scroll
 // (nothing under the overlay moves).
+// PORCH-143 (mixed posts): the per-reference kind — media type rides the
+// ingest stamp, resolved from the payload's mediaMeta contentType at render
+// time. A legacy payload without stamps falls back to the post's own
+// single-media type (null otherwise).
+function refKindOf(post, id) {
+  const contentType = post?.mediaMeta?.[id]?.contentType;
+  if (typeof contentType === 'string') {
+    if (contentType.startsWith('image/')) return 'photo';
+    if (contentType.startsWith('video/')) return 'video';
+    if (contentType.startsWith('audio/')) return 'audio';
+  }
+  return post?.type === 'photo' || post?.type === 'video' || post?.type === 'audio' ? post.type : null;
+}
+
+// A slide MediaItem branches on the post type; mixed posts pass each slide
+// a shallow copy whose type is that slide's own kind — kind-aware slides
+// without touching any MediaItem branch.
+function kindPost(post, id) {
+  const kind = refKindOf(post, id);
+  return kind && kind !== post?.type ? { ...post, type: kind } : post;
+}
+
 function Media({ post, actions, detail = false }) {
   const media = Array.isArray(post?.mediaRefs) ? post.mediaRefs : [];
   const ids = media.map((entry) => typeof entry === 'string' ? entry : entry?.mediaId ?? entry?._id ?? entry?.id).filter(Boolean);
   const [viewerIndex, setViewerIndex] = useState(null);
-  const photoView = post.type === 'photo' && ids.length > 0 && viewerIndex != null;
-  const onExpand = post.type === 'photo' && ids.length > 0
+  // PORCH-143: a mixed post's carousel carries photo and video slides in
+  // attachment order; the full-screen viewer is the photo sequence (the
+  // photo originals, viewer sequence of record) and opens only from a
+  // photo slide — a video slide plays inline under playback governance
+  // (PORCH-123), never inside the photo viewer.
+  const mixed = post.type === 'mixed';
+  const viewerIds = mixed ? ids.filter((id) => refKindOf(post, id) === 'photo') : ids;
+  const viewerOpens = (post.type === 'photo' || mixed) && (mixed ? viewerIds.length > 0 : ids.length > 0);
+  const photoView = viewerOpens && viewerIndex != null && refKindOf(post, ids[viewerIndex]) === 'photo';
+  const startIndex = mixed && viewerIndex != null ? viewerIds.indexOf(ids[viewerIndex]) : viewerIndex;
+  const onExpand = viewerOpens
     ? (index) => setViewerIndex(Math.min(Math.max(index, 0), ids.length - 1))
     : null;
   if (!ids.length) return null;
   // PORCH-045: multi-image posts render as a single swipeable carousel on
   // every breakpoint (Brian, Oct 14, 2026) — the Oct 9 grid treatments and
-  // the +3 overlay are superseded and render nowhere. Video stays out of
-  // the carousel until asked for, so every other shape keeps the plain
-  // multi-item stack.
-  const surface = ids.length > 1 && post.type === 'photo'
+  // the +3 overlay are superseded and render nowhere.
+  // PORCH-143: the same carousel rides a mixed post — kind-aware slides
+  // (each slide renders its own photo or video element) in attachment
+  // order, through the shipped PORCH-045 machinery. Single-shaped video and
+  // audio posts keep the plain stack.
+  const surface = ids.length > 1 && (post.type === 'photo' || mixed)
     ? <MediaCarousel ids={ids} post={post} actions={actions} detail={detail} onExpand={onExpand} />
     : <Stack spacing={0} sx={{ mt: detail ? 2 : photoFirst.spacing.captionMedia / 8 }}>
       {ids.map((id, index) => (
-        <MediaItem key={`${id}-${index}`} id={id} post={post} actions={actions} detail={detail} index={index} onExpand={onExpand} />
+        <MediaItem key={`${id}-${index}`} id={id} post={kindPost(post, id)} actions={actions} detail={detail} index={index} onExpand={onExpand} />
       ))}
     </Stack>;
   return <>
     {surface}
-    {photoView && <PhotoViewer post={post} ids={ids} actions={actions} startIndex={viewerIndex} onClose={() => setViewerIndex(null)} />}
+    {photoView && <PhotoViewer post={post} ids={viewerIds} actions={actions} startIndex={startIndex} onClose={() => setViewerIndex(null)} />}
   </>;
+
 }
 
 // The glance popover's one content view (PORCH-090): faces beside family
