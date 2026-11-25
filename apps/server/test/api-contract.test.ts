@@ -604,6 +604,25 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
     return ((await res.json()) as FeedCreatedPostBody).post;
   };
 
+  // The network row drives the origin the media row must commit into.
+  const networkId = ((await hub.db.collection("networks").findOne({})) as { _id: string } | null)?._id ?? "net_unknown";
+  // PORCH-143: the atomic create gate admits only committed origin media —
+  // the contract post's attachment rides a committed original row.
+  hub.db.collection("media_assets").insertOne({
+    _id: "med_1",
+    networkId,
+    kind: "original",
+    contentType: "image/jpeg",
+    immutable: true,
+    sha256: "seed",
+    bytes: 1,
+    blobKey: "seed",
+    width: 480,
+    height: 320,
+    durationSeconds: null,
+    createdAt: new Date().toISOString(),
+    status: "committed",
+  });
   const captioned = await createPost({ type: "photo", mediaRefs: ["med_1"], caption: "Picnic at the Lake" });
   await createPost({ type: "text", body: "plain text post" });
 

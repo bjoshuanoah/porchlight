@@ -729,6 +729,11 @@ export class MediaService {
         if (!entry) continue;
         entry.contentType = row.contentType;
         Object.assign(entry, mediaGeometry(row));
+        // PORCH-143: the per-reference kind rides the ingest stamp — the
+        // asset's contentType — stamped on the served mediaMeta entry, so
+        // consumers switch per reference, never on the post's type field
+        // alone.
+        entry.kind = mediaRefKind(row.contentType);
       } else {
         const entry = meta.get(row.originalId);
         if (!entry) continue;
@@ -754,9 +759,39 @@ export class MediaService {
     for (const view of views) {
       if (Array.isArray(view.mediaRefs) && view.mediaRefs.length > 0) {
         view.mediaMeta = Object.fromEntries(view.mediaRefs.filter((id) => meta.has(id)).map((id) => [id, meta.get(id)]));
+        // PORCH-143: type=mixed is the read projection of a kind-split list
+        // (photos and videos together). Single-kind and legacy posts pass
+        // through unchanged; the projection never rewrites a document.
+        view.type = projectedPostType(
+          view.type,
+          view.mediaRefs.map((id) => meta.get(id)?.kind ?? null),
+        );
       }
     }
     return views;
+  }
+
+  /**
+   * PORCH-143 (mixed posts) write atomicity: the one signed creation write
+   * commits only when every referenced upload has read-back-verified bytes
+   * on the configured media root — each mediaRef must resolve to a
+   * committed original asset row in the origin network. An unresolved
+   * reference (uncommitted, failed, or foreign) refuses the whole write:
+   * the uncommitted reference is absent from any created document and no
+   * read surface ever serves the half-state.
+   */
+  async assertPostMediaCommitted({ networkId, mediaRefs }) {
+    const ids = Array.isArray(mediaRefs) ? mediaRefs.filter((id) => typeof id === "string" && id.length > 0) : [];
+    if (ids.length === 0) return;
+    const originals = new Set(
+      (await this.assets.find({ networkId }))
+        .filter((row) => row.kind === "original")
+        .map((row) => String(row._id)),
+    );
+    const missing = ids.filter((id) => !originals.has(id));
+    if (missing.length > 0) {
+      throw typedError("E_MEDIA_UNCOMMITTED", MESSAGES.E_MEDIA_UNCOMMITTED, { missing });
+    }
   }
 
   /**
@@ -1202,6 +1237,33 @@ export function rungsForContentType(rungs, contentType) {
 export const RENDITION_KINDS_VIDEO = new Set(["poster", "playable"]);
 
 /**
+ * Per-reference content kind (PORCH-143, mixed posts): media type is a
+ * property of each media reference, never a fork of the post (Brian,
+ * Nov 25, 2026). The kind derives from the ingest stamp of record — the
+ * committed asset's contentType — at read time, never from a client-
+ * asserted field and never stamped onto the document (the post document
+ * carries no media bytes or geometry; mediaRefs stays the ordered id list).
+ */
+export function mediaRefKind(contentType) {
+  if (typeof contentType !== "string") return null;
+  if (contentType.startsWith("image/")) return "photo";
+  if (contentType.startsWith("video/")) return "video";
+  if (contentType.startsWith("audio/")) return "audio";
+  return null;
+}
+
+/**
+ * Mixed read projection (PORCH-143): the post type stays a READ projection
+ * — a list mixing photos and videos projects type=mixed; single-kind posts
+ * keep type text|photo|video|audio unchanged, and legacy posts resolve
+ * through the same projection with no data rewrite.
+ */
+export function projectedPostType(storedType, refKinds) {
+  const kinds = [...new Set(refKinds.filter(Boolean))];
+  return kinds.includes("photo") && kinds.includes("video") ? "mixed" : storedType;
+}
+
+/**
  * The media-geometry stamp of a media ref (PORCH-049 ac-1, media-optimization
  * ruling): the ORIGINAL's display width, height, and computed aspect ratio,
  * with durationMs for video — the exact geometry the payload states and the
@@ -1252,6 +1314,7 @@ export const MESSAGES = {
   E_ORIGINAL_BYTES_MISSING: "The original's stored bytes are unreadable.",
   E_BLOB_MISSING: "The stored media bytes are unreadable.",
   E_MEDIA_UNDECODABLE: "The hub cannot decode this upload's pixels — nothing was stored. Photos arrive as JPEG/PNG/WebP/HEIC, videos as MP4/WebM/MOV.",
+  E_MEDIA_UNCOMMITTED: "Nothing was created: one of the attached files never finished uploading. Re-attach the missing file and try again.",
 };
 
 // The media store re-exports live here so the media service is the one

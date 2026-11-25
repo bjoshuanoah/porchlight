@@ -193,6 +193,7 @@ test('PORCH-082 ac-5: history, Escape, geometry stamps, warm dark, and containme
   assert.match(viewer, /backdropFilter: viewerTokens\.backdropBlur/);
   // Containment and the render-time filter carry: the viewer's set is the
   // post's own surface-rendered mediaRefs — nothing resolves media the
-  // surface never rendered.
-  assert.match(social, /<PhotoViewer post=\{post\} ids=\{ids\} actions=\{actions\} startIndex=\{viewerIndex\} onClose=/);
+  // surface never rendered. PORCH-143: on a mixed post the sequence is the
+  // photo subset (viewerIds), resolved by the same surface mount.
+  assert.match(social, /<PhotoViewer post=\{post\} ids=\{viewerIds\} actions=\{actions\}/);
 });

@@ -14,6 +14,11 @@ function textPayload(overrides = {}) {
 /** Susan on the family network only. */
 async function susanFixture() {
   const fx = fixture();
+  // PORCH-143: the atomic create gate admits only committed origin media —
+  // this suite's fixed attachment ids ride committed original rows.
+  for (const [id, ct] of [["med_1", "image/jpeg"], ["med_2", "video/mp4"], ["med_3", "audio/mpeg"]]) {
+    fx.store.collection("media_assets").insertOne({ _id: id, networkId: FAMILY, kind: "original", contentType: ct, immutable: true, sha256: `seed_${id}`, bytes: 1, blobKey: `seed_${id}`, width: null, height: null, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
+  }
   const dev = device("dev_s");
   const { accessToken } = await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev });
   return { ...fx, dev, accessToken };
@@ -22,6 +27,14 @@ async function susanFixture() {
 /** Susan on BOTH networks (dual membership) + June on the family network. */
 async function dualFixture() {
   const fx = fixture();
+  // PORCH-143: committed origin rows for this suite's fixed attachments,
+  // each in the network its write targets (cross-post twins carry their own
+  // independent ingest refs).
+  for (const [networkId, ids] of [[FAMILY, ["med_src", "med_a"]], [OTHER, ["med_own", "med_own_ingest"]]]) {
+    for (const id of ids) {
+      fx.store.collection("media_assets").insertOne({ _id: id, networkId, kind: "original", contentType: "image/jpeg", immutable: true, sha256: `seed_${id}`, bytes: 1, blobKey: `seed_${id}`, width: null, height: null, durationSeconds: null, createdAt: "2026-11-01T00:00:00.000Z" });
+    }
+  }
   const dev = device("dev_s");
   const juneDev = device("dev_j");
   const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;

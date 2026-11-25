@@ -900,6 +900,13 @@ export class PostService {
     if (MEDIA_TYPES.includes(type) && mediaRefs.length === 0) {
       throw typedError("E_MEDIA_REQUIRED", POST_MESSAGES.E_MEDIA_REQUIRED);
     }
+    // PORCH-143 (mixed posts) write atomicity: the one creation write
+    // commits only when every referenced upload has read-back-verified
+    // bytes on the origin's media root — an unverified/failed reference
+    // creates nothing (no document; no read surface serves the half-state).
+    if (mediaRefs.length > 0) {
+      await this.media.assertPostMediaCommitted({ networkId, mediaRefs });
+    }
     const groupId = payload.groupId ?? null;
     if (groupId !== null) {
       await this.#assertGroupContainment({ networkId, did, groupId });

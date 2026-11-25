@@ -1026,9 +1026,27 @@ test("PORCH-049 ac-1: every payload states the media geometry — display dims, 
 test("PORCH-049 ac-1: a ref without a readable archive states null geometry — legacy surfaces fall back intrinsically", async () => {
   const fx = mediaFixture({ chunkSize: 1024 * 1024 });
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
-  const payload = { type: "photo", mediaRefs: ["med_ghost"], caption: "no archive row" };
-  await fx.mod.postService.create({ accessToken: susan.token, payload, signature: susan.dev.signPayload(payload) });
-  const [view] = await fx.mod.feedService.timeline({ accessToken: susan.token }).then((result) => result.posts);
+  // PORCH-143: the atomic create gate now refuses an uncommitted reference
+  // on the write path; a null-shape ref is a LEGACY document state —
+  // manufactured here as a pre-gate row, never through the create path.
+  await fx.collections.posts.insertOne({
+    _id: "post_legacy_ghost",
+    originNetworkId: FAMILY,
+    authorId: SUSAN,
+    type: "photo",
+    groupId: null,
+    deviceSignature: "test",
+    mediaRefs: ["med_ghost"],
+    previewId: null,
+    caption: "no archive row",
+    body: null,
+    visibility: "members-only",
+    displayHint: null,
+    interactionCounters: { upVolume: 0, downVolume: 0, voteVolume: 0, voteRatio: 0, commentCount: 0, reactionCount: 0 },
+    createdAt: "2026-11-01T00:00:00.000Z",
+  });
+  const timeline = await fx.mod.feedService.timeline({ accessToken: susan.token }).then((result) => result.posts);
+  const [view] = timeline.filter((row) => row._id === "post_legacy_ghost");
   const meta = view.mediaMeta["med_ghost"];
   assert.ok(meta);
   assert.equal(meta.width, null);
