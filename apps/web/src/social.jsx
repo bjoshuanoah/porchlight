@@ -77,12 +77,12 @@ const atCurrentOrigin = (post, data) => post.origin ? post : { ...post, origin: 
 const memberName = (id, data) => id && id === data.identity?.id ? data.identity.name || 'You' : 'Member';
 const messageOf = (error) => error?.message || 'That did not work. Please try again.';
 
-function invoke(actions, key, ...args) {
+export function invoke(actions, key, ...args) {
   if (typeof actions?.[key] !== 'function') throw new Error('This action is not available here yet.');
   return actions[key](...args);
 }
 
-function useOperation() {
+export function useOperation() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function run(callback, onSuccess, onFailure) {
