@@ -85,6 +85,18 @@ export type ApplyResult =
   | { status: "applied"; release: { from: string | null; to: string } }
   | { status: "failed"; error: string; release: { current: string | null } };
 
+/**
+ * The update-time data-migration phase (PORCH-156). The freshly installed
+ * release's own migration runner executes its pending versioned set against
+ * the hub's own data BEFORE the restart is scheduled — a failed set keeps
+ * the prior release serving, and a completed set is recorded once-only per
+ * hub in the migration ledger for the resume on the next boot.
+ */
+export interface UpdateMigrator {
+  /** Rejection = the set did not complete; diagnostics name the failing step. */
+  run(args: { version: string }): Promise<{ applied: number; lines: string[] }>;
+}
+
 export interface UpdateDeps {
   /** The running hub release version — fixed for the life of the process. */
   version: string | null;
@@ -110,6 +122,13 @@ export interface UpdateDeps {
   opsTokenFile: string | null;
   /** Graceful self-restart after a successful apply (server shutdown). */
   restart: () => void;
+  /**
+   * The update-time data-migration phase (PORCH-156). Optional for
+   * dependency-less use; when present the apply runs the pending migration
+   * set before the restart is scheduled, and any failure keeps the prior
+   * release serving with the failing step's plain-language diagnostics.
+   */
+  migrate?: UpdateMigrator | null;
   /** Delay between the apply response and the restart, so the response flushes. */
   restartDelayMs?: number;
   log?: ((line: string) => void) | null;
@@ -401,6 +420,7 @@ export class UpdateService {
   readonly opsTokenFile: string | null;
   readonly restart: () => void;
   readonly restartDelayMs: number;
+  readonly migrate: UpdateMigrator | null;
   readonly log: ((line: string) => void) | null;
   #opsToken: string | null = null;
   #applying: Promise<ApplyResult> | null = null;
@@ -413,6 +433,7 @@ export class UpdateService {
     this.opsTokenFile = deps.opsTokenFile ?? null;
     this.restart = deps.restart;
     this.restartDelayMs = deps.restartDelayMs ?? 250;
+    this.migrate = deps.migrate ?? null;
     this.log = deps.log ?? null;
     if (this.opsTokenFile) this.#ensureOpsToken();
   }
@@ -526,6 +547,28 @@ export class UpdateService {
           `v${current} and was not restarted.`,
         release: { current },
       };
+    }
+    // PORCH-156: the update-time data migration. The freshly installed
+    // release's own migration runner executes its pending versioned set
+    // against the hub's data BEFORE the restart is scheduled: the prior
+    // release keeps serving if the set cannot complete, and the set's
+    // completed steps are recorded once-only in the hub's migration ledger
+    // for the resume on the next boot.
+    if (this.migrate) {
+      try {
+        const migration = await this.migrate.run({ version: latest });
+        for (const line of migration.lines) this.log?.(line);
+        this.log?.(`update v${current} → v${latest}: data migration complete (${migration.applied} step(s) applied)`);
+      } catch (error) {
+        return {
+          status: "failed",
+          error:
+            `the update to v${latest} installed, but its data migration could not complete (${(error as Error).message}). ` +
+            `The hub was NOT restarted and keeps serving v${current}: the completed steps are recorded once-only in the ` +
+            `hub's migration ledger, and the set resumes exactly at the incomplete step on the next boot.`,
+          release: { current },
+        };
+      }
     }
     // Success: respond first, then hand the process to its supervisor. The
     // graceful shutdown lets the response flush; the supervisor restarts the

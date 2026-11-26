@@ -21,7 +21,7 @@ import {
   readTarballMember,
   NOTES_MAX_CHARS,
 } from "../src/services/update.service.js";
-import type { UpdateDeps } from "../src/services/update.service.js";
+import type { UpdateDeps, UpdateMigrator } from "../src/services/update.service.js";
 
 /** Counting fakes; the restart signal is awaited, never timed. */
 function fakes({
@@ -31,21 +31,59 @@ function fakes({
   githubBody = "Stub release notes for the pending release",
   changelog = null,
   githubError = null,
-}: { latest?: string; installError?: string; registryError?: string; githubBody?: string | null; changelog?: string | null; githubError?: string | null } = {}) {
-  const calls: { registry: number; install: string[]; restart: number; notesGithub: number; notesChangelog: number; notesVersions: string[] } = {
+  migrate: migrateSeam = null,
+  migrateError = null,
+  migrateSteps = 2,
+}: {
+  latest?: string;
+  installError?: string;
+  registryError?: string;
+  githubBody?: string | null;
+  changelog?: string | null;
+  githubError?: string | null;
+  migrate?: UpdateMigrator | null;
+  migrateError?: string | null;
+  migrateSteps?: number;
+} = {}) {
+  const calls: { registry: number; install: string[]; restart: number; notesGithub: number; notesChangelog: number; notesVersions: string[]; migrateRuns: number; migrateVersions: string[] } = {
     registry: 0,
     install: [],
     restart: 0,
     notesGithub: 0,
     notesChangelog: 0,
     notesVersions: [],
+    migrateRuns: 0,
+    migrateVersions: [],
   };
   const restarted = Promise.withResolvers<void>();
+  let migrate: UpdateMigrator;
+  if (migrateSeam) {
+    migrate = migrateSeam;
+  } else if (migrateError !== null) {
+    migrate = {
+      run: async () => {
+        calls.migrateRuns += 1;
+        throw new Error(migrateError);
+      },
+    };
+  } else {
+    migrate = {
+      run: async (args) => {
+        calls.migrateRuns += 1;
+        calls.migrateVersions.push(args.version);
+        return {
+          applied: migrateSteps,
+          lines: [`migration v1 (one-fine-step): applied`, `migration done: applied ${migrateSteps} step(s)`],
+        };
+      },
+    };
+  }
   return {
     calls,
     restarted,
     deps: {
       version: "1.0.0",
+      migrate,
       registry: {
         latest: async () => {
           calls.registry += 1;
@@ -386,3 +424,37 @@ function tarFile(members: { name: string; data: Buffer }[]): Buffer {
   blocks.push(Buffer.alloc(1024)); // end-of-archive marker
   return gzipSync(Buffer.concat(blocks));
 }
+
+test("PORCH-156: a successful apply runs the update-time data migration AFTER the install and BEFORE the restart", async () => {
+  const { calls, deps, restarted } = fakes({ migrateSteps: 1 });
+  const service = new UpdateService(deps);
+  const result = await service.apply();
+  assert.equal(result.status, "applied");
+  assert.deepEqual(calls.install, ["2.0.0"]);
+  assert.equal(calls.migrateRuns, 1);
+  assert.deepEqual(calls.migrateVersions, ["2.0.0"], "the freshly installed release's set executes at its version");
+  await restarted.promise;
+  assert.equal(calls.restart, 1, "the restart is scheduled only after the set completed");
+});
+
+test("PORCH-156: a failed data migration keeps the prior release serving — no restart, plain-language diagnostics", async () => {
+  const { calls, deps } = fakes({ migrateError: "the data migration step v2 (broken) failed: fixture failure" });
+  const service = new UpdateService(deps);
+  const result = await service.apply();
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /its data migration could not complete/);
+  assert.match(result.error, /the data migration step v2 \(broken\) failed/);
+  assert.match(result.error, /The hub was NOT restarted and keeps serving v1\.0\.0/);
+  assert.deepEqual(calls.install, ["2.0.0"], "npm had already swapped the release");
+  assert.equal(calls.restart, 0, "no restart is scheduled — the prior release keeps serving");
+  assert.equal(calls.migrateRuns, 1, "the runner ran and refused to complete");
+});
+
+test("PORCH-156: no migrate seam means the boot gate on the new release carries the set (applies normally)", async () => {
+  const { calls, deps, restarted } = fakes({ migrate: null });
+  const service = new UpdateService(deps);
+  const result = await service.apply();
+  assert.equal(result.status, "applied");
+  await restarted.promise;
+  assert.equal(calls.restart, 1);
+});

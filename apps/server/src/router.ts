@@ -12,6 +12,7 @@ import { assembleSocialModule } from "@porchlight/social";
 import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
+import { spawnMigrator } from "./services/migration.service.js";
 import { ReauthService } from "./services/reauth.service.js";
 import { loadVapidKeys } from "./services/push-keys.js";
 import type { PorchlightConfig, StoreLike } from "@porchlight/shared";
@@ -149,6 +150,14 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     version: options.version ?? SERVER_PACKAGE_VERSION,
     registry: npmRegistry(),
     installer: npmInstaller(),
+    // PORCH-156: the update-time data migration runs the freshly installed
+    // release's own runner against the hub's data before the restart. The
+    // entry resolves through this process's on-disk location — npm swaps the
+    // closure in place before the restart is scheduled, so it is the NEW
+    // release's runner even inside the still-running prior release. Null
+    // when no compiled entry sits beside this module (tsx-era dev runs), in
+    // which case the boot gate on the new release is the traffic barrier.
+    migrate: spawnMigrator({ entry: fileURLToPath(new URL("./index.js", import.meta.url)) }),
     opsTokenFile: options.homeRoot ? join(options.homeRoot, "state", "ops-token.json") : null,
     restart: options.restart ?? (() => process.exit(0)),
     log: options.log ?? null,
