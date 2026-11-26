@@ -27,6 +27,7 @@
     "@porchlight/shared": "0.5.3",
     "@porchlight/home": "0.5.3",
     "@porchlight/social": "0.5.3",
+    "@porchlight/overwatch": "0.5.3",
     "express": "^4.19.2",
     "mongodb": "^6.10.0",
     "redis": "^4.7.0",

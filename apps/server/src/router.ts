@@ -6,6 +6,8 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSystemRouter } from "./routes/system.routes.js";
 import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
+import { createOverwatchPlaneRouter } from "./overwatch-plane.js";
+import type { OverwatchHomeModule } from "./overwatch-plane.js";
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule, treatAvatar } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
@@ -61,6 +63,16 @@ export interface ServerOptions {
    * console address action (stage-1 test hook). Defaults to globalThis.fetch.
    */
   verifyFetchImpl?: typeof fetch | null;
+  /**
+   * PORCH-140: the overwatch plane's content seams. The plane itself stays
+   * empty (nothing tracked yet); the engine pipeline — or a test — supplies
+   * these. Never domain logic: the plane owns it.
+   */
+  overwatch?: {
+    chainsProvider?: () => unknown[];
+    clipsProvider?: (chain: unknown) => Array<{ cameraId: string; path: string; from: number; to: number }> | undefined;
+    outagesProvider?: () => Array<{ cameraId: string; from: number; to: number }>;
+  } | null;
   /**
    * Real-time event plane (PORCH-047): the Redis-backed fan-out + replay
    * window adapter, created from deps.redis by the boot. Optional —
@@ -442,6 +454,24 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       log: options.log ?? null,
     });
     router.use("/home", homeModule.api);
+    // PORCH-140: the overwatch REST plane mounts under the hub's JSON /api
+    // prefix riding the SAME identity+home perimeter — the bearer token
+    // resolves a did through the assembled identity plane, and the homeId
+    // query param scopes through the home module's own authorize seam
+    // (members read, only the home's owner mutates). The adapter is
+    // transport-thin: the store/audit files live under the hub root, and the
+    // domain behavior stays in @porchlight/overwatch.
+    if (options.config.mode.overwatchServingEnabled) {
+      router.use("/overwatch", createOverwatchPlaneRouter({
+        root: options.homeRoot ?? options.bootstrap.configDir,
+        identityAuth,
+        homeModule: homeModule as unknown as OverwatchHomeModule,
+        chainsProvider: options.overwatch?.chainsProvider,
+        clipsProvider: options.overwatch?.clipsProvider,
+        outagesProvider: options.overwatch?.outagesProvider,
+        log: options.log ?? null,
+      }));
+    }
   }
   if (identityModule && socialModule) {
     // PORCH-065: the owner re-auth orchestration — the system-vertical

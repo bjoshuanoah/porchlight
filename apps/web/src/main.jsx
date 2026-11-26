@@ -7,6 +7,7 @@ import PhotoLibraryOutlined from "@mui/icons-material/PhotoLibraryOutlined";
 import GroupsOutlined from "@mui/icons-material/GroupsOutlined";
 import AddOutlined from "@mui/icons-material/AddOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutline";
+import VideocamOutlined from "@mui/icons-material/VideocamOutlined";
 import { themeFor, tokenStyles, lightTokens, darkTokens } from "./theme.js";
 import { identityOf } from "./feed-filter.js";
 import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
@@ -46,6 +47,9 @@ import { MOBILE_CLASS_MAX } from "./compose-sheet.js";
 import { Join, Settings, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, UserSwitcher, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
 import { HomeDashboard } from "./home.jsx";
 import { createHomeActions } from "./home-actions.js";
+// PORCH-140: the family Overwatch surface — zones/tracked/visits/dial.
+import { Overwatch } from "./overwatch.jsx";
+import { createOverwatchActions } from "./overwatch-actions.js";
 import { Lockup } from "./brand.jsx";
 // PORCH-095: the boot surface (first paint, before route resolution) and
 // the app-ready bus — readiness ends the boot, never a timer.
@@ -93,9 +97,9 @@ const standaloneBoot = isStandaloneLaunch({
   standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
 });
 const localIdentities = [...new Set(initialConnections.map((item) => item.identity?.id).filter(Boolean))];
-const primary = ["/home", "/timeline", "/groups", "/compose", "/settings"];
-const labels = ["Home", "Timeline", "Groups", "Compose", "Settings"];
-const icons = [<HomeOutlined />, <PhotoLibraryOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />];
+const primary = ["/home", "/timeline", "/groups", "/compose", "/settings", "/overwatch"];
+const labels = ["Home", "Timeline", "Groups", "Compose", "Settings", "Overwatch"];
+const icons = [<HomeOutlined />, <PhotoLibraryOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />, <VideocamOutlined />];
 
 /** A photo post's media ids — the same id-extraction the share surfaces use. */
 function mediaRefIds(post) {
@@ -1827,6 +1831,9 @@ function App() {
     // PORCH-137: the Home tab's actions ride the same factory spread — one
     // request per action, signed writes via the device key.
     ...createHomeActions(active, { navigate }),
+    // PORCH-140: the Overwatch tab's actions (owner-only REST plane; the
+    // routes carry plain contract bodies, no device-signing envelope).
+    ...createOverwatchActions({ active, navigate }),
     // PORCH-081 ac-4: the catch-up note's resolve — one member-initiated
     // refresh when the replay window was exceeded, never a poll cycle.
     refreshFeeds: () => reload(),
@@ -1961,6 +1968,8 @@ function App() {
   // PORCH-137: the Home tab renders for any signed-in connection; the home
   // module fetches on its own mount and never gates on social bootstrap.
   else if (route === "/home" || route.startsWith("/home/")) page = <HomeDashboard {...props} />;
+  // PORCH-140: the family Overwatch surface (owner-only plane hub-side).
+  else if (route === "/overwatch") page = <Overwatch {...props} />;
   else if (!connections.length) page = <Join {...props} />;
   else page = <Timeline {...props} />;
   // PORCH-051: which install surface this device earns — capability checks

@@ -12,6 +12,8 @@ export interface PorchlightConfig {
     socialServingEnabled: boolean;
     /** PORCH-137: the home module's serving toggle (default on). */
     homeServingEnabled: boolean;
+    /** PORCH-140: the overwatch REST plane's serving toggle (default on). */
+    overwatchServingEnabled: boolean;
   };
   hub: {
     host: string;

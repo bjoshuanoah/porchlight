@@ -10,7 +10,8 @@ import {
 	DEFAULT_TRACK_IDLE_SEC,
 	assertDetectedObject,
 } from "./types.js";
-import { correlate, travelPrior } from "./correlation.js";
+import { correlate, pairKey, travelPrior } from "./correlation.js";
+import { filterTracked } from "./scope-law.js";
 
 /** Slack seconds beyond the travel prior a join window widens. */
 const JOIN_SLACK_SEC = 2;
@@ -60,6 +61,9 @@ export class EntityMergeService {
 		this.handoffs = new Map();
 		/** @type {CrossJoin[]} */
 		this.joins = [];
+		/** @type {Set<string>} pair signatures whose two occurrences must never unify
+		 *  (association flag control, ac-3; seeded from config.separatePairs) */
+		this.vetoed = new Set(config.separatePairs ?? []);
 		this.nextSeq = 0;
 	}
 
@@ -71,6 +75,9 @@ export class EntityMergeService {
 	 */
 	add(obj) {
 		assertDetectedObject(obj);
+		// Scope law (ac-3): nothing outside the tracked class set enters the
+		// entity layer — no track, no sighting, no entity.
+		if (!filterTracked(obj)) return;
 		this.sweep(obj.t);
 		const byTrackId = this.open.get(obj.camera) ?? new Map();
 		if (!this.open.has(obj.camera)) this.open.set(obj.camera, byTrackId);
@@ -232,7 +239,9 @@ export class EntityMergeService {
 		});
 		if (!chosen) return;
 		const { exit, result } = chosen;
-		this.union(exit.seq, entryTrack.seq);
+		// A vetoed pair (association flag, ac-3) never unifies and records no
+		// join evidence — both occurrences stay claimable by others.
+		if (!this.union(exit.seq, entryTrack.seq)) return;
 		this.joinedTo.set(exit.seq, entryTrack.seq);
 		/** @type {ZoneHandoff} */
 		const handoff = {
@@ -258,13 +267,58 @@ export class EntityMergeService {
 		});
 	}
 
-	/** @private @param {number} a @param {number} b */
+	/**
+	 * Unify two occurrences into one entity. Refused (returns false) when the
+	 * pair's occurrence signature is vetoed — a flagged pair never unifies,
+	 * and the refused join records no handoff or join row.
+	 *
+	 * @private @param {number} a @param {number} b @returns {boolean} whether
+	 *   the two occurrences now share a root
+	 */
 	union(a, b) {
 		const ra = this.find(a);
 		const rb = this.find(b);
-		if (ra === rb) return;
+		if (ra === rb) return true;
+		if (this.isVetoedPair(a, b)) return false;
 		if (ra < rb) this.parent.set(rb, ra);
 		else this.parent.set(ra, rb);
+		return true;
+	}
+
+	/**
+	 * Occurrence signature of a candidate pair: pairKey of the two
+	 * "camera:trackId" strings — the unit the association flag control
+	 * (ac-3) vetoes on.
+	 *
+	 * @private @param {CameraTrack} exitTrack @param {CameraTrack} entryTrack
+	 */
+	occurrenceSignature(exitTrack, entryTrack) {
+		return pairKey(`${exitTrack.camera}:${exitTrack.trackId}`, `${entryTrack.camera}:${entryTrack.trackId}`);
+	}
+
+	/**
+	 * @private @param {number} a @param {number} b @returns {boolean} whether
+	 *   these two occurrences' pair signature is vetoed, checked in both
+	 *   directions (exit/entry roles may arrive inverted)
+	 */
+	isVetoedPair(a, b) {
+		if (this.vetoed.size === 0) return false;
+		const trackA = this.tracks.get(a);
+		const trackB = this.tracks.get(b);
+		if (!trackA || !trackB) return false;
+		return this.vetoed.has(this.occurrenceSignature(trackA, trackB))
+			|| this.vetoed.has(this.occurrenceSignature(trackB, trackA));
+	}
+
+	/**
+	 * Veto a pair signature at runtime: the two occurrences it names must
+	 * never unify into one entity (association flag control, ac-3). Affects
+	 * unions attempted after the call; already-joined entities are untouched.
+	 *
+	 * @param {string} signature  pairKey(`${camera}:${trackId}`, `${camera}:${trackId}`)
+	 */
+	vetoPair(signature) {
+		this.vetoed.add(signature);
 	}
 
 	/** @private @param {number} x @returns {number} */
