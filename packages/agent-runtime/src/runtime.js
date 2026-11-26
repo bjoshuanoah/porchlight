@@ -59,6 +59,27 @@ export class AgentRuntime {
 		if (!inference || typeof inference.name !== "string" || !inference.name) {
 			throw new TypeError("AgentRuntime: inference must be an InferenceProvider with a name (composition seam 1)");
 		}
+		// PORCH-148: the profiles machinery presents itself as THE
+		// InferenceProvider this seam consumes — a profile router rides one of
+		// the engine's three compute classes per resolved profile, so a router
+		// declares the classes it routes across. Every response carries the
+		// class that actually answered (the provenance line of record).
+		if (Array.isArray(inference.providerClasses)) {
+			if (inference.providerClasses.length === 0) {
+				throw new TypeError("AgentRuntime: a profile router must declare the compute classes it routes across");
+			}
+			for (const entry of inference.providerClasses) {
+				if (!PROVIDER_CLASSES.includes(entry)) {
+					throw new TypeError(
+						`AgentRuntime: every providerClasses entry must be one of ${PROVIDER_CLASSES.join(", ")} (the engine's compute classes)`,
+					);
+				}
+			}
+			if (typeof inference.complete !== "function") {
+				throw new TypeError("AgentRuntime: inference must implement complete(request) — the inference-call seam has no parallel path");
+			}
+			return;
+		}
 		if (!PROVIDER_CLASSES.includes(inference.providerClass)) {
 			throw new TypeError(
 				`AgentRuntime: inference.providerClass must be one of ${PROVIDER_CLASSES.join(", ")} (the engine's three compute classes)`,

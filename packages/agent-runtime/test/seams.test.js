@@ -185,3 +185,31 @@ test("the library's member-scoped stores stand alone for consumers", async () =>
 function scopeStore(tag) {
 	return new MemberStore({ memberId: `standalone-${tag}`, scope: "soul", backend: new MapBackend(), refuse: () => {} });
 }
+
+// PORCH-148: the profiles machinery presents itself as THE InferenceProvider
+// the seam consumes — a multi-class profile router declares the compute
+// classes it routes across, and every response carries the class that
+// actually answered (the provenance line of record).
+test("the inference seam consumes a multi-class profile router", async () => {
+	const router = {
+		name: "porchlight-profile-router",
+		providerClasses: ["native-mlx", "openai-spec", "local-server"],
+		complete: async (request) => {
+			const providerClass = request.memberId === "kids" ? "native-mlx" : "local-server";
+			return { text: `hi ${request.memberId}`, providerClass, modelId: providerClass === "native-mlx" ? "gemma4:e2b" : "glm-5.3" };
+		},
+	};
+	const runtime = new AgentRuntime({ inference: router });
+	const big = await runtime.agentFor("alice").runTurn({ text: "hello" });
+	assert.equal(big.provenance.providerClass, "local-server", "the class that answered rides the provenance line");
+	const kid = await runtime.agentFor("kids").runTurn({ text: "hi" });
+	assert.equal(kid.provenance.providerClass, "native-mlx");
+	assert.equal(kid.provenance.modelId, "gemma4:e2b");
+
+	// An empty class declaration is not a router — refuse.
+	assert.throws(() => new AgentRuntime({ inference: { ...router, providerClasses: [] } }), /declare the compute classes/);
+	assert.throws(
+		() => new AgentRuntime({ inference: { name: "x", providerClasses: ["bogus-class"], complete: async () => ({}) } }),
+		/must be one of/,
+	);
+});

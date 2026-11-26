@@ -23,6 +23,7 @@
     "test": "node --import ../../scripts/register.mjs --test 'test/**/*.test.ts'"
   },
   "dependencies": {
+    "@porchlight/agent": "0.5.3",
     "@porchlight/identity": "0.5.3",
     "@porchlight/shared": "0.5.3",
     "@porchlight/home": "0.5.3",

@@ -25,6 +25,10 @@ porchlight/
 ├── modules/
 │   ├── identity/   # Identity domain: routes → controllers → services → models — @porchlight/identity (public)
 │   ├── social/     # Social domain: routes → controllers → services → models — @porchlight/social (public)
+│   ├── agent/      # Agent domain: model profiles (InferenceProfile/ProfileAssignment), the three-part
+│   │               #   resolution chain (admin availability gate → parental narrowing → type/member), the
+│   │               #   profile-routed inference seam into @porchlight/agent-runtime, provenance, and
+│   │               #   never-silent degradation — @porchlight/agent (public) (PORCH-148)
 │   └── home/       # Home domain: homes, rooms/outdoor areas, device command lifecycle, scenes, automations, home audit — @porchlight/home (public) (PORCH-137)
 ├── packages/
 │   ├── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)
@@ -46,6 +50,7 @@ Every domain module owns its complete route → controller → service → model
 - `@porchlight/identity` owns all identity models and identity-only service logic.
 - `@porchlight/social` owns all social models and social-only service logic.
 - `@porchlight/home` owns all home models and home-only service logic (homes, areas, devices/scenes/automations, the home audit trail, and the device adapter seam); identity is referenced only through injected callbacks, and the engine (PORCH-I-009) stays a separate service boundary.
+- `@porchlight/agent` owns all agent models and agent-only service logic (model profiles, the resolution chain, the parental narrowing's enforcement, provenance, and the profile-routed inference into `@porchlight/agent-runtime`); identity and home are referenced only through injected callbacks, and the runtime library lives as its own package the module consumes (PORCH-147/148).
 - `@porchlight/shared` owns no domain models — only cross-domain-agnostic helpers.
 - `packages/cli` (`porchlight`) is the global install surface and entrypoint — the one-command bring-up owner (`setup`/`start`/`stop`/`status`/`bootstrap`/`service`): it manages daemon processes (installer-managed Mongo + Redis binaries), the tunnel, launchd/systemd supervision, and drives bootstrap over HTTP. It performs no domain logic and imports no domain models (domain behavior lives in the hub server's module services).
 - `apps/web` is a static shell; no server-side imports.

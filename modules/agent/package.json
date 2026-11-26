@@ -1,0 +1,37 @@
+{
+  "name": "@porchlight/agent",
+  "version": "0.5.3",
+  "description": "Porchlight agent module — the hub-side agent domain: model profiles (InferenceProfile + ProfileAssignment), the three-part profile resolution chain (admin availability gate → parental narrowing → type/member assignment), live-apply profile-routed inference over @porchlight/agent-runtime's composition seam, provenance stamps, and never-silent degradation.",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./models": "./src/models.js"
+  },
+  "scripts": {
+    "build": "echo 'agent ships plain JS (no build) — use tsx for type-aware development'",
+    "test": "node --test 'test/**/*.test.js'",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjoshuanoah/porchlight.git",
+    "directory": "modules/agent"
+  },
+  "dependencies": {
+    "@porchlight/agent-runtime": "0.5.3",
+    "@porchlight/shared": "0.5.3",
+    "express": "^4.19.2"
+  }
+}
