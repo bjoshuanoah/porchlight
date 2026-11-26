@@ -2,6 +2,7 @@ import { requireSignedSession } from "../util/writes.js";
 import { fail } from "./errors.js";
 import { cleanName } from "./home.service.js";
 import { validCommandShape } from "./device.service.js";
+import { ACCESS_OWNER_ONLY } from "./scopes.js";
 
 /**
  * Automation service (PORCH-137 TS 1). Event-driven rules in plain form —
@@ -36,7 +37,11 @@ export class AutomationService {
 
   /** POST /homes/:homeId/automations — create one rule. Signed member write. */
   async create({ accessToken, homeId, payload, signature } = {}) {
-    const { did } = await this.homes.authorize({ accessToken, homeId });
+    const authorizedCreate = await this.homes.authorize({ accessToken, homeId });
+    if (authorizedCreate.access?.accessClass !== "owner-membership") {
+      return fail("E_NOT_PERMITTED", ACCESS_OWNER_ONLY);
+    }
+    const did = authorizedCreate.did;
     await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.verifySession,
@@ -65,7 +70,10 @@ export class AutomationService {
   async update({ accessToken, automationId, payload, signature } = {}) {
     const automation = await this.automations.findOne({ _id: automationId });
     if (!automation) return fail("E_AUTOMATION_NOT_FOUND", "That automation isn't part of this home anymore.");
-    await this.homes.authorize({ accessToken, homeId: automation.homeId });
+    const authorizedUpdate = await this.homes.authorize({ accessToken, homeId: automation.homeId });
+    if (authorizedUpdate.access?.accessClass !== "owner-membership") {
+      return fail("E_NOT_PERMITTED", ACCESS_OWNER_ONLY);
+    }
     await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.verifySession,
@@ -89,9 +97,12 @@ export class AutomationService {
   }
 
   async list({ accessToken, homeId } = {}) {
-    await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
     const rows = await this.automations.find({ homeId });
-    return { automations: rows.sort(byCreatedAt).map((row) => this.view(row)) };
+    // Automations are member-management surfaces, never a grant scope: a
+    // visitor's view carries no rules at all (PORCH-138 TS 1 scope list).
+    const visible = authorized.access?.accessClass === "owner-membership" ? rows : [];
+    return { automations: visible.sort(byCreatedAt).map((row) => this.view(row)) };
   }
 
   /**

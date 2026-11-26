@@ -151,6 +151,75 @@ export const homeModels = {
     },
   },
   /**
+   * Grant (PORCH-138, PRD 1 / TS 1). Live access into one home for an
+   * EXISTING Porchlight identity — grants ride the identity and join-link
+   * mechanics, never minting a new identity. The Grant variant per the
+   * family governance ruling: an individual visit grant carries
+   * granteeDid; a family grant carries familyRef + parentDistributions
+   * (each distribution always ⊆ the envelope scopes, validated at write,
+   * fail closed — an over-envelope distribution is refused plainly).
+   * Expiry (checkout) and early revocation take effect immediately at the
+   * enforcement layer, so an open session's next command is re-evaluated.
+   *
+   * The three V1 access classes of record resolve as exactly one of
+   * owner-membership | individual-grant | family-grant; there is no fourth
+   * class and no parallel mechanism.
+   */
+  grant: {
+    type: "object",
+    required: ["_id", "homeId", "scopes", "expiresAt", "createdBy", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      /** Individual visit grant: the existing Porchlight identity (DID) granted. */
+      granteeDid: { type: ["string", "null"] },
+      /** Family grant: the identity-plane family this grant envelops. */
+      familyRef: { type: ["string", "null"] },
+      /** The grant's human label of record (the identity's name or family name). */
+      createdFor: { type: ["string", "null"] },
+      /**
+       * The granted scopes — the envelope for a family grant. Each scope
+       * names a resource of THIS home and its verbs: view | control.
+       */
+      scopes: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["resourceType", "resourceRef", "verbs"],
+          properties: {
+            resourceType: { type: "string", enum: ["device", "scene", "area"] },
+            resourceRef: { type: "string" },
+            verbs: { type: "array", items: { type: "string", enum: ["view", "control"] } },
+          },
+        },
+      },
+      /**
+       * Family grant only: what each visiting member may reach, assigned
+       * by the acting parent. Every distribution is validated ⊆ scopes at
+       * write; a member reaches their distribution, never the envelope
+       * implicitly.
+       */
+      parentDistributions: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["memberIdentityRef", "scopes"],
+          properties: {
+            memberIdentityRef: { type: "string" },
+            scopes: { type: "array", items: { type: "object" } },
+          },
+        },
+      },
+      /** Checkout: the moment the grant ends, enforced hub-side on every read. */
+      expiresAt: { type: "string" },
+      createdBy: { type: "string" },
+      deviceSignature: { type: "string" },
+      createdAt: { type: "string" },
+      revokedAt: { type: ["string", "null"] },
+      revokedBy: { type: ["string", "null"] },
+    },
+  },
+  /**
    * Home audit. Append-only, one row per mutation: who, which home, which
    * device, when, what outcome. state-source-change rows carry the source
    * (physical | read-back) in detail so "changed by command" is

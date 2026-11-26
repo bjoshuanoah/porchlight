@@ -410,6 +410,15 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       verifySession: (token: string | null) => identityAuth!.verifyAccessTokenWithDevice(token ?? ""),
       registeredDeviceKey: (did: string, deviceId: string) => identityAuth!.activeDeviceRegistration(did, deviceId),
       orgId: () => null,
+      // PORCH-138: the grant flow's identity-plane facts — grants ride the
+      // EXISTING identity (resolveIdentity, never a mint), family grants
+      // resolve through the family organizer (identity plane), all through
+      // injected callbacks: the home module never imports identity.
+      identityFacts: {
+        resolveIdentity: (did: string) => identityModule!.accountService.resolveByDid(did),
+        familyById: (familyId: string) => identityModule!.familyService.familyById(familyId),
+        familiesForMember: (did: string) => identityModule!.familyService.familiesForMember(did),
+      },
       log: options.log ?? null,
     });
     router.use("/home", homeModule.api);

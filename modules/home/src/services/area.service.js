@@ -1,5 +1,6 @@
 import { requireSignedSession } from "../util/writes.js";
 import { cleanName } from "./home.service.js";
+import { ACCESS_OWNER_ONLY, visibleAreaIds } from "./scopes.js";
 
 /**
  * Area service (PORCH-137 TS 1). Rooms and outdoor areas are one
@@ -12,16 +13,24 @@ export class AreaService {
    * @param {import("@porchlight/shared").CollectionLike} areas
    * @param {import("./home.service.js").HomeService} homes
    * @param {() => string} [now]
+   * @param {{ devices?: import("@porchlight/shared").CollectionLike }} [deps]
+   *   The home's device collection, for view-scope filtering of the grouping
+   *   surface (PORCH-138): a granted device's area renders even when the
+   *   grant doesn't name the area itself.
    */
-  constructor(areas, homes, now = defaultNow) {
+  constructor(areas, homes, now = defaultNow, { devices = null } = {}) {
     this.areas = areas;
     this.homes = homes;
+    this.devices = devices;
     this.now = now;
   }
 
   /** POST /homes/:homeId/areas — one new room or outdoor area. Signed member write. */
   async create({ accessToken, homeId, payload, signature } = {}) {
-    await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
+    if (authorized.access?.accessClass !== "owner-membership") {
+      return fail("E_NOT_PERMITTED", ACCESS_OWNER_ONLY);
+    }
     await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.homes.verifySession,
@@ -47,7 +56,10 @@ export class AreaService {
     if (!area) {
       return fail("E_AREA_NOT_FOUND", "That area isn't part of this home's surfaces anymore.");
     }
-    await this.homes.authorize({ accessToken, homeId: area.homeId });
+    const authorizedUpdate = await this.homes.authorize({ accessToken, homeId: area.homeId });
+    if (authorizedUpdate.access?.accessClass !== "owner-membership") {
+      return fail("E_NOT_PERMITTED", ACCESS_OWNER_ONLY);
+    }
     await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.homes.verifySession,
@@ -68,12 +80,24 @@ export class AreaService {
     return { area: this.areaView({ ...area, ...set }) };
   }
 
-  /** GET /homes/:homeId/areas — the home's grouping surface, order ascending. */
+  /**
+   * GET /homes/:homeId/areas — the home's grouping surface, order ascending.
+   * A visit grant sees only the areas its view covers (named by an area
+   * scope, or an area carrying a granted device's scope) — the grouping
+   * surface shows a visitor exactly their granted slice of the home.
+   */
   async list({ accessToken, homeId } = {}) {
-    await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
     const rows = await this.areas.find({ homeId });
+    const scopes = authorized.access?.scopes ?? null;
+    let visible = rows;
+    if (scopes) {
+      const deviceRows = this.devices ? await this.devices.find({ homeId }) : [];
+      const ids = visibleAreaIds(scopes, deviceRows);
+      visible = rows.filter((area) => ids.has(area._id));
+    }
     return {
-      areas: rows
+      areas: visible
         .sort((a, b) => (a.order - b.order) || String(a.name).localeCompare(String(b.name)))
         .map((area) => this.areaView(area)),
     };

@@ -109,7 +109,7 @@ test("ac-1: reads refuse non-members with plain language, and the refusal is aud
 
   await assert.rejects(
     () => fx.mod.deviceService.list({ accessToken: outsider.token, homeId: home._id }),
-    (error) => error.code === "E_NOT_PERMITTED" && /not a member/i.test(error.message),
+    (error) => error.code === "E_NOT_PERMITTED" && /don't hold access to that home/i.test(error.message),
   );
   await assert.rejects(
     () => homeService.rename({ accessToken: outsider.token, homeId: home._id, ...outsider.write({ name: "Renamed" }) }),

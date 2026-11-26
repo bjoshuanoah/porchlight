@@ -33,6 +33,10 @@ test("the V1 route table admits no federation surface (perimeter fence audit)", 
     "GET /avatars/:did/renditions/:kind",
     "GET /devices",
     "GET /did/:did",
+    // PORCH-138: the family-organizer read (the families the caller governs
+    // or belongs to) + the session-bound family writes. Deliberate V1
+    // additions — still no federation surface (this audit pins the table).
+    "GET /families",
     "POST /account/profile",
     // PORCH-070: upload/replace/clear — one route carries all three actions.
     "POST /accounts/me/avatar",
@@ -41,6 +45,11 @@ test("the V1 route table admits no federation surface (perimeter fence audit)", 
     "POST /device-link",
     "POST /device-link/consume",
     "POST /devices/revoke",
+    "POST /families",
+    "POST /families/:familyId/members",
+    "POST /families/:familyId/members/remove",
+    "POST /families/:familyId/parents",
+    "POST /families/:familyId/parents/remove",
     "POST /handle",
     "POST /migration/handoff",
     "POST /migration/receive",

@@ -19,6 +19,15 @@ declare module "@porchlight/identity" {
       }>;
       /** Member display names by DID for the owner's member directory (PORCH-029); rows carry the avatar stamps (PORCH-070). */
       namesFor(dids: string[]): Promise<Array<{ did: string; displayName: string | null; avatar: Record<string, unknown> | null }>>;
+      /** PORCH-138: the existing-identity resolve the grant flow rides (never a mint). */
+      resolveByDid(did: string): Promise<{ did: string; displayName: string } | null>;
+    };
+    /** PORCH-138: the identity-plane family organizer (family governance ruling). */
+    familyService: {
+      /** The familyRef resolve of a family grant. */
+      familyById(familyId: string): Promise<{ _id: string; name: string; [key: string]: unknown } | null>;
+      /** The governed members a family grant resolves against. */
+      familiesForMember(did: string): Promise<Array<{ _id: string; name: string; [key: string]: unknown }>>;
     };
     /** PORCH-070: the member avatar plane (service + its routes' controller). */
     avatarService: {
@@ -317,6 +326,8 @@ declare module "@porchlight/home" {
     deviceService: unknown;
     sceneService: unknown;
     automationService: unknown;
+    /** PORCH-138: the grant layer of the access model (individual + family grants). */
+    grantService: unknown;
     auditService: unknown;
     adapters: unknown;
   }
@@ -329,6 +340,16 @@ declare module "@porchlight/home" {
       registeredDeviceKey?: ((did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null>) | null;
       /** Hub installation org of record, stamped on homes. */
       orgId?: (() => string | null) | null;
+      /** PORCH-138: the grant flow's identity-plane facts — the existing-identity
+       *  resolve and the family facts, always injected, never imported. */
+      identityFacts?: {
+        /** Grants ride EXISTING Porchlight identities; absent/never a mint. */
+        resolveIdentity: (did: string) => Promise<{ did: string; displayName?: string | null } | null>;
+        /** The familyRef of a family grant resolves through the family organizer. */
+        familyById: (familyId: string) => Promise<{ _id: string; name: string; [key: string]: unknown } | null>;
+        /** The governed members a family grant resolves against. */
+        familiesForMember: (did: string) => Promise<Array<{ _id: string; [key: string]: unknown }>>;
+      };
       /** Auth-failure capture sink (PORCH-019 shape). */
       log?: ((line: string) => void) | null;
     },

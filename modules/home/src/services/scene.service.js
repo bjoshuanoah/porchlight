@@ -2,6 +2,7 @@ import { requireSignedSession } from "../util/writes.js";
 import { fail } from "./errors.js";
 import { cleanName } from "./home.service.js";
 import { validCommandShape } from "./device.service.js";
+import { ACCESS_OWNER_ONLY, coversResource } from "./scopes.js";
 
 /**
  * Scene service (PORCH-137 TS 1). One home, one ordered action list.
@@ -26,7 +27,10 @@ export class SceneService {
 
   /** POST /homes/:homeId/scenes — create one scene. Signed member write. */
   async create({ accessToken, homeId, payload, signature } = {}) {
-    const { did } = await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
+    if (authorized.access?.accessClass !== "owner-membership") {
+      return fail("E_NOT_PERMITTED", ACCESS_OWNER_ONLY);
+    }
     await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.homes.verifySession,
@@ -39,7 +43,7 @@ export class SceneService {
       homeId,
       name,
       actions,
-      createdBy: did,
+      createdBy: authorized.did,
       deviceSignature: signature ?? null,
       createdAt: this.now(),
     };
@@ -48,19 +52,30 @@ export class SceneService {
   }
 
   async list({ accessToken, homeId } = {}) {
-    await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
     const rows = await this.scenes.find({ homeId });
-    return { scenes: rows.sort(byCreatedAt).map((scene) => this.view(scene)) };
+    const scopes = authorized.access?.scopes ?? null;
+    const visible = scopes
+      ? rows.filter((scene) => coversResource(scopes, "scene", scene._id, "view"))
+      : rows;
+    return { scenes: visible.sort(byCreatedAt).map((scene) => this.view(scene)) };
   }
 
   /**
    * POST /scenes/:sceneId/run — run the scene from a home the caller
-   * belongs to; per-action results with plain-language reasons.
+   * belongs to; per-action results with plain-language reasons. A visitor
+   * runs exactly the scenes their grant carries a control scope for —
+   * every other scene refuses plainly (PORCH-138 ac-1/ac-5).
    */
   async run({ accessToken, sceneId } = {}) {
     const scene = await this.scenes.findOne({ _id: sceneId });
     if (!scene) return fail("E_SCENE_NOT_FOUND", "That scene isn't part of this home anymore.");
-    const { did } = await this.homes.authorize({ accessToken, homeId: scene.homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId: scene.homeId });
+    if (authorized.access?.accessClass !== "owner-membership"
+      && !coversResource(authorized.access.scopes, "scene", sceneId, "control")) {
+      return fail("E_NOT_PERMITTED", "That scene isn't part of the access you were granted for this home.");
+    }
+    const did = authorized.did;
     const results = [];
     for (const action of scene.actions ?? []) {
       const { outcome, reason } = await this.#runAction(scene, action, did);
