@@ -9,9 +9,13 @@ import { LinuxBackend, resolveHal } from "@porchlight/hal";
 const CFG = { segmentSeconds: 600 };
 
 test("real RTSP camera: videotoolbox ingest, copy video, AAC/16k transcode, fMP4 segment tail", () => {
+	// The darwin backend is injected explicitly: the macOS hardware argv is a
+	// deterministic contract here, independent of the host CI runs on. The
+	// host-resolved default is covered by the gated darwin test below.
 	const argv = buildFfmpegArgs(
 		{ name: "front_left", source: { url: "rtsp://cam/l" } },
 		CFG,
+		resolveHal({ platform: "darwin" }),
 	);
 	assert.ok(argv.includes("-hwaccel") && argv[argv.indexOf("-hwaccel") + 1] === "videotoolbox");
 	assert.ok(argv.includes("-rtsp_transport") && argv[argv.indexOf("-rtsp_transport") + 1] === "tcp");
