@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
 
-const MODULES = ["identity", "social", "home"];
+const MODULES = ["identity", "social", "home", "agent"];
 
 /** Resolve a relative import specifier from the importing file's directory.
  *  Checks the specifier as written first (the target's real extension may be

@@ -13,6 +13,7 @@ import type { RecognitionHomeModule, VisionProviderLike } from "./recognition-pl
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule, treatAvatar } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
+import { assembleAgentModule } from "@porchlight/agent";
 import { assembleHomeModule, createHttpEngineAdapter, createMqttEngineConsumer, ENGINE_DETECTIONS_PREFIX } from "@porchlight/home";
 import { TRACKED_CLASSES, extendTrackedVocabulary } from "@porchlight/overwatch";
 import mqtt from "mqtt";
@@ -492,6 +493,26 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       log: options.log ?? null,
     });
     router.use("/home", homeModule.api);
+    // PORCH-148: the agent module's model-profile machinery mounts under the
+    // hub's JSON /api prefix on the SAME identity perimeter — the device-bound
+    // identity plane verifies every session, the hub-admin fact resolves
+    // through the identity module's first account (the hub's admin of
+    // record), and the family facts the parental narrowing composes against
+    // ride the identity family organizer through injected callbacks (the
+    // agent module never imports identity — CI-enforced boundary).
+    const agentModule = assembleAgentModule(options.store, {
+      verifySession: (token: string | null) => identityAuth!.verifyAccessTokenWithDevice(token ?? ""),
+      adminFacts: {
+        isAdmin: async (did: string) => {
+          const account = (await identityModule!.accountService.get()) as { did?: string } | null;
+          return Boolean(account && account.did === did);
+        },
+      },
+      familyFacts: {
+        familiesForMember: (did: string) => identityModule!.familyService.familiesForMember(did),
+      },
+    });
+    router.use("/agent", agentModule.api);
     // PORCH-140: the overwatch REST plane mounts under the hub's JSON /api
     // prefix riding the SAME identity+home perimeter — the bearer token
     // resolves a did through the assembled identity plane, and the homeId

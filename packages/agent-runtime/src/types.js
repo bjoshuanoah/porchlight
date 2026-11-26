@@ -23,18 +23,16 @@
  *     classes
  *   - `complete(request): Promise<InferenceResponse>` — one inference call
  *
- * The request the seam receives:
- *   - `memberId: string` — the acting member (identity rides every call)
- *   - `sessionId: string` — the runtime session the entity belongs to
- *   - `messages: {role, content}[]` — SOUL injection first, then the
- *     member's chat history
- *   - `tools: {name, description}[]` — descriptors of the registered tools
- *     (the tool-execution seam; descriptors only — authority flows through
- *     the registry at execution, never through the inference seam)
+ * The profile router (PORCH-148) presents itself as this same provider: a
+ * router declares `providerClasses` — the engine's compute classes it routes
+ * across — instead of a single `providerClass`, and every response carries
+ * the `providerClass` that actually answered (recorded on the provenance
+ * line). There is no parallel inference path.
  *
  * @typedef {object} InferenceProvider
  * @property {string} name
- * @property {ProviderClass} providerClass
+ * @property {ProviderClass} [providerClass]
+ * @property {ProviderClass[]} [providerClasses]
  * @property {(request: {
  *   memberId: string,
  *   sessionId: string,
@@ -53,6 +51,8 @@
  *   - `modelId?: string` — which model answered; recorded on the entity's
  *     provenance line (which model answered, under which provider/class,
  *     at which time)
+ *   - `providerClass?: ProviderClass` — a profile router's response carries
+ *     the compute class that actually answered (PORCH-148)
  *
  * @typedef {object} InferenceResponse
  * @property {string} [text]

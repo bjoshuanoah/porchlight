@@ -30,6 +30,8 @@ A provider is a plain object:
 
 The seam receives `{ memberId, sessionId, messages, tools }` — the member identity rides every inference call; `messages` opens with the rendered SOUL injection followed by the member's own history; `tools` are descriptors only (authority flows through the registry at execution, never through the inference seam). Every inference records a member-tagged provenance line (`entity.lastProvenance`; runtime logs carry `which model answered, under which provider/class, at which time`).
 
+The profiles module (PORCH-148) plugs into exactly this seam: its profile router presents itself as the provider the seam consumes, declaring `providerClasses` — the compute classes it routes across — and every response carries the `providerClass` that actually answered, so the provenance line names the class that ran under the resolved profile. No parallel inference path exists.
+
 ## The agent loop
 
 `entity.runTurn({ text, topic?, maxToolTurns? })`:

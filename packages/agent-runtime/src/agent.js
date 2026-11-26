@@ -117,9 +117,10 @@ export class AgentEntity {
 				messages,
 				tools: this.#toolDescriptors(),
 			});
+			const routed = Array.isArray(this.#runtime.inference.providerClasses);
 			this.lastProvenance = {
 				provider: this.#runtime.inference.name,
-				providerClass: this.#runtime.inference.providerClass,
+				providerClass: routed ? (response?.providerClass ?? null) : this.#runtime.inference.providerClass,
 				modelId: response?.modelId ?? null,
 				at: new Date().toISOString(),
 			};

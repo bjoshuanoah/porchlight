@@ -21,6 +21,8 @@ declare module "@porchlight/identity" {
       namesFor(dids: string[]): Promise<Array<{ did: string; displayName: string | null; avatar: Record<string, unknown> | null }>>;
       /** PORCH-138: the existing-identity resolve the grant flow rides (never a mint). */
       resolveByDid(did: string): Promise<{ did: string; displayName: string } | null>;
+      /** The hub's first account (bootstrap offer row) — the hub-admin fact resolves against it. */
+      get(): Promise<{ _id: string; did: string; [key: string]: unknown } | null>;
     };
     /** PORCH-138: the identity-plane family organizer (family governance ruling). */
     familyService: {
@@ -589,4 +591,38 @@ declare module "@porchlight/recognition/server" {
     prepared?: { body?: object | null },
   ) => Promise<void>;
   export function createRecognitionServer(parts: Parameters<typeof createRecognitionHandler>[0]): import("node:http").Server;
+}
+
+declare module "@porchlight/agent" {
+  /** PORCH-148: the agent module's model-profile machinery. */
+  export const agentModels: Record<string, unknown>;
+  export function assembleAgentModule(
+    store: { collection(name: string): unknown },
+    options?: {
+      /** The identity-plane access-token verifier (with its own device). */
+      verifySession: (token: string | null) => Promise<{ did: string; deviceId?: string } | null>;
+      /** The hub-admin fact of record (resolution's availability gate rides it). */
+      adminFacts?: { isAdmin: (did: string) => Promise<boolean> | boolean };
+      /** The identity-plane family facts the parental narrowing composes against. */
+      familyFacts?: { familiesForMember?: (did: string) => Promise<Array<{ _id: string; parentIdentityRefs?: string[]; memberIdentityRefs?: string[]; [key: string]: unknown }>> };
+      /** The live-apply change seam (every profile write publishes). */
+      onProfileChange?: (event: object) => void;
+      /** The member's agent type resolver; default the household-member agent. */
+      agentTypeFor?: (memberId: string) => string | Promise<string>;
+      now?: () => string;
+    },
+  ): {
+    api: import("express").Router;
+    controllers: unknown;
+    profileService: unknown;
+    assignmentService: {
+      list(input: { agentType?: string | null }): Promise<{ state?: string; detail?: string; rows: Array<Record<string, unknown>> }>;
+      resolvesAdmin(did: string): Promise<boolean>;
+    };
+    resolutionService: unknown;
+    provenanceService: unknown;
+    auditService: unknown;
+    /** The profile-routed inference seam consumer (composition seam 1). */
+    createProfileInference(input: { providers?: Record<string, { name: string; providerClass: string; complete(r: object): Promise<object> }>; log?: (memberId: string, line: string) => void }): unknown;
+  };
 }
