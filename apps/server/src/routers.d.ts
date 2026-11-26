@@ -387,3 +387,95 @@ declare module "@porchlight/home" {
   ): HomeModule;
   export function createHomeRouter(controllers: unknown): import("express").Router;
 }
+declare module "@porchlight/overwatch" {
+  /** PORCH-140: the overwatch data-plane services (plain-JS package, typed here). */
+  export function createConfigStore(options: {
+    path: string;
+    now?: () => string;
+    defaults?: Record<string, unknown>;
+  }): {
+    getState(): Record<string, unknown>;
+    update(mutation: ((draft: Record<string, unknown>) => void) | object): Record<string, unknown>;
+    reload(): Record<string, unknown>;
+    setZone(cameraId: string, polygon: number[][], meta?: { authoredBy?: string }): Record<string, unknown>;
+    removeZone(cameraId: string): Record<string, unknown>;
+    eligibleCameraIds(): string[];
+    correlationConfig(): Record<string, unknown>;
+  };
+  export function createAuditLog(options?: { path?: string | null; now?: () => string }): {
+    record(input: { type: string; actorIdentityRef?: string | null; detail?: object; outcome?: string; homeId?: string | null }): Record<string, unknown>;
+    list(filters?: { type?: string; homeId?: string; limit?: number }): Array<Record<string, unknown>>;
+    path: string | null;
+  };
+  export function createDial(options: { store: unknown; audit: unknown; now?: () => Date; capFps?: number }): {
+    capFps: number;
+    set(input: { frameRate: number; actorIdentityRef?: string | null; homeId?: string | null }): { frameRate: number; clamped: boolean; changed: boolean };
+    get(): { frameRate: number; capFps: number };
+    effectiveFrameRateFor(cameraId: string, activeFollowBumps?: string[] | Set<string>): number;
+  };
+  export function createTrackedObjectsService(options?: {
+    chainsProvider?: () => unknown[];
+    followService?: unknown;
+  }): {
+    list(options?: { at?: number }): { tracked: Array<Record<string, unknown>> };
+    get(options: { entityId: string; at?: number }): Record<string, unknown> | null;
+  };
+  export function createFollowService(options?: {
+    audit?: AuditLog | null;
+    compositor?: { setFollowBump: (cameraId: string, engaged: boolean) => unknown } | null;
+    clipsProvider?: (chain: unknown) => Array<{ cameraId: string; path: string; from: number; to: number }> | undefined;
+    resolveState?: (entityId: string, at?: number) => string;
+    chainsProvider?: () => unknown[];
+    auditBumps?: boolean;
+    now?: () => number;
+  }): {
+    follow(input: { entityId: string; cls: string; activeCameraId?: string; actorIdentityRef?: string }): Record<string, unknown>;
+    exit(input: { entityId: string; cameraId?: string; nextCameraId?: string; actorIdentityRef?: string }): Record<string, unknown> | null;
+    unfollow(input: { entityId: string; actorIdentityRef?: string }): boolean;
+    subscriptions(): Array<Record<string, unknown>>;
+    stream(input: { entityId: string; chain?: unknown; at?: number }): Record<string, unknown>;
+  };
+  export function createVisitService(options?: {
+    store?: { eligibleCameraIds?: () => string[] } | null;
+    chainsProvider?: () => unknown[];
+    clipsProvider?: (chain: unknown) => Array<{ cameraId: string; path: string; from: number; to: number }> | undefined;
+    outagesProvider?: () => Array<{ cameraId: string; from: number; to: number }>;
+    unexplainedGapSec?: number;
+  }): {
+    listVisits(options: { from: number; to: number }): Array<Record<string, unknown>>;
+    timeline(options: { visitId: string; at?: number }): Array<Record<string, unknown>>;
+    openVisitSurface(options: { chain: unknown }): Record<string, unknown>;
+  };
+}
+
+declare module "@porchlight/overwatch/server" {
+  /**
+   * PORCH-140: the zero-framework overwatch REST plane (packages/overwatch).
+   * The services block is the plane's design of record — see server.js.
+   */
+  /** The audit-log seam the plane and the follow service share. */
+  type AuditLog = {
+    record: (input: { type: string; actorIdentityRef?: string | null; detail?: object; outcome?: string; homeId?: string | null }) => unknown;
+    list: (filters?: object) => Array<Record<string, unknown>>;
+  };
+
+  export function createOverwatchHandler(parts: {
+    services: {
+      store: unknown;
+      dial: unknown;
+      audit: AuditLog;
+      trackedService: unknown;
+      followService: unknown;
+      visitService: unknown;
+      now?: () => number;
+      entityService?: { vetoPair: (signature: string) => unknown } | null;
+    };
+    authorize?: ((args: { req: unknown; action: string; resource: string }) => Promise<unknown> | unknown) | null;
+    log?: ((line: string) => void) | null;
+  }): (
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+    prepared?: { body?: object | null },
+  ) => Promise<void>;
+  export function createOverwatchServer(parts: Parameters<typeof createOverwatchHandler>[0]): import("node:http").Server;
+}

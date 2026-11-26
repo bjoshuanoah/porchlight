@@ -118,9 +118,10 @@ test("ac-4: chrome discipline and copy audit hold", () => {
 
   // The Profile destination renders as Settings: labels, routes, page
   // branch, and the retired Profile labels swept member-facing. PORCH-137
-  // prepends the Home tab, so the pinned nav arrays now hold five entries.
-  assert.match(mainSource, /const primary = \["\/home", "\/timeline", "\/groups", "\/compose", "\/settings"\];/);
-  assert.match(mainSource, /const labels = \["Home", "Timeline", "Groups", "Compose", "Settings"\];/);
+  // prepends the Home tab, so the pinned nav arrays hold the family tabs.
+  // PORCH-140: Overwatch joins the same primary/labels trio as a family tab.
+  assert.match(mainSource, /const primary = \["\/home", "\/timeline", "\/groups", "\/compose", "\/settings", "\/overwatch"\];/);
+  assert.match(mainSource, /const labels = \["Home", "Timeline", "Groups", "Compose", "Settings", "Overwatch"\];/);
   assert.match(mainSource, /route === "\/settings"\) page = <Settings/);
   // Stale /profile deep links land on the renamed destination.
   assert.match(mainSource, /next === "\/profile" \? "\/settings" : next/);

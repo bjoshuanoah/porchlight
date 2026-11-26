@@ -80,6 +80,8 @@ export const DEFAULT_CONFIG = Object.freeze({
     identityServingEnabled: true,
     socialServingEnabled: true,
     homeServingEnabled: true,
+    /** PORCH-140: the overwatch REST plane's serving toggle (default on). */
+    overwatchServingEnabled: true,
   },
   /** Hub listener + tunnel binding. */
   hub: {

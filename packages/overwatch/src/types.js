@@ -147,3 +147,31 @@ export function assertDetectedObject(maybe) {
 		throw new TypeError("DetectedObject.reid, when present, must be a number[]");
 	}
 }
+
+// --- PORCH-140 entity-surface contracts (added by the entity-FSM wave) ---
+
+/**
+ * FSM label of one sighting within its chain: the first sighting (or one
+ * re-appearing after a longer absence) is "arrival"; sightings continuing
+ * within the movement gap are "movement" or "stationary"; the last sighting
+ * gone stale by no later activity is "departure".
+ *
+ * @typedef {"arrival"|"movement"|"stationary"|"departure"} EntityStateLabel
+ */
+
+/**
+ * Live lifecycle state of a chain, derived from the newest sighting's label
+ * plus activity recency. A stationary vehicle is PARKED; a stationary person
+ * observed past the loitering threshold is LOITERING.
+ *
+ * @typedef {"ARRIVED"|"MOVING"|"STATIONARY"|"PARKED"|"DEPARTED"|"LOITERING"} EntityLifecycleState
+ */
+
+/**
+ * Optional position samples for the entity FSM, carried as a `samples` field
+ * on an EntitySighting (EntitySighting itself is unchanged): normalized
+ * bboxes [x, y, w, h] 0..1, center points [x, y], or objects with `bbox`.
+ * Stationarity needs at least two usable samples.
+ *
+ * @typedef {[number, number, number, number]|[number, number]|{bbox: [number, number, number, number]}} EntityStateSample
+ */

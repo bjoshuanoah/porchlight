@@ -11,7 +11,8 @@
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./server": "./src/server.js"
   },
   "scripts": {
     "build": "echo 'overwatch ships plain JS (no build) — use tsx for type-aware development'",
