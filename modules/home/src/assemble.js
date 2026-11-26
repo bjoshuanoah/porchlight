@@ -6,9 +6,13 @@ import { SceneService } from "./services/scene.service.js";
 import { AutomationService } from "./services/automation.service.js";
 import { GrantService } from "./services/grant.service.js";
 import { HomeAuditService } from "./services/audit.service.js";
+import { CameraService } from "./services/camera.service.js";
+import { EventService } from "./services/event.service.js";
 import { HomeController } from "./controllers/home.controller.js";
 import { DeviceController } from "./controllers/device.controller.js";
 import { AutomationController } from "./controllers/automation.controller.js";
+import { CameraController } from "./controllers/camera.controller.js";
+import { EventController } from "./controllers/event.controller.js";
 import { createHomeRouter } from "./routes.js";
 
 /**
@@ -43,6 +47,20 @@ import { createHomeRouter } from "./routes.js";
  *     detection/entity events; the home module subscribes and applies its
  *     rules. The handler resolves AutomationService.handleEvent. Absent →
  *     rules ride the REST surfaces and tests drive handleEvent directly.
+ *   engine?: object | null,
+ *     PORCH-139: the engine bridge seam (see camera.service.js) — the hub
+ *     builds the transport adapters from the runtime config of record.
+ *     Absent → every camera surface fails closed with plain language.
+ *   engineSecret?: string | null,
+ *     The shared engine-token secret of record; the bridge mints scoped
+ *     camera-view tokens the engine verifies.
+ *   interpreter?: { name, describe({ event, gate }) } | null,
+ *     The Tier-1 interpretation seam (Ollama-class). Absent/unwired →
+ *     events open with the factual fallback label only.
+ *   onEngineEvent?: (handler: (detection: object) => Promise<unknown>) => void,
+ *     The engine's detection bus subscription (DetectedObject facts). The
+ *     handler resolves BOTH family consumers: the event pipeline's dedup
+ *     and the automation rules. Absent → tests drive the services directly.
  *   identityFacts?: {
  *     resolveIdentity: (did) => Promise<{ did, displayName? } | null>,
  *       The resolve of a grantee's EXISTING Porchlight identity (grants never
@@ -68,6 +86,11 @@ export function assembleHomeModule(store, options = {}) {
   const automations = collection("automations");
   const homeAudit = collection("home_audit");
   const grants = collection("grants");
+  // PORCH-139: the camera association store, its separate authorization
+  // scope class, and the family event pipeline's documents.
+  const cameras = collection("cameras");
+  const cameraAccess = collection("camera_access");
+  const events = collection("home_events");
 
   const audit = new HomeAuditService(homeAudit, now);
   const verifySession = (token) => (options.verifySession ? options.verifySession(token) : Promise.resolve(null));
@@ -106,8 +129,48 @@ export function assembleHomeModule(store, options = {}) {
   // access classes applies with no parallel mechanism.
   homeService.grantResolver = ({ did, homeId = null }) => grantService.resolveFor({ did, homeId });
 
+  // PORCH-139: the camera bridge + the family event/alert pipeline. The
+  // engine seam is injected (the hub builds the transport adapters from the
+  // runtime config); absent, every camera surface fails closed with plain
+  // language and the event pipeline still captures — the engine is
+  // consumed here, never built.
+  const cameraService = new CameraService(
+    cameras, cameraAccess, homeService, areas, events,
+    options.engine ?? null, audit,
+    { verifySession, registeredDeviceKey },
+    options.engineSecret ? { secret: options.engineSecret, now } : null,
+    now,
+  );
+  const eventService = new EventService(events, cameras, areas, audit, options.interpreter ?? null, {
+    now,
+    auth: cameraService,
+  });
+  eventService.setEngine(options.engine ?? null);
+  eventService.dedupWindowSec = options.dedupWindowSec
+    ? Math.max(1, Math.floor(options.dedupWindowSec))
+    : eventService.dedupWindowSec;
+
   if (typeof options.onDeviceEvent === "function") {
     options.onDeviceEvent((event) => automationService.handleEvent(event));
+  }
+
+  // PORCH-139: the engine's detection bus feeds BOTH family consumers —
+  // the event pipeline (dedup, observation/inference split, evidence) and
+  // the automation rules — off one subscription. The home/area resolution
+  // lives in the event service's association lookups; automations see the
+  // same home-scoped facts.
+  if (typeof options.onEngineEvent === "function") {
+    options.onEngineEvent(async (detection) => {
+      const result = await eventService.ingest(detection);
+      if (result?.event) {
+        await automationService.handleEvent({
+          homeId: result.event.homeId,
+          areaId: result.event.areaId,
+          eventClass: String(detection?.cls ?? ""),
+        });
+      }
+      return result;
+    });
   }
 
   const controllers = {
@@ -122,6 +185,8 @@ export function assembleHomeModule(store, options = {}) {
     }),
     device: new DeviceController(deviceService),
     automation: new AutomationController({ scenes: sceneService, automations: automationService }),
+    camera: new CameraController(cameraService),
+    event: new EventController(eventService, verifySession),
   };
 
   return {
@@ -135,6 +200,8 @@ export function assembleHomeModule(store, options = {}) {
     grantService,
     auditService: audit,
     adapters,
+    cameraService,
+    eventService,
   };
 }
 

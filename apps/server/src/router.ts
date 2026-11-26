@@ -9,7 +9,7 @@ import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule, treatAvatar } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
-import { assembleHomeModule } from "@porchlight/home";
+import { assembleHomeModule, createHttpEngineAdapter, createMqttEngineConsumer } from "@porchlight/home";
 import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
@@ -399,13 +399,29 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     // the social module's volume status, never a stale copy.
     hub.setMediaStatus(() => socialModule!.mediaVolume.status());
   }
-  if (options.store && options.config.mode.homeServingEnabled && identityAuth) {
+    if (options.store && options.config.mode.homeServingEnabled && identityAuth) {
     // PORCH-137: the home module assembles after identity on the same
     // injected-callback boundary — the device-bound identity plane is the
     // only auth surface (no new passwords, emails, or vendor auth), and the
     // hub side enforces home scope on every read and command. The bus
     // subscription seam rides the module's onDeviceEvent injection; the
     // engine's detection/entity events feed automations from there.
+    // PORCH-139: the engine bridge seam builds from the runtime config of
+    // record — unwired config assembles a fail-closed bridge.
+    const engineConfig = options.config.engine ?? { baseUrl: null, busUrl: null, secret: null };
+    const engine = engineConfig.baseUrl && engineConfig.secret
+      ? createHttpEngineAdapter({ baseUrl: engineConfig.baseUrl })
+      : null;
+    const engineSecret = engineConfig.secret ?? null;
+    const onEngineEvent = engineConfig.busUrl
+      ? (handler: (detection: Record<string, unknown>) => Promise<unknown>) => {
+          createMqttEngineConsumer({
+            url: engineConfig.busUrl!,
+            log: options.log ?? undefined,
+            onEvent: handler,
+          });
+        }
+      : undefined;
     const homeModule = assembleHomeModule(options.store, {
       verifySession: (token: string | null) => identityAuth!.verifyAccessTokenWithDevice(token ?? ""),
       registeredDeviceKey: (did: string, deviceId: string) => identityAuth!.activeDeviceRegistration(did, deviceId),
@@ -419,6 +435,10 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
         familyById: (familyId: string) => identityModule!.familyService.familyById(familyId),
         familiesForMember: (did: string) => identityModule!.familyService.familiesForMember(did),
       },
+      // PORCH-139: the engine bridge seam from the config of record.
+      engine,
+      engineSecret,
+      onEngineEvent,
       log: options.log ?? null,
     });
     router.use("/home", homeModule.api);

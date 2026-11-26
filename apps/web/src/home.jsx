@@ -19,6 +19,10 @@ import PlayArrowOutlined from "@mui/icons-material/PlayArrowOutlined";
 import RefreshOutlined from "@mui/icons-material/RefreshOutlined";
 import { dateOf, relativeTime } from "./time.js";
 import {
+  alertCopy, eventEvidence, feedPlayState, gapCopy, healthNotes,
+  inlineAspectRatio, mediaUrl, viewerAspectRatio,
+} from "./camera-model.js";
+import {
   automationTriggerLabel, commandReasonOf, commandStatusOf, groupDevicesByArea,
   grantStatusLabel, isVisitorAccess, nextCommandState, readActiveHomeId,
   renderedControlValue, summarizeScopes, writeActiveHomeId,
@@ -835,6 +839,415 @@ const EVENT_CLASS_LABELS = { vehicle: "A vehicle", person: "A person", animal: "
 /** The Home tab's whole surface, for any signed-in connection — the module
  * never gates on social bootstrap; homes and the active home ride this
  * screen's own fetch state plus the origin-scoped active-home memory. */
+// PORCH-139 (below): the cameras surface's dialogs and the surface itself.
+// Pure logic and copy ride camera-model.js; the wire rides home-actions.js
+// through the shared actions object.
+
+const CAMERAS_LIMIT = 20;
+
+function FeedTile({ feed, origin, token, homeId, onOpen, audioOn, toggleAudio }) {
+  const playState = feedPlayState(feed);
+  const sx = { aspectRatio: inlineAspectRatio(feed), width: "100%", bgcolor: "var(--porch-subtle)" };
+  return (
+    <Paper elevation={0} sx={{ p: 1, borderRadius: 3, border: "1px solid", borderColor: "var(--porch-border)" }}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>{feed.name || "Camera"}</Typography>
+        {playState.kind === "live" && (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <IconButton size="small" onClick={() => toggleAudio(feed._id)} aria-label={audioOn ? "Mute feed" : "Unmute feed"}>
+              {audioOn ? "🔊" : "🔇"}
+            </IconButton>
+            <IconButton size="small" onClick={() => onOpen(feed)} aria-label="Open full-screen viewer">⤢</IconButton>
+          </Stack>
+        )}
+      </Stack>
+      {playState.kind === "live" ? (
+        <Box
+          component="video"
+          src={mediaUrl({ origin, homeId, cameraId: feed._id, path: feed.live?.path, token })}
+          autoPlay
+          loop
+          playsInline
+          muted={!audioOn}
+          sx={sx}
+          onClick={() => onOpen(feed)}
+        />
+      ) : (
+        <Box sx={{ ...sx, display: "grid", placeItems: "center", textAlign: "center", p: 2 }}>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>{playState.copy}</Typography>
+        </Box>
+      )}
+      {playState.kind === "live" && playState.note && (
+        <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: "text.secondary" }}>{playState.note}</Typography>
+      )}
+      <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+        {healthNotes(feed).find((row) => row.plane === "detection" && row.state === "unhealthy")?.note ?? ""}
+      </Typography>
+    </Paper>
+  );
+}
+
+function CameraViewer({ feed, origin, token, homeId, onClose }) {
+  const sx = {
+    aspectRatio: viewerAspectRatio(feed),
+    maxWidth: "100%",
+    maxHeight: { xs: "70vh", md: "80vh" },
+    width: "100%",
+    bgcolor: "black",
+    borderRadius: 2,
+  };
+  return (
+    <Dialog open onClose={onClose} maxWidth="lg">
+      <DialogTitle>{feed.name || "Camera"}</DialogTitle>
+      <DialogContent>
+        <Box
+          component="video"
+          src={mediaUrl({ origin, homeId, cameraId: feed._id, path: feed.live?.path, token })}
+          autoPlay
+          loop
+          playsInline
+          controls
+          sx={sx}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CameraAccessPanel({ home, actions, origin, ownerHere }) {
+  const [rows, setRows] = useState([]);
+  const [did, setDid] = useState("");
+  const [error, setError] = useState("");
+  const load = async () => {
+    try {
+      const result = await actions.loadCameraAccess(home._id);
+      setRows(Array.isArray(result?.access) ? result.access : []);
+    } catch (failure) {
+      setRows([]);
+      setError(messageOf(failure));
+    }
+  };
+  useEffect(() => {
+    if (ownerHere) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [home._id, ownerHere]);
+  if (!ownerHere) return null;
+  const grant = async () => {
+    setError("");
+    try {
+      await actions.grantCameraAccess({ homeId: home._id, did });
+      setDid("");
+      await load();
+    } catch (failure) {
+      setError(messageOf(failure));
+    }
+  };
+  const revoke = async (accessId) => {
+    setError("");
+    try {
+      await actions.revokeCameraAccess(accessId);
+      await load();
+    } catch (failure) {
+      setError(messageOf(failure));
+    }
+  };
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="body2" sx={{ fontWeight: 600 }}>Camera access — separate from visit grants</Typography>
+      <Typography variant="caption" sx={{ color: "text.secondary" }}>
+        Home members reach cameras only with this authorization; visit grants never carry cameras.
+      </Typography>
+      {error && <Alert severity="warning" sx={{ mt: 1 }}>{error}</Alert>}
+      {rows.map((row) => (
+        <Stack key={row._id} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.75 }}>
+          <Chip size="small" label={row.revokedAt ? `Ended · ${row.did.slice(-8)}` : row.did.slice(0, 20) + (row.did.length > 20 ? "…" : "")} />
+          {!row.revokedAt && <Button size="small" onClick={() => revoke(row._id)}>End camera access</Button>}
+        </Stack>
+      ))}
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+        <TextField size="small" label="Member identity (DID)" value={did} onChange={(e) => setDid(e.target.value)} sx={{ minWidth: 260 }} />
+        <Button size="small" variant="contained" startIcon={<AddOutlined />} onClick={grant}>Camera access</Button>
+      </Stack>
+    </Box>
+  );
+}
+
+function CamerasSurface({ home, areas, actions, ownerHere, origin }) {
+  const [cameras, setCameras] = useState([]);
+  const [token, setToken] = useState(null);
+  const [error, setError] = useState("");
+  const [events, setEvents] = useState([]);
+  const [eventsError, setEventsError] = useState("");
+  const [viewer, setViewer] = useState(null);
+  const [audio, setAudio] = useState({});
+  const [addOpen, setAddOpen] = useState(false);
+  const [draft, setDraft] = useState({ name: "", areaId: "", rtsp: "" });
+  const [addError, setAddError] = useState("");
+  const [seekCameraId, setSeekCameraId] = useState("");
+  const [seekAt, setSeekAt] = useState("");
+  const [seekResult, setSeekResult] = useState(null);
+
+  const homeId = home?._id;
+  const reload = async () => {
+    if (!homeId) return;
+    setError("");
+    try {
+      const session = await actions.openViewSession(homeId);
+      setToken(session?.token ?? null);
+      setCameras(Array.isArray(session?.cameras) ? session.cameras : []);
+    } catch (failure) {
+      setToken(null);
+      setCameras([]);
+      setError(messageOf(failure));
+    }
+    try {
+      const result = await actions.loadCameraEvents(homeId, { limit: CAMERAS_LIMIT });
+      setEvents(Array.isArray(result?.events) ? result.events : []);
+      setEventsError("");
+    } catch (failure) {
+      setEvents([]);
+      setEventsError(messageOf(failure));
+    }
+  };
+
+  useEffect(() => {
+    setCameras([]);
+    setEvents([]);
+    setToken(null);
+    setSeekResult(null);
+    reload();
+    return () => {};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homeId]);
+
+  const toggleAudio = (cameraId) => setAudio((current) => ({ ...current, [cameraId]: !current[cameraId] }));
+
+  const addCamera = async () => {
+    setAddError("");
+    try {
+      await actions.addCamera({ homeId, ...draft, areaId: draft.areaId || null });
+      setAddOpen(false);
+      setDraft({ name: "", areaId: "", rtsp: "" });
+      await reload();
+    } catch (failure) {
+      setAddError(messageOf(failure));
+    }
+  };
+
+  const setRecording = async (feed, enabled) => {
+    try {
+      await actions.setCameraRecording(feed._id, enabled);
+      await reload();
+    } catch (failure) {
+      setError(messageOf(failure));
+    }
+  };
+
+  const bulkRecording = async (enabled) => {
+    try {
+      await actions.bulkCameraRecording({ homeId, enabled });
+      await reload();
+    } catch (failure) {
+      setError(messageOf(failure));
+    }
+  };
+
+  const seek = async () => {
+    setSeekResult(null);
+    try {
+      if (!seekCameraId || !seekAt) return;
+      const at = new Date(seekAt).toISOString();
+      const answer = await actions.seekCamera(homeId, { cameraId: seekCameraId, at });
+      if (answer?.gap) {
+        setSeekResult({ gap: true, copy: gapCopy(answer.gap) });
+      } else if (answer?.evidence?.path) {
+        setSeekResult({ gap: false, url: mediaUrl({ origin, homeId, cameraId: seekCameraId, path: answer.evidence.path, token }) });
+      }
+    } catch (failure) {
+      setSeekResult({ gap: true, copy: messageOf(failure) });
+    }
+  };
+
+  const flagEvent = async (event) => {
+    try {
+      const answer = await actions.flagCameraEvent(event._id);
+      setEvents((current) => current.map((row) => (row._id === answer?.event?._id ? answer.event : row)));
+    } catch (failure) {
+      setEventsError(messageOf(failure));
+    }
+  };
+
+  const anyCameras = cameras.length > 0;
+
+  return (
+    <>
+      <SectionHeader
+        title="Cameras"
+        action={(
+          ownerHere && (
+            <Button size="small" startIcon={<AddOutlined />} onClick={() => setAddOpen(true)}>
+              Add camera
+            </Button>
+          )
+        )}
+      />
+      {error && <Alert severity="warning">{error}</Alert>}
+      {ownerHere && anyCameras && (
+        <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+          <Button size="small" onClick={() => bulkRecording(true)}>All recording on</Button>
+          <Button size="small" onClick={() => bulkRecording(false)}>All recording off</Button>
+        </Stack>
+      )}
+      {anyCameras && (
+        <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)" } }}>
+          {cameras.map((feed) => (
+            <FeedTile
+              key={feed._id} feed={feed} origin={origin} token={token} homeId={homeId}
+              onOpen={setViewer} audioOn={audio[feed._id] === true} toggleAudio={toggleAudio}
+            />
+          ))}
+        </Box>
+      )}
+      {!anyCameras && !error && (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          No cameras yet — the owner adds and validates one through the engine.
+        </Typography>
+      )}
+      {ownerHere && anyCameras && (
+        <Box sx={{ mt: 1 }}>
+          {cameras.map((feed) => (
+            <Stack key={feed._id} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+              <Typography variant="caption" sx={{ minWidth: 120 }}>{feed.name || "Camera"}</Typography>
+              <Switch
+                size="small"
+                checked={feed.recordingEnabled === true}
+                onChange={(e) => setRecording(feed, e.target.checked)}
+                inputProps={{ "aria-label": `Recording for ${feed.name}` }}
+              />
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>recording {feed.recordingEnabled ? "on" : "off"}</Typography>
+            </Stack>
+          ))}
+        </Box>
+      )}
+
+      {/* Owner's camera-authorization panel — the separate grant scope class. */}
+      <CameraAccessPanel home={home} actions={actions} origin={origin} ownerHere={ownerHere} />
+
+      {/* Playback: seek to a known time on any recorded camera. */}
+      {anyCameras && (
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="h6">Playback</Typography>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }} sx={{ mt: 1 }}>
+            <TextField
+              select size="small" label="Camera" value={seekCameraId}
+              onChange={(e) => setSeekCameraId(e.target.value)} sx={{ minWidth: 200 }}
+            >
+              {cameras.map((feed) => <MenuItem key={feed._id} value={feed._id}>{feed.name || "Camera"}</MenuItem>)}
+            </TextField>
+            <TextField
+              size="small" type="datetime-local" label="Watch at" value={seekAt}
+              onChange={(e) => setSeekAt(e.target.value)} slotProps={{ htmlInput: { step: 60 } }} sx={{ minWidth: 220 }}
+            />
+            <Button variant="contained" startIcon={<PlayArrowOutlined />} onClick={seek}>Watch</Button>
+          </Stack>
+          {seekResult?.gap && <Alert severity="info" sx={{ mt: 1.5 }}>{seekResult.copy}</Alert>}
+          {seekResult?.url && (
+            <Box component="video" src={seekResult.url} controls autoPlay sx={{ mt: 1.5, width: "100%", borderRadius: 2, bgcolor: "black" }} />
+          )}
+        </Box>
+      )}
+
+      {/* Camera activity: the event/alert surface — factual copy, conditional
+          interpretive copy, evidence or the explained gap, and the flag. */}
+      {anyCameras && (
+        <Box sx={{ mt: 3 }}>
+          <SectionHeader title="Camera activity" />
+          {eventsError && <Alert severity="warning">{eventsError}</Alert>}
+          {events.length === 0 && !eventsError && (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>No camera activity yet.</Typography>
+          )}
+          {events.map((event) => {
+            const copy = alertCopy(event);
+            const evidence = eventEvidence(event);
+            const thumbUrl = evidence.path && evidence.cameraId
+              ? mediaUrl({ origin, homeId, cameraId: evidence.cameraId, path: evidence.path, token })
+              : null;
+            return (
+              <Paper key={event._id} elevation={0} sx={{ p: 2, mb: 1, borderRadius: 3, border: "1px solid", borderColor: "var(--porch-border)" }}>
+                <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
+                  <Box>
+                    <Typography variant="body1">{copy.factual}</Typography>
+                    {copy.interpretive && (
+                      <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
+                        <Chip size="small" label={copy.conditional} sx={{ mr: 0.5 }} />
+                        {copy.interpretive}
+                      </Typography>
+                    )}
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: "wrap", rowGap: 0.5 }}>
+                      <Chip size="small" variant="outlined" label={relativeTime(String(event.startedAt ?? ""))} />
+                      {(event.observations ?? []).slice(0, 3).map((obs, index) => (
+                        <Chip key={index} size="small" label={`${obs.label} @ ${obs.cameraName ?? "camera"}`} />
+                      ))}
+                    </Stack>
+                  </Box>
+                  {!event.flag && <Button size="small" onClick={() => flagEvent(event)}>Not right</Button>}
+                  {event.flag && <Chip size="small" label="Flagged" />}
+                </Stack>
+                {thumbUrl ? (
+                  <Box component="img" src={thumbUrl} alt="Event evidence" sx={{ mt: 1, width: "100%", borderRadius: 2 }} />
+                ) : (
+                  evidence.kind === "gap" && (
+                    <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>{evidence.copy}</Typography>
+                  )
+                )}
+              </Paper>
+            );
+          })}
+        </Box>
+      )}
+
+      {/* Add-camera dialog: the engine validates the RTSP (onboarding). */}
+      <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Add a camera</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ mt: 1 }}>
+            {addError && <Alert severity="warning">{addError}</Alert>}
+            <TextField size="small" label="Name" value={draft.name} onChange={(e) => setDraft((c) => ({ ...c, name: e.target.value }))} />
+            <FormControl size="small" fullWidth>
+              <InputLabel>Covering area</InputLabel>
+              <Select
+                value={draft.areaId}
+                label="Covering area"
+                onChange={(e) => setDraft((c) => ({ ...c, areaId: e.target.value }))}
+              >
+                <MenuItem value=""><em>None</em></MenuItem>
+                {areas.map((area) => <MenuItem key={area._id} value={area._id}>{area.name}</MenuItem>)}
+              </Select>
+            </FormControl>
+            <TextField
+              size="small" label="Camera URL (RTSP)" value={draft.rtsp}
+              onChange={(e) => setDraft((c) => ({ ...c, rtsp: e.target.value }))}
+              helperText="The camera engine validates this before the camera joins the home."
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddOpen(false)}>Cancel</Button>
+          <Button variant="contained" onClick={addCamera} disabled={busyCameras(draft)}>Add camera</Button>
+        </DialogActions>
+      </Dialog>
+
+      {viewer && (
+        <CameraViewer feed={viewer} origin={origin} token={token} homeId={homeId} onClose={() => setViewer(null)} />
+      )}
+    </>
+  );
+}
+
+function busyCameras(draft) {
+  return !String(draft?.name ?? "").trim() || !String(draft?.rtsp ?? "").trim();
+}
+
 export function HomeDashboard({ data, actions }) {
   const origin = originOf(data?.server?.url) || (typeof window !== "undefined" ? window.location.origin : null);
   const storage = typeof window !== "undefined" ? window.localStorage : null;
@@ -1313,6 +1726,13 @@ export function HomeDashboard({ data, actions }) {
       {/* Outdoor areas always render as their own section, never mixed in. */}
       <SectionHeader title="Outdoor areas" />
       <AreaSection groups={grouped.outdoor} empty="No outdoor areas yet." renderCard={renderCard} />
+
+      {/* Cameras (PORCH-139): the family surface rides the engine bridge —
+          live grid with per-feed audio, playback with explained gaps, and
+          the event/alert surface. Owner controls are in the owner's panel. */}
+      {home && !visitorAccess && (
+        <CamerasSurface home={home} areas={areas} actions={actions} ownerHere={ownerHere} origin={origin} />
+      )}
 
       <Box sx={{ mt: 2 }}>
         {!visitorAccess && (

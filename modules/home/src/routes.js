@@ -10,11 +10,13 @@ import { Router } from "express";
  *   home: import("./controllers/home.controller.js").HomeController,
  *   device: import("./controllers/device.controller.js").DeviceController,
  *   automation: import("./controllers/automation.controller.js").AutomationController,
+ *   camera: import("./controllers/camera.controller.js").CameraController,
+ *   event: import("./controllers/event.controller.js").EventController,
  * }} controllers
  */
 export function createHomeRouter(controllers) {
   const router = Router();
-  const { home, device, automation } = controllers;
+  const { home, device, automation, camera, event } = controllers;
 
   // Homes: create, list, rename, and the in-view read the home switch rides.
   router.post("/homes", home.create);
@@ -56,6 +58,31 @@ export function createHomeRouter(controllers) {
   router.get("/homes/:homeId/grants", home.listGrants);
   router.post("/grants/:grantId/revoke", home.revokeGrant);
   router.post("/grants/:grantId/distributions", home.distributeGrant);
+
+  // Cameras (PORCH-139): the association store, the owner's camera surfaces,
+  // and the bridge's scoped view session. Camera authorization is its own
+  // grant scope class — visit grants resolve no camera surface.
+  router.post("/homes/:homeId/cameras", camera.register);
+  router.get("/homes/:homeId/cameras", camera.list);
+  router.post("/homes/:homeId/cameras/recording", camera.bulkRecording);
+  router.get("/homes/:homeId/cameras/health", camera.health);
+  router.post("/homes/:homeId/cameras/view", camera.viewSession);
+  router.get("/homes/:homeId/cameras/:cameraId/media", camera.media);
+  router.get("/homes/:homeId/camera-access", camera.listAccess);
+  router.post("/homes/:homeId/camera-access", camera.grantAccess);
+  router.post("/camera-access/:accessId/revoke", camera.revokeAccess);
+  router.put("/cameras/:cameraId", camera.update);
+  router.post("/cameras/:cameraId/recording", camera.setRecording);
+
+  // Playback (PORCH-139): segments from the engine's segment index, seek to
+  // a known time, and the explained gap when the footage cannot carry it.
+  router.get("/homes/:homeId/timeline", camera.timeline);
+  router.get("/homes/:homeId/seek", camera.seek);
+
+  // Events (PORCH-139): the alert surface of record and the flag control.
+  router.get("/homes/:homeId/events", event.list);
+  router.get("/events/:eventId", event.get);
+  router.post("/events/:eventId/flag", event.flag);
 
   return router;
 }

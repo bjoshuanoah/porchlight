@@ -51,6 +51,12 @@ export interface PorchlightConfig {
   realtime: {
     replayHours: number;
   };
+  /** PORCH-139: the engine connection of record (all null = unwired, fail closed). */
+  engine: {
+    baseUrl: string | null;
+    busUrl: string | null;
+    secret: string | null;
+  };
 }
 
 export declare const DEFAULT_CONFIG: Readonly<PorchlightConfig>;

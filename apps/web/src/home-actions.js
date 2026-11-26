@@ -155,5 +155,62 @@ export function createHomeActions(active, { navigate: _navigate } = {}) {
     addFamilyParent: (familyId, did) => jsonPost(`identity/families/${enc(familyId)}/parents`, { did: String(did ?? "").trim() }),
 
     removeFamilyParent: (familyId, did) => jsonPost(`identity/families/${enc(familyId)}/parents/remove`, { did: String(did ?? "").trim() }),
+
+    // Cameras (PORCH-139): the bridge's surfaces — the association store's
+    // reads, the owner's add/validate and recording controls, the scoped
+    // view session (minted engine token + standing feed descriptors), and
+    // the playback/event reads that render from the engine's contract.
+    loadCameras: (homeId) => request(requireConnection(active), `home/homes/${enc(homeId)}/cameras`),
+
+    openViewSession: (homeId) => request(requireConnection(active), `home/homes/${enc(homeId)}/cameras/view`, { method: "POST" }),
+
+    cameraHealth: (homeId) => request(requireConnection(active), `home/homes/${enc(homeId)}/cameras/health`),
+
+    addCamera: ({ homeId, name, areaId, rtsp } = {}) => signed(
+      `home/homes/${enc(homeId)}/cameras`,
+      { name: String(name ?? "").trim(), areaId: areaId ?? null, rtsp: String(rtsp ?? "").trim() },
+    ),
+
+    updateCamera: (cameraId, patch = {}) => signed(`home/cameras/${enc(cameraId)}`, patch),
+
+    setCameraRecording: (cameraId, enabled) => signed(`home/cameras/${enc(cameraId)}/recording`, { enabled: enabled === true }),
+
+    bulkCameraRecording: ({ homeId, enabled, cameraIds } = {}) => signed(
+      `home/homes/${enc(homeId)}/cameras/recording`,
+      {
+        enabled: enabled === true,
+        ...(Array.isArray(cameraIds) ? { cameraIds } : {}),
+      },
+    ),
+
+    grantCameraAccess: ({ homeId, did } = {}) => signed(
+      `home/homes/${enc(homeId)}/camera-access`,
+      { did: String(did ?? "").trim() },
+    ),
+
+    loadCameraAccess: (homeId) => request(requireConnection(active), `home/homes/${enc(homeId)}/camera-access`),
+
+    revokeCameraAccess: (accessId) => signed(`home/camera-access/${enc(accessId)}/revoke`, {}),
+
+    loadTimeline: (homeId, { from, to, cameraId } = {}) => {
+      const params = new URLSearchParams({ from: String(from), to: String(to) });
+      if (cameraId) params.set("cameraId", String(cameraId));
+      return request(requireConnection(active), `home/homes/${enc(homeId)}/timeline?${params.toString()}`);
+    },
+
+    seekCamera: (homeId, { cameraId, at } = {}) => {
+      const params = new URLSearchParams({ cameraId: String(cameraId), at: String(at) });
+      return request(requireConnection(active), `home/homes/${enc(homeId)}/seek?${params.toString()}`);
+    },
+
+    loadCameraEvents: (homeId, { limit, offset } = {}) => {
+      const params = new URLSearchParams();
+      if (limit != null) params.set("limit", String(limit));
+      if (offset != null) params.set("offset", String(offset));
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+      return request(requireConnection(active), `home/homes/${enc(homeId)}/events${suffix}`);
+    },
+
+    flagCameraEvent: (eventId) => request(requireConnection(active), `home/events/${enc(eventId)}/flag`, { method: "POST" }),
   };
 }

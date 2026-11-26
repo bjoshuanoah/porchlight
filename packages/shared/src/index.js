@@ -161,6 +161,20 @@ export const DEFAULT_CONFIG = Object.freeze({
   realtime: {
     replayHours: 24,
   },
+  /**
+   * The engine connection of record (PORCH-139, TS 2). The camera/NVR
+   * engine (PORCH-I-009) is a separate service consumed by the hub's home
+   * bridge: `baseUrl` is the engine's HTTP surface (the bridge proxies the
+   * standing feed/media paths through it), `busUrl` is the MQTT bus URL the
+   * hub subscribes for DetectObject facts, and `secret` is the shared
+   * engine-token secret the bridge's scoped view tokens carry. Unwired
+   * (every null) → the camera surfaces fail closed with plain language.
+   */
+  engine: {
+    baseUrl: null,
+    busUrl: null,
+    secret: null,
+  },
 });
 
 export function configPath(root) {
@@ -181,6 +195,9 @@ export function normalizeConfig(raw) {
   merged.hub = { ...merged.hub, ...src.hub, tunnel: { ...merged.hub.tunnel, ...src.hub?.tunnel } };
   merged.identity = { ...merged.identity, ...src.identity };
   merged.realtime = { ...merged.realtime, ...src.realtime };
+  // PORCH-139: the engine connection of record — string-or-null fields,
+  // validated below.
+  merged.engine = { ...merged.engine, ...src.engine };
   merged.media = {
     ...merged.media,
     ...src.media,
@@ -213,6 +230,17 @@ export function normalizeConfig(raw) {
   // poll-and-recover interval for a dropped known-good root.
   if (!Number.isInteger(merged.media.volumePollSeconds) || merged.media.volumePollSeconds < 1 || merged.media.volumePollSeconds > 3600) {
     throw new Error("config media.volumePollSeconds must be an integer number of seconds between 1 and 3600");
+  }
+  // Engine connection of record (PORCH-139): every field is a non-empty
+  // string or null — a half-configured engine (URL without its token
+  // secret) refuses closed with a loud boot diagnostic.
+  for (const [field, value] of Object.entries(merged.engine ?? {})) {
+    if (value != null && (typeof value !== "string" || value.trim().length === 0)) {
+      throw new Error(`config engine.${field} must be a non-empty string or null`);
+    }
+  }
+  if ((merged.engine?.baseUrl != null) !== (merged.engine?.secret != null) && merged.engine?.baseUrl != null) {
+    throw new Error("config engine.baseUrl and engine.secret wire together — the bridge refuses a URL it cannot mint view tokens for");
   }
   // Rendition ladder rungs (PORCH-044): the documented configuration values
   // — known kinds only, integer pixel widths inside the generation range.

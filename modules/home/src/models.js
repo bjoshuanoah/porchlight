@@ -244,4 +244,93 @@ export const homeModels = {
       deviceSignature: { type: ["string", "null"] },
     },
   },
+  /**
+   * Camera (PORCH-139, PRD 2 / TS 2). The home domain's association store:
+   * engine camera ↔ home, engine camera ↔ covered area (room or outdoor
+   * area) so camera events land in the right home context. Recording,
+   * detection, and storage stay the engine's own planes — consumed here,
+   * never built. The RTSP binding lives with the engine's onboarding; the
+   * family surfaces never carry camera credentials.
+   */
+  camera: {
+    type: "object",
+    required: ["_id", "homeId", "engineCameraId", "name", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      /** The camera's area of coverage in this home (driveway, porch class). */
+      areaId: { type: ["string", "null"] },
+      /** The engine's camera id of record (PORCH-I-009). */
+      engineCameraId: { type: "string" },
+      name: { type: "string" },
+      /** Engine-reported frame geometry { width, height } | null. */
+      aspect: { type: ["object", "null"] },
+      /** Whether the engine carries a per-camera audio feed. */
+      audio: { type: "boolean" },
+      /** The owner's per-camera recording control. */
+      recordingEnabled: { type: "boolean" },
+      createdBy: { type: "string" },
+      deviceSignature: { type: ["string", "null"] },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Camera authorization (PORCH-139, TS 2). THE SEPARATE grant scope class:
+   * home membership plus this row reaches camera surfaces; a live visit
+   * grant resolves NO camera surface, ever (never bundled with device
+   * controls). Owners hold cameras by membership — rows exist for members.
+   */
+  cameraAccess: {
+    type: "object",
+    required: ["_id", "homeId", "did", "createdBy", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      /** The existing Porchlight identity (DID) holding camera authorization. */
+      did: { type: "string" },
+      createdBy: { type: "string" },
+      deviceSignature: { type: ["string", "null"] },
+      createdAt: { type: "string" },
+      revokedAt: { type: ["string", "null"] },
+      revokedBy: { type: ["string", "null"] },
+    },
+  },
+  /**
+   * Home event (PORCH-139, PRD 3 / TS 3). One family event per routine
+   * arrival: the dedup key is (home, area, track) under the time window;
+   * state open → updated → closed. Observations carry what detection saw
+   * (fact); inferences carry what interpretation concluded (conditional);
+   * the factual alert never renders an invented claim.
+   */
+  homeEvent: {
+    type: "object",
+    required: ["_id", "homeId", "key", "state", "startedAt", "updatedAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      areaId: { type: ["string", "null"] },
+      /** The dedup key of record: home:area:track. */
+      key: { type: "string" },
+      /** open | updated | closed. */
+      state: { type: "string" },
+      trackId: { type: "string" },
+      cameraRefs: { type: "array", items: { type: "string" } },
+      /** What detection saw: [{ label, confidence, cameraId, trackId, at }]. */
+      observations: { type: "array", items: { type: "object" } },
+      /** What interpretation concluded: [{ text, source, at, gate }] — conditional. */
+      inferences: { type: "array", items: { type: "object" } },
+      /** [{ kind: segment|clip|still|gap, ref?, path?, reason? }] at event time. */
+      evidenceRefs: { type: "array", items: { type: "object" } },
+      /** { text (factual), interpretive|null, kind: factual|interpretive, at }. */
+      alert: { type: ["object", "null"] },
+      /** The user's incorrect-event flag of record. */
+      flag: {
+        type: ["object", "null"],
+        properties: { by: { type: ["string", "null"] }, at: { type: "string" } },
+      },
+      startedAt: { type: "string" },
+      updatedAt: { type: "string" },
+      closedAt: { type: ["string", "null"] },
+    },
+  },
 };

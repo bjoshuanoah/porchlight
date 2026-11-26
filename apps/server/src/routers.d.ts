@@ -330,7 +330,30 @@ declare module "@porchlight/home" {
     grantService: unknown;
     auditService: unknown;
     adapters: unknown;
+    /** PORCH-139: the camera bridge and the family event/alert pipeline. */
+    cameraService: unknown;
+    eventService: unknown;
   }
+  /** PORCH-139: the engine seam contract (see camera.service.js docs). */
+  export interface EngineAdapter {
+    validateCamera(input: { url: string }): Promise<{ ok: true; cameraId: string; aspect?: { width: number; height: number } | null; audio?: boolean } | { ok: false; reason: string }>;
+    liveFeed(engineCameraId: string): Promise<{ upstreamId: string | null; path: string; audio: boolean }>;
+    openMedia(path: string): Promise<{ body: unknown; contentType?: string } | { gap: string }>;
+    segments(input: { cameraId: string; from: number; to: number }): Promise<Array<Record<string, unknown>>>;
+    segmentAt(input: { cameraId: string; at: number }): Promise<{ ref: string; path: string; kind?: string } | { gap: string }>;
+    evidenceAt(input: { cameraId: string; at: number }): Promise<{ kind?: string; ref?: string; path?: string | null } | { gap: string }>;
+    health(engineCameraId: string): Promise<{ recording?: { state: string }; playback?: { state: string }; detection?: { state: string } }>;
+    serviceHealth(): Promise<{ state: string; detail?: unknown }>;
+    storage(): Promise<{ state: string; detail?: unknown }>;
+  }
+  /** PORCH-139: the engine's MQTT detection-bus consumer (DetectedObject facts). */
+  export function createMqttEngineConsumer(options: {
+    url: string;
+    clientId?: string;
+    log?: (line: string) => void;
+    onEvent: (detection: Record<string, unknown>) => Promise<unknown>;
+  }): { status(): Record<string, unknown>; close(): Promise<void> };
+  export function createHttpEngineAdapter(options: { baseUrl: string }): EngineAdapter;
   export function assembleHomeModule(
     store: { collection(name: string): unknown },
     options?: {
@@ -350,6 +373,14 @@ declare module "@porchlight/home" {
         /** The governed members a family grant resolves against. */
         familiesForMember: (did: string) => Promise<Array<{ _id: string; [key: string]: unknown }>>;
       };
+      /** PORCH-139: the engine adapter seam; null = fail closed. */
+      engine?: EngineAdapter | null;
+      /** PORCH-139: the shared engine-token secret (must pair with engine). */
+      engineSecret?: string | null;
+      /** PORCH-139: the engine detection bus subscription (both family consumers). */
+      onEngineEvent?: (handler: (detection: Record<string, unknown>) => Promise<unknown>) => void;
+      /** PORCH-139: the dedup window seconds override (tests; default 300). */
+      dedupWindowSec?: number;
       /** Auth-failure capture sink (PORCH-019 shape). */
       log?: ((line: string) => void) | null;
     },
