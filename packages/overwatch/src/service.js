@@ -39,8 +39,9 @@ const JOIN_SLACK_SEC = 2;
 /**
  * Incremental merge service. Feed every camera stream in per-camera time
  * order; the service interleaves cameras by timestamp on finalize. `add`
- * closes stale tracks (no samples for trackIdleSec) and correlates closing
- * tracks with adjacent cameras in both directions.
+ * closes stale tracks (no samples for trackIdleSec — engine track ids are
+ * recycled only after such absences) and correlates closing tracks with
+ * adjacent cameras in both directions.
  */
 export class EntityMergeService {
 	/** @param {CorrelationConfig} config */
@@ -111,15 +112,15 @@ export class EntityMergeService {
 		const groups = new Map();
 		for (const track of this.tracks.values()) {
 			const root = this.find(track.seq);
-			/** @type {EntitySighting} */
-			const sighting = {
+			const sighting = /** @type {EntitySighting} */ ({
 				camera: track.camera,
 				trackId: track.trackId,
 				t0: track.t0,
 				t1: track.t1,
 				sampleCount: track.objects.length,
 				cls: track.cls,
-			};
+			});
+			sighting.seq = track.seq;
 			const handoff = this.handoffs.get(track.seq);
 			if (handoff) sighting.handoff = handoff;
 			const group = groups.get(root);
@@ -170,7 +171,11 @@ export class EntityMergeService {
 
 	/**
 	 * Pair `entryTrack` (just opened, entry side) with recent exits in adjacent
-	 * cameras: closed exits and still-open exits within the gap window.
+	 * cameras: closed exits and still-open exits within the gap window. A
+	 * claimed exit may still pair when appearance confirms the same person
+	 * (simultaneous overlapping views produce several fragments of one
+	 * person across both cameras); claims without appearance evidence stay
+	 * hard so overlapping visitors cannot steal each other's exit.
 	 *
 	 * @private @param {CameraTrack} entryTrack
 	 */
@@ -181,7 +186,7 @@ export class EntityMergeService {
 			if (!other) continue;
 			const prior = travelPrior(this.config, other, entryTrack.camera);
 			const candidates = [...this.tracks.values()].filter(
-				(t) => t.camera === other && t.seq !== entryTrack.seq && !this.joinedTo.has(t.seq) && inWindow(entryTrack.t0 - this.currentEnd(t), prior),
+				(t) => t.camera === other && t.seq !== entryTrack.seq && inWindow(entryTrack.t0 - this.currentEnd(t), prior),
 			);
 			this.joinBest(candidates, entryTrack);
 		}
@@ -194,13 +199,12 @@ export class EntityMergeService {
 	 * @private @param {CameraTrack} exitTrack
 	 */
 	pairAsExit(exitTrack) {
-		if (this.joinedTo.has(exitTrack.seq)) return;
 		for (const [a, b] of this.config.adjacency) {
 			const other = a === exitTrack.camera ? b : b === exitTrack.camera ? a : null;
 			if (!other) continue;
 			const prior = travelPrior(this.config, exitTrack.camera, other);
 			const candidateEntries = [...(this.open.get(other)?.values() ?? [])].filter(
-				(entryTrack) => !this.handoffs.has(entryTrack.seq) && inWindow(entryTrack.t0 - exitTrack.t1, prior),
+				(entryTrack) => inWindow(entryTrack.t0 - exitTrack.t1, prior),
 			);
 			for (const entryTrack of candidateEntries) this.joinBest([exitTrack], entryTrack);
 		}
@@ -218,7 +222,16 @@ export class EntityMergeService {
 			.filter((c) => c.result.rejected === undefined && c.result.score >= (this.config.joinThreshold ?? 0.5))
 			.sort((a, b) => b.result.score - a.result.score);
 		if (accepted.length === 0) return;
-		const { exit, result } = accepted[0];
+		const overrideFloor = this.config.appearanceOverrideFloor ?? 0.5;
+		const chosen = accepted.find(({ exit, result }) => {
+			if (!this.joinedTo.has(exit.seq) && !this.handoffs.has(entryTrack.seq)) return true;
+			// Claimed on one side: only appearance evidence of the same person
+			// may extend the claim (multi-fragment continuations across
+			// simultaneous overlapping views).
+			return result.appearanceKnown && result.appearance >= overrideFloor;
+		});
+		if (!chosen) return;
+		const { exit, result } = chosen;
 		this.union(exit.seq, entryTrack.seq);
 		this.joinedTo.set(exit.seq, entryTrack.seq);
 		/** @type {ZoneHandoff} */

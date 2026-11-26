@@ -64,6 +64,7 @@
  * @property {number} t1
  * @property {number} sampleCount
  * @property {string|undefined} [cls]
+ * @property {number|undefined} [seq]  occurrence sequence (spike evaluation)
  * @property {ZoneHandoff|undefined} [handoff]
  */
 
@@ -107,8 +108,10 @@
 /** Default travel-time prior for adjacent pairs with no authored entry. */
 export const DEFAULT_TRAVEL_TIME = { min: 0, max: 10 };
 
-/** Track-close idle threshold default (seconds). */
-export const DEFAULT_TRACK_IDLE_SEC = 1.5;
+/** Track-close idle threshold default: the engine's per-camera track ids are
+ * stable for an object's lifetime and are only recycled after a long absence,
+ * so a gap shorter than this is treated as the same ongoing track. */
+export const DEFAULT_TRACK_IDLE_SEC = 15;
 
 /** Correlation score floor default. */
 export const DEFAULT_JOIN_THRESHOLD = 0.5;

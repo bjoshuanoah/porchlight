@@ -151,6 +151,24 @@ test("a recycled per-camera trackId after the idle gap is a separate occurrence"
 	);
 });
 
+test("appearance override extends a claimed join for simultaneous multi-fragment continuations", () => {
+	const service = new EntityMergeService(config());
+	const same = [0.5, 0.5, 0.5, 0.9, 0.4, 0.1];
+	// Right camera sees the person 11-16s; left camera holds a long track
+	// 14-30s, then the left camera's detector fragments it (25-30s).
+	service.add(det("right", "r1", 11.0, [0.06, 0.35, 0.1, 0.4], same));
+	service.add(det("right", "r1", 13.0, [0.05, 0.35, 0.1, 0.4], same));
+	service.add(det("left", "l1", 14.5, [0.8, 0.3, 0.1, 0.4], same));
+	service.add(det("left", "l1", 17.0, [0.84, 0.3, 0.1, 0.4], same));
+	service.add(det("left", "l1", 30.0, [0.88, 0.3, 0.1, 0.4], same));
+	service.add(det("left", "l2", 25.0, [0.86, 0.3, 0.1, 0.4], same));
+	service.add(det("left", "l2", 29.9, [0.88, 0.3, 0.1, 0.4], same));
+	const { entities } = service.finalize();
+	assert.equal(entities.length, 1, "fragments of one person unify into one entity");
+	const cams = entities[0].sightings.map((s) => s.camera).sort();
+	assert.deepEqual(cams, ["left", "left", "right"]);
+});
+
 test("correlate rejects a candidate entering before the exit beyond simultaneity slack", () => {
 	const cfg = config();
 	/** @type {import("../src/types.js").CameraTrack} */
