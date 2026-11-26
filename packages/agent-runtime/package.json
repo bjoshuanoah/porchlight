@@ -1,0 +1,29 @@
+{
+  "name": "@porchlight/agent-runtime",
+  "version": "0.5.3",
+  "description": "The Porchlight agent runtime library (PORCH-147): the agent loop, per-member memory streams, topics, SOUL injection, keysets, and MCP client as the MIT open-source unit — one agent entity per member on the hub, cross-member state access fails closed at the storage seam.",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./mcp": "./src/mcp/client.js"
+  },
+  "scripts": {
+    "build": "echo 'agent-runtime ships plain JS (no build)'",
+    "test": "node --test 'test/**/*.test.js'",
+    "lint": "eslint ."
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjoshuanoah/porchlight.git",
+    "directory": "packages/agent-runtime"
+  }
+}
