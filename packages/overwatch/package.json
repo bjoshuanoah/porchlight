@@ -1,0 +1,26 @@
+{
+  "name": "@porchlight/overwatch",
+  "version": "0.5.3",
+  "private": true,
+  "description": "Overwatch cross-camera entity layer — PORCH-126 spike: merges per-camera DetectedObject streams into PropertyEntity trajectories with zone handoffs.",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "build": "echo 'overwatch ships plain JS (no build) — use tsx for type-aware development'",
+    "test": "node --test 'test/**/*.test.js'",
+    "lint": "eslint ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjoshuanoah/porchlight.git",
+    "directory": "packages/overwatch"
+  }
+}
