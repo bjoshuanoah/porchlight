@@ -176,6 +176,20 @@ export function formatDuration(milliseconds) {
 }
 
 /**
+ * The compose field's available height floor (Brian, 11/26/2026: at least
+ * 5 lines of available text-area height on desktop, 3 on mobile). The
+ * field's line-height is the 24px class; the floor is lines × line-height
+ * so the member always sees the ruled block of writing room, empty draft
+ * or full.
+ */
+export const FIELD_LINE_HEIGHT = 24;
+
+export function fieldMinHeight(presentation = "mobile") {
+  const lines = presentation === "desktop" ? 5 : 3;
+  return lines * FIELD_LINE_HEIGHT;
+}
+
+/**
  * Keyboard geometry for the flush-to-bottom sheet (Section 18 footer law:
  * flush above the safe area when the keyboard is closed, above the
  * keyboard when risen). Pure so the visual-viewport assertion is unit

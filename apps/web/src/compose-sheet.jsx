@@ -54,11 +54,13 @@ import { firstUrlIn } from "./link-preview.js";
 import { identityOf } from "./feed-filter.js";
 import { invoke, useOperation } from "./social.jsx";
 import {
+  FIELD_LINE_HEIGHT,
   attachmentKind,
   destinationLabel,
   destinationRows,
   destinationUnavailable,
   destinationUnavailableCopy,
+  fieldMinHeight,
   formatDuration,
   keyboardRaised,
   postEligible,
@@ -113,8 +115,9 @@ function makeAttachment(file, kind) {
 function ComposePreview({ attachment, onDuration, removeLabel, onRemove }) {
   const { file, kind, url, durationMs } = attachment;
   return <Box sx={{ position: "relative", borderRadius: "16px", overflow: "hidden", bgcolor: "porchlight.subtle", width: "100%" }}>
+    {/* Box component="video": a raw video element is no MUI system component, so its sx prop drops — which rendered the preview at its full intrinsic size and pushed the header, Close, and per-item remove out of reach (the staged-video report of 11/26/2026). */}
     {kind === "video"
-      ? <video src={url} muted playsInline preload="metadata" data-testid="attachment-video"
+      ? <Box component="video" src={url} muted playsInline preload="metadata" data-testid="attachment-video"
           onLoadedMetadata={(event) => {
             const ms = Math.round((event.currentTarget.duration || 0) * 1000);
             if (ms > 0) onDuration?.(attachment, ms);
@@ -414,7 +417,12 @@ function Composer({ open, onClose, data = {}, actions = {}, target = null, stage
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onChange={(event) => setText(event.target.value)}
-          sx={{ fontSize: "1rem", lineHeight: "24px", color: "text.primary", px: 0, "& textarea": { p: 0, border: "none" } }}
+          sx={{
+            fontSize: "1rem", lineHeight: `${FIELD_LINE_HEIGHT}px`, color: "text.primary", px: 0,
+            // The available writing room never collapses below the line
+            // floor per presentation (5 lines desktop, 3 mobile).
+            "& textarea": { p: 0, border: "none", minHeight: `${fieldMinHeight(presentation)}px` },
+          }}
         />
         {previewText && <Stack direction="row" spacing={1} alignItems="center" sx={{ pt: 0.5 }}>
           {preview && previewAttached && <Chip
