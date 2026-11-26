@@ -8,6 +8,8 @@ import { createSystemRouter } from "./routes/system.routes.js";
 import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
 import { createOverwatchPlaneRouter } from "./overwatch-plane.js";
 import type { OverwatchHomeModule } from "./overwatch-plane.js";
+import { createRecognitionPlaneRouter } from "./recognition-plane.js";
+import type { RecognitionHomeModule, VisionProviderLike } from "./recognition-plane.js";
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule, treatAvatar } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
@@ -72,6 +74,18 @@ export interface ServerOptions {
     chainsProvider?: () => unknown[];
     clipsProvider?: (chain: unknown) => Array<{ cameraId: string; path: string; from: number; to: number }> | undefined;
     outagesProvider?: () => Array<{ cameraId: string; from: number; to: number }>;
+  } | null;
+  /**
+   * PORCH-141: the People & Things plane's supply seam. The local pipeline's
+   * vision provider factory is what setup provisions per stage (absent =
+   * registry surfaces serve, recognition refuses closed with plain
+   * language). The engine bus subscription rides the SAME detections the
+   * home module's event ingest consumes; only recognition-bearing evidence
+   * (a bus `reid` descriptor or a locally read `plateText`) triggers a run.
+   */
+  recognition?: {
+    visionProviderFactory?: (() => VisionProviderLike) | null;
+    providerName?: string;
   } | null;
   /**
    * Real-time event plane (PORCH-047): the Redis-backed fan-out + replay
@@ -471,6 +485,38 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
         outagesProvider: options.overwatch?.outagesProvider,
         log: options.log ?? null,
       }));
+    }
+    // PORCH-141: the People & Things REST plane mounts under the hub's JSON
+    // /api prefix riding the SAME identity+home perimeter (members read, the
+    // owner mutates and exports). The registry collections ride the hub's
+    // Mongo store of record; the audit file lives under the hub root. The
+    // per-household recognition switch of record is opt-in INSIDE this
+    // plane — serving the surfaces is not running recognition.
+    if (options.config.mode.recognitionServingEnabled) {
+      const recognitionPlane = createRecognitionPlaneRouter({
+        root: options.homeRoot ?? options.bootstrap.configDir,
+        store: options.store,
+        identityAuth,
+        homeModule: homeModule as unknown as RecognitionHomeModule,
+        visionProviderFactory: options.recognition?.visionProviderFactory ?? null,
+        providerName: options.recognition?.providerName,
+        // The home module's read-only engine-camera → home resolution seam.
+        homeForCamera: (engineCameraId: string) => homeModule.cameraService.homeForEngineCamera(engineCameraId),
+        log: options.log ?? null,
+      });
+      router.use("/recognition", recognitionPlane.router);
+      // The engine bus subscription of record for recognition runs — the
+      // SAME detections the home module's event ingest consumes. Only
+      // recognition-bearing evidence (bus `reid`, locally read `plateText`)
+      // triggers a run; the switch of record bites before anything runs.
+      if (engineConfig.busUrl) {
+        createMqttEngineConsumer({
+          url: engineConfig.busUrl,
+          clientId: "porchlight-recognition",
+          log: options.log ?? undefined,
+          onEvent: (detection: Record<string, unknown>) => recognitionPlane.ingestEngineDetection(detection),
+        });
+      }
     }
   }
   if (identityModule && socialModule) {

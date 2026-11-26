@@ -32,6 +32,12 @@ import {
   trackedStateLabel, travelTimeKey, travelTimeUpdate, UNCOVERED_LABEL, visitWhoCopy,
   visitWhereCopy, zoneViewBox, zonesTouch,
 } from "./overwatch-model.js";
+// PORCH-141: recognized identities decorate the tracked rows and visits —
+// the by-reference annotation join is people-model.js's of record.
+import {
+  annotationsForEntity, annotationsForTrackRow, annotationsForVisit,
+  annotationLines, namesByEntryId,
+} from "./people-model.js";
 
 const messageOf = (error) => error?.message || "That did not work. Please try again.";
 
@@ -383,7 +389,7 @@ function DraftVertices({ draft, onGrab }) {
 
 /** (b) The tracked list: live rows — one per entity. Exported for the test
  * sweep; the follow control rides only followable classes. */
-export function TrackedList({ entities, onFollowToggle, flagFrom, onFlag }) {
+export function TrackedList({ entities, recognitions, onFollowToggle, flagFrom, onFlag }) {
   const rows = Array.isArray(entities) ? entities : [];
   if (rows.length === 0) {
     return <EmptyLine>Nothing is moving in view right now.</EmptyLine>;
@@ -391,19 +397,25 @@ export function TrackedList({ entities, onFollowToggle, flagFrom, onFlag }) {
   return (
     <Stack spacing={1.5}>
       {rows.map((entity) => (
-        <TrackedRow key={entity?.entityId} entity={entity} onFollowToggle={onFollowToggle} flagFrom={flagFrom} onFlag={onFlag} />
+        <TrackedRow key={entity?.entityId} entity={entity} recognitions={recognitions} onFollowToggle={onFollowToggle} flagFrom={flagFrom} onFlag={onFlag} />
       ))}
     </Stack>
   );
 }
 
 /** (b) One tracked row: live state, cameras, the follow control for people
- * and vehicles only, and the keep-separate flag for two-entity associations. */
-function TrackedRow({ entity, onFollowToggle, flagFrom, onFlag }) {
+ * and vehicles only, and the keep-separate flag for two-entity associations.
+ * PORCH-141: a recognized identity rides the row — the name plainly for an
+ * asserted match, "looks like name (pct%)" otherwise; unknown sightings
+ * carry no annotation rows and no decoration appears. */
+function TrackedRow({ entity, recognitions, onFollowToggle, flagFrom, onFlag }) {
   const label = entityClassLabel(entity?.cls) ?? "Object";
   const followable = isFollowable(entity?.cls);
   const stateLabel = trackedStateLabel(entity?.entityState);
   const untrackedClass = entity?.cls && !entityClassLabel(entity.cls);
+  const identities = (recognitions?.names && recognitions?.annotations)
+    ? annotationLines(recognitions.names, annotationsForEntity(recognitions.annotations, entity)) ?? []
+    : [];
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ flexWrap: "wrap", useFlexGap: true }}>
@@ -416,6 +428,13 @@ function TrackedRow({ entity, onFollowToggle, flagFrom, onFlag }) {
             {stateLabel ?? "State unknown"} · {trackedCamerasCopy(entity?.cameraIds)} {trackedSeenCopy(entity?.lastSeenAt)}
             {untrackedClass ? ` · class "${entity.cls}"` : ""}
           </Typography>
+          {identities.length > 0 && (
+            <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.5 }}>
+              {identities.map((line, noteIndex) => (
+                <Chip key={noteIndex} size="small" label={line} />
+              ))}
+            </Stack>
+          )}
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
           {followable && (
@@ -460,30 +479,51 @@ export function FollowedStream({ stream }) {
 
 /** (c) The visit timeline: ordered groups, states as the narrative line,
  * clips as the record, gaps rendered distinctly as explained gaps. Exported
- * for the test sweep, like identity.jsx's surfaces of record. */
-export function VisitTimeline({ entries }) {
+ * for the test sweep, like identity.jsx's surfaces of record. Optional
+ * PORCH-141 recognition decoration: a timeline row whose cameraId+trackId
+ * matches an annotation row rides the identity label under the uncertainty
+ * law — never a bare name for a looks-like row. */
+export function VisitTimeline({ entries, annotations, names }) {
   const groups = groupTimelineEntries(entries);
+  const rowIdentity = (group) => (names && annotations
+    ? annotationLines(names, annotationsForTrackRow(annotations, group)) ?? []
+    : []);
   return (
     <Stack spacing={0.75} sx={{ mt: 1 }}>
-      {groups.map((group, index) => (
-        group.kind === "gap" ? (
-          // The explained gap: the reason of record plus its span, visibly set
-          // apart — nothing inside a gap is ever fabricated coverage.
-          <Stack key={index} direction="row" spacing={1} alignItems="flex-start" sx={{ bgcolor: "warning.main", opacity: 0.92, borderRadius: 1, p: 1 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, whiteSpace: "nowrap", color: "warning.contrastText" }}>Gap</Typography>
-            <Typography variant="body2" sx={{ color: "warning.contrastText" }}>{gapGroupCopy(group)}</Typography>
+      {groups.map((group, index) => {
+        const identities = rowIdentity(group);
+        return (
+          <Stack key={index} spacing={0.25}>
+            {group.kind === "gap" ? (
+              // The explained gap: the reason of record plus its span, visibly set
+              // apart — nothing inside a gap is ever fabricated coverage.
+              <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ bgcolor: "warning.main", opacity: 0.92, borderRadius: 1, p: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, whiteSpace: "nowrap", color: "warning.contrastText" }}>Gap</Typography>
+                <Typography variant="body2" sx={{ color: "warning.contrastText" }}>{gapGroupCopy(group)}</Typography>
+              </Stack>
+            ) : (
+              <Typography variant="body2" sx={{ pl: 1, fontWeight: group.kind !== "clip" ? 600 : undefined }}>
+                {group.kind !== "clip" ? timelineGroupCopy(group) : clipGroupCopy(group)}
+              </Typography>
+            )}
+            {identities.length > 0 && (
+              <Stack direction="row" spacing={0.5} sx={{ pl: 1, flexWrap: "wrap", rowGap: 0.5 }}>
+                {identities.map((line, noteIndex) => (
+                  <Chip key={noteIndex} size="small" label={line} />
+                ))}
+              </Stack>
+            )}
           </Stack>
-        ) : group.kind === "clip" ? (
-          <Typography key={index} variant="body2" sx={{ pl: 1 }}>{clipGroupCopy(group)}</Typography>
-        ) : (
-          <Typography key={index} variant="body2" sx={{ pl: 1, fontWeight: 600 }}>{timelineGroupCopy(group)}</Typography>
-        )
-      ))}
+        );
+      })}
     </Stack>
   );
 }
 
-function VisitRow({ visit, onOpen, timeline }) {
+function VisitRow({ visit, onOpen, timeline, recognitions }) {
+  const identities = (recognitions?.names && recognitions?.annotations)
+    ? annotationLines(recognitions.names, annotationsForVisit(recognitions.annotations, visit)) ?? []
+    : [];
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ flexWrap: "wrap", useFlexGap: true }}>
@@ -492,10 +532,23 @@ function VisitRow({ visit, onOpen, timeline }) {
           <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
             {visitWhereCopy(visit?.cameras)}{visit?.from && visit?.to ? ` · ${visit.from} – ${visit.to}` : ""}
           </Typography>
+          {identities.length > 0 && (
+            <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.5 }}>
+              {identities.map((line, noteIndex) => (
+                <Chip key={noteIndex} size="small" label={line} />
+              ))}
+            </Stack>
+          )}
         </Stack>
         <Button size="small" onClick={() => onOpen(visit)}>{timeline ? "Hide timeline" : "Open timeline"}</Button>
       </Stack>
-      {timeline && <VisitTimeline entries={timeline} />}
+      {timeline && (
+        <VisitTimeline
+          entries={timeline}
+          annotations={recognitions?.annotations}
+          names={recognitions?.names}
+        />
+      )}
     </Paper>
   );
 }
@@ -525,6 +578,27 @@ export function Overwatch({ actions }) {
   const [flagFrom, setFlagFrom] = useState(null);
   const [streams, setStreams] = useState({});
   const [timelines, setTimelines] = useState({});
+  // PORCH-141: the recognition annotation join for the tracked and visit
+  // surfaces. The hub's first home carries the registry of record; an absent
+  // plane or a refusal leaves the decoration empty and the rows honest.
+  const [recognitions, setRecognitions] = useState({ names: {}, annotations: [] });
+
+  useEffect(() => {
+    if (typeof actions.loadAnnotations !== "function" || typeof actions.loadHomes !== "function") return undefined;
+    let stale = false;
+    void (async () => {
+      try {
+        const homes = await actions.loadHomes();
+        const homeId = (Array.isArray(homes?.homes) ? homes.homes : [])[0]?._id;
+        if (!homeId || stale) return;
+        const [notes, registry] = await Promise.all([actions.loadAnnotations(homeId), actions.loadEntries(homeId)]);
+        if (!stale) setRecognitions({ names: namesByEntryId(registry?.entries), annotations: notes?.annotations ?? [] });
+      } catch {
+        if (!stale) setRecognitions({ names: {}, annotations: [] });
+      }
+    })();
+    return () => { stale = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps — one mount read, quietly degraded
 
   const reload = async () => {
     setError("");
@@ -744,7 +818,7 @@ export function Overwatch({ actions }) {
 
       <SectionHeader title="Tracked now" />
       {trackedError && <Alert severity="warning" sx={{ mb: 1.5 }}>{trackedError}</Alert>}
-      <TrackedList entities={tracked} onFollowToggle={followToggle} flagFrom={flagFrom} onFlag={flag} />
+      <TrackedList entities={tracked} recognitions={recognitions} onFollowToggle={followToggle} flagFrom={flagFrom} onFlag={flag} />
 
       {flagFrom && (
         <Alert severity="info" sx={{ mt: 1.5 }}>
@@ -768,7 +842,7 @@ export function Overwatch({ actions }) {
       {visits.length === 0 && <EmptyLine>No visits recorded in the window yet.</EmptyLine>}
       <Stack spacing={1.5}>
         {visits.map((visit) => (
-          <VisitRow key={visit?.visitId} visit={visit} timeline={timelines[visit?.visitId]} onOpen={openVisit} />
+          <VisitRow key={visit?.visitId} visit={visit} timeline={timelines[visit?.visitId]} recognitions={recognitions} onOpen={openVisit} />
         ))}
       </Stack>
 

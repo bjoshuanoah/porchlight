@@ -331,8 +331,12 @@ declare module "@porchlight/home" {
     auditService: unknown;
     adapters: unknown;
     /** PORCH-139: the camera bridge and the family event/alert pipeline. */
-    cameraService: unknown;
+    cameraService: CameraServiceLike;
     eventService: unknown;
+  }
+  /** PORCH-141: the camera bridge subset the hub composes against. */
+  export interface CameraServiceLike {
+    homeForEngineCamera(engineCameraId: string): Promise<{ homeId: string; cameraId: string; cameraName?: string } | null>;
   }
   /** PORCH-139: the engine seam contract (see camera.service.js docs). */
   export interface EngineAdapter {
@@ -478,4 +482,77 @@ declare module "@porchlight/overwatch/server" {
     prepared?: { body?: object | null },
   ) => Promise<void>;
   export function createOverwatchServer(parts: Parameters<typeof createOverwatchHandler>[0]): import("node:http").Server;
+}
+declare module "@porchlight/recognition" {
+  /** PORCH-141: the People & Things services (plain-JS package, typed here). */
+  /** The recognition audit-log seam (overwatch's AuditLog shape + homeId). */
+  export interface VisionProvider {
+    name: string;
+    describeFaces(frame: unknown): Promise<Array<{ descriptor: number[]; conf?: number; box?: number[] }>>;
+    readPlates?(frame: unknown): Promise<Array<{ text: string; conf?: number; box?: number[] }>>;
+    status?(): { engine: string; [key: string]: unknown };
+    close?(): Promise<void>;
+  }
+  export function createAuditLog(options?: { path?: string | null; now?: () => string }): {
+    record(input: { type: string; actorIdentityRef?: string | null; detail?: object; outcome?: string; homeId?: string | null }): Record<string, unknown>;
+    list(filters?: { type?: string; homeId?: string; limit?: number }): Array<Record<string, unknown>>;
+    path: string | null;
+  };
+  export class VisionProviderRegistry {
+    register(name: string, factory: () => VisionProvider): { replaced: boolean };
+    has(name: string): boolean;
+    names(): string[];
+    create(name: string, opts?: { provider?: VisionProvider }): VisionProvider;
+  }
+  export function createRecognitionPipeline(options?: {
+    registry?: VisionProviderRegistry;
+    metrics?: unknown;
+  }): {
+    registry: VisionProviderRegistry;
+    metrics: { snapshot(): { descriptorComputations: number; plateReads: number; recognitionRuns: number; refusedDisabled: number } };
+    computeDescriptor(req: { enabled: boolean; provider: VisionProvider; frame: unknown }): Promise<{ provider: string; embeddings: Array<{ descriptor: number[]; conf?: number }> }>;
+    computePlates(req: { enabled: boolean; provider: VisionProvider; frame: unknown }): Promise<{ provider: string; plates: Array<{ text: string; conf?: number }> }>;
+  };
+  export function createRegistryService(options: { store: unknown; audit?: unknown | null; now?: () => number }): {
+    settingsOf(homeId: string): Promise<{ homeId: string; enabled: boolean; assertThreshold: number | null; updatedAt: string | null; updatedBy: string | null }>;
+    setEnabled(input: { homeId: string; enabled: boolean; actorDid?: string | null }): Promise<Record<string, unknown>>;
+    setThreshold(input: { homeId: string; assertThreshold: number | null; actorDid?: string | null }): Promise<Record<string, unknown>>;
+    listEntries(homeId: string, kind?: "face" | "vehicle"): Promise<Array<Record<string, unknown>>>;
+    getEntry(homeId: string, entryId: string): Promise<Record<string, unknown>>;
+    enroll(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+    updateEntry(input: { homeId: string; entryId: string; name?: string; plateText?: string }): Promise<Record<string, unknown>>;
+    purgeEntry(input: { homeId: string; entryId: string; actorDid?: string | null }): Promise<{ purged: Record<string, number | string> }>;
+    recordSighting(homeId: string, entryId: string, sighting: Record<string, unknown>): Promise<void>;
+    annotate(note: Record<string, unknown>): Promise<Record<string, unknown>>;
+    listAnnotations(filters: Record<string, string | undefined>): Promise<Array<Record<string, unknown>>>;
+    exportRegistry(homeId: string): Promise<Record<string, unknown>>;
+  };
+  export function createRecognitionService(options: { registry: unknown; pipeline: unknown; providerName?: string }): {
+    enabled(homeId: string): Promise<boolean>;
+    enroll(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+    matchFace(input: { homeId: string; descriptor: number[] }): Promise<{ decision: string; entryId: string | null; name: string | null; confidence: number }>;
+    matchVehicle(input: { homeId: string; descriptor?: number[]; plateText?: string }): Promise<{ decision: string; entryId: string | null; name: string | null; confidence: number }>;
+    recognize(intake: Record<string, unknown>): Promise<{ outcome: { decision: string; entryId: string | null; name: string | null; confidence: number }; annotated: boolean; annotationId: string | null }>;
+    metrics(): { descriptorComputations: number; plateReads: number; recognitionRuns: number; refusedDisabled: number };
+  };
+}
+declare module "@porchlight/recognition/server" {
+  /**
+   * PORCH-141: the zero-framework People & Things REST plane
+   * (packages/recognition). The services block is the plane's design of
+   * record — see server.js.
+   */
+  export function createRecognitionHandler(parts: {
+    services: {
+      registry: unknown;
+      recognition: unknown;
+    };
+    authorize?: ((args: { req: unknown; action: string; resource: string; homeId?: string | null }) => Promise<unknown> | unknown) | null;
+    log?: ((line: string) => void) | null;
+  }): (
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+    prepared?: { body?: object | null },
+  ) => Promise<void>;
+  export function createRecognitionServer(parts: Parameters<typeof createRecognitionHandler>[0]): import("node:http").Server;
 }

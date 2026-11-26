@@ -27,6 +27,9 @@ import {
   grantStatusLabel, isVisitorAccess, nextCommandState, readActiveHomeId,
   renderedControlValue, summarizeScopes, writeActiveHomeId,
 } from "./home-model.js";
+// PORCH-141: recognized identities decorate the camera-activity events — the
+// by-reference annotation join is people-model.js's of record.
+import { annotationsForEvent, annotationLines, namesByEntryId } from "./people-model.js";
 
 const messageOf = (error) => error?.message || "That did not work. Please try again.";
 
@@ -986,6 +989,10 @@ function CamerasSurface({ home, areas, actions, ownerHere, origin }) {
   const [seekCameraId, setSeekCameraId] = useState("");
   const [seekAt, setSeekAt] = useState("");
   const [seekResult, setSeekResult] = useState(null);
+  // PORCH-141: the recognition annotation join — names by entry id plus the
+  // annotation rows themselves. Absent plane or switch off: the decoration
+  // degrades quietly to nothing while the events' factual copy stands.
+  const [recognitions, setRecognitions] = useState({ names: {}, annotations: [] });
 
   const homeId = home?._id;
   const reload = async () => {
@@ -1007,6 +1014,14 @@ function CamerasSurface({ home, areas, actions, ownerHere, origin }) {
     } catch (failure) {
       setEvents([]);
       setEventsError(messageOf(failure));
+    }
+    // Reading is not recognition (ac-6): the annotation join works while the
+    // switch is off, and a plane-less older hub leaves it empty.
+    try {
+      const [notes, registry] = await Promise.all([actions.loadAnnotations(homeId), actions.loadEntries(homeId)]);
+      setRecognitions({ names: namesByEntryId(registry?.entries), annotations: notes?.annotations ?? [] });
+    } catch {
+      setRecognitions({ names: {}, annotations: [] });
     }
   };
 
@@ -1172,11 +1187,22 @@ function CamerasSurface({ home, areas, actions, ownerHere, origin }) {
             const thumbUrl = evidence.path && evidence.cameraId
               ? mediaUrl({ origin, homeId, cameraId: evidence.cameraId, path: evidence.path, token })
               : null;
+            // PORCH-141: the annotated identities — the name plainly for an
+            // asserted match, "looks like name (pct%)" otherwise. Unknown
+            // sightings have no annotation rows at all.
+            const identities = annotationLines(recognitions.names, annotationsForEvent(recognitions.annotations, event)) ?? [];
             return (
               <Paper key={event._id} elevation={0} sx={{ p: 2, mb: 1, borderRadius: 3, border: "1px solid", borderColor: "var(--porch-border)" }}>
                 <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
                   <Box>
                     <Typography variant="body1">{copy.factual}</Typography>
+                    {identities.length > 0 && (
+                      <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.5 }}>
+                        {identities.map((line, noteIndex) => (
+                          <Chip key={noteIndex} size="small" label={line} />
+                        ))}
+                      </Stack>
+                    )}
                     {copy.interpretive && (
                       <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
                         <Chip size="small" label={copy.conditional} sx={{ mr: 0.5 }} />
