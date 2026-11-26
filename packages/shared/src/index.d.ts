@@ -14,6 +14,9 @@ export interface PorchlightConfig {
     homeServingEnabled: boolean;
     /** PORCH-140: the overwatch REST plane's serving toggle (default on). */
     overwatchServingEnabled: boolean;
+    /** PORCH-141: the People & Things REST plane's serving toggle (default on;
+     *  the per-household recognition switch of record is separate + opt-in). */
+    recognitionServingEnabled: boolean;
   };
   hub: {
     host: string;

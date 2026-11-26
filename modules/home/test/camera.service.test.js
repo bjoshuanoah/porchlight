@@ -326,3 +326,17 @@ async function seed(fx, owner, home) {
   const { seedHomeDevices } = await import("./helpers/home.fixture.js");
   return seedHomeDevices(fx, owner, home);
 }
+
+test("PORCH-141: homeForEngineCamera resolves an engine camera id to its home; unknown cameras resolve null", async () => {
+  const fx = engineFixture();
+  const owner = fx.identity();
+  const home = await (await import("./helpers/home.fixture.js")).createHomeFor(fx, owner);
+  const { porch } = await seed(fx, owner, home);
+  await addCameraFor(fx, owner, home, porch._id, "rtsp://doorbell/cam1", "Front door");
+  // The stored association row carries the engine camera id of record.
+  const stored = await fx.collection("cameras").findOne({ homeId: home._id });
+  const resolved = await fx.mod.cameraService.homeForEngineCamera(stored.engineCameraId);
+  assert.deepEqual(resolved, { homeId: home._id, cameraId: stored.engineCameraId, cameraName: "Front door" });
+  assert.equal(await fx.mod.cameraService.homeForEngineCamera("eng_cam_nonexistent"), null);
+  assert.equal(await fx.mod.cameraService.homeForEngineCamera(""), null);
+});

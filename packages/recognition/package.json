@@ -1,0 +1,27 @@
+{
+  "name": "@porchlight/recognition",
+  "version": "0.5.3",
+  "private": true,
+  "description": "People & Things — the local face/plate recognition registry: local Apple Silicon pipelines, gallery matching with the calibrated threshold and the looks-like uncertainty law, deletion purges with export, opt-in biometric privacy, and the recognition switch of record (PORCH-141).",
+  "license": "MIT",
+  "author": "Brian Noah",
+  "engines": {
+    "node": ">= 24"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./server": "./src/server.js"
+  },
+  "scripts": {
+    "build": "echo 'recognition ships plain JS (no build)'",
+    "test": "node --test 'test/**/*.test.js'",
+    "lint": "eslint ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjoshuanoah/porchlight.git",
+    "directory": "packages/recognition"
+  }
+}

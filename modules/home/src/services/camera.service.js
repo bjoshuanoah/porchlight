@@ -529,6 +529,27 @@ export class CameraService {
     return camera;
   }
 
+  // --- the hub-level engine-camera resolution seam (PORCH-141) -------------
+
+  /**
+   * The read-only join the hub's People & Things plane rides: an engine
+   * camera id → the home (and engine camera identity) it belongs to. The
+   * same fact the event ingest resolves; exposed so hub-level composition
+   * never reaches into the module's collections. Unknown camera → null
+   * (the recognition plane ignores detections from unregistered cameras).
+   * @param {string} engineCameraId
+   * @returns {Promise<{ homeId: string, cameraId: string, cameraName?: string } | null>}
+   */
+  async homeForEngineCamera(engineCameraId) {
+    const camera = await this.cameras.findOne({ engineCameraId: String(engineCameraId ?? "") });
+    if (!camera || !camera.homeId) return null;
+    return {
+      homeId: String(camera.homeId),
+      cameraId: String(camera.engineCameraId ?? engineCameraId ?? ""),
+      ...(camera.name !== undefined ? { cameraName: String(camera.name) } : {}),
+    };
+  }
+
   /** One standing liveFeed descriptor per camera (the engine's own fanout). */
   async #liveFeed(camera) {
     const engine = this.requireEngine();
