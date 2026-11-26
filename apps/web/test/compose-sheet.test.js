@@ -20,6 +20,8 @@ import {
   destinationUnavailableCopy,
   formatDuration,
   keyboardRaised,
+  FIELD_LINE_HEIGHT,
+  fieldMinHeight,
   postEligible,
   publishPayload,
   sheetKeyboardBottom,
@@ -285,4 +287,34 @@ test("ac-desktop: the desktop surface mounts the shared Composer with no keyboar
   // padding is the sheet's alone.
   assert.match(composerSource, /\{presentation !== "desktop" && <Box sx=\{\{ pt: 1, display: "flex", justifyContent: "center" \}\}>/);
   assert.match(composerSource, /pb: presentation === "desktop" \? 1 : "calc\(8px \+ env\(safe-area-inset-bottom\)\)"/);
+});
+
+/* ---- the staged-video preview and the field's height floor (Brian,
+   ---- 11/26/2026: the video preview rendered at full intrinsic size and
+   ---- pushed the header, Close, and remove out of reach; the field must
+   ---- carry ≥5 lines of writing room on desktop and ≥3 on mobile) ----- */
+
+test("ac-preview: the staged video renders through a styled Box — never a raw sx-less element", () => {
+  // A raw <video sx={...}> is not a MUI system component: the sx prop is
+  // dropped and the preview rendered at its full intrinsic size (1080×1920
+  // class), pushing the header, Close, and the per-item remove control out
+  // of reach on the fixed-to-bottom sheet. The preview element must be
+  // Box component="video" so the system class carries the 264px cap.
+  assert.match(composerSource, /<Box component="video" src=\{url\}/,
+    "the video preview rides Box component=video so the sx cap applies");
+  assert.doesNotMatch(composerSource, /<video\s/, "no raw <video> element with a sx prop renders anywhere in the surface");
+  const previewBranch = composerSource.slice(composerSource.indexOf("function ComposePreview"), composerSource.indexOf("/** The mobile bottom sheet"));
+  assert.match(previewBranch, /maxHeight: 264/, "the preview keeps the 264px height cap for both kinds");
+  assert.match(previewBranch, /objectFit: "contain"/);
+});
+
+test("ac-field: the field's height floor is 5 lines desktop and 3 mobile", () => {
+  // The floor law in lines × line-height (the 24px class).
+  assert.equal(FIELD_LINE_HEIGHT, 24);
+  assert.equal(fieldMinHeight("desktop"), 120, "5 lines of available text-area height on desktop");
+  assert.equal(fieldMinHeight("mobile"), 72, "3 lines of available text-area height on mobile");
+  assert.equal(fieldMinHeight(), 72, "the sheet (default) carries the mobile floor");
+  // The shared JSX renders the floor per presentation — one code path, the
+  // textarea carries the computed minHeight (no forked surface).
+  assert.match(composerSource, /minHeight: `\$\{fieldMinHeight\(presentation\)\}px`/);
 });
