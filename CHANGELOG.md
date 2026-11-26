@@ -5,6 +5,12 @@ under its `## v` heading is the line of record the release workflow copies
 into that release's notes (the npm-publish workflow fails loudly if the
 heading is missing).
 
+## Unreleased
+
+- **Your home's cameras arrive in Porchlight.** The family tab now carries a Cameras surface: a live grid per home with per-feed audio, portrait doorbell feeds at their true shape inline (the full-screen viewer always plays natural aspect), and never a second camera stream opened for an added viewer. Play back a known moment on any recorded camera, browse the activity list, and every absence explains itself in plain language — an offline camera, recording turned off, expired footage, or a camera recording but not detecting never renders as a healthy blank feed.
+- **Camera events, told plainly.** Several cameras and frame detections of one routine arrival resolve as ONE event with ONE plain-language alert ("Someone was seen at the Porch."). What detection saw reads as fact; what interpretation concluded only ever reads as a likely reading — when the interpreter cannot answer, the factual label stands and nothing blocks. You can mark an event as not right, and every grant, revocation, and camera change lands in the property audit trail.
+- **Camera access is its own authorization.** Home members reach cameras only with a separate camera-access grant from the owner; a visit grant never carries cameras — the bridge refuses in plain language, and camera authorization ends the same way it began: immediately, even from an already-open screen.
+
 ## v0.5.3 — 2026-11-26
 
 - **Mix photos and videos in one post.** Pick a few photos, a video, or both, and they ride one post together — each thing shows at its own true shape, videos still act like videos, and everything arrives the way you lined it up.

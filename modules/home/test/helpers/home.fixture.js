@@ -9,7 +9,7 @@ import { DeviceAdapterManager } from "../../src/services/adapter.registry.js";
  * writes are exercised literally) and one contract-test device adapter
  * whose reachability/state the tests control.
  */
-export function homeFixture({ commandTimeoutMs = 10_000, dark = null, now } = {}) {
+export function homeFixture({ commandTimeoutMs = 10_000, dark = null, now, ...extra } = {}) {
   const store = createMemoryStore();
   const sessions = new Map(); // token -> { did, deviceId }
   const deviceKeys = new Map(); // `${did}:${deviceId}` -> publicKeyJwk
@@ -63,6 +63,7 @@ export function homeFixture({ commandTimeoutMs = 10_000, dark = null, now } = {}
       ),
     },
     now: clock,
+    ...extra,
   });
 
   const fx = {
