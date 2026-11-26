@@ -1,0 +1,29 @@
+{
+	"name": "@porchlight/config",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight configuration console backend — zone/mask editor persistence, composition (union) resolver, speed calibration estimates, and configuration profiles (PORCH-135).",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"scripts": {
+		"test": "node --test 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'config ships plain JS (no build)'"
+	},
+	"dependencies": {
+		"yaml": "^2.9.1"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/config"
+	}
+}
