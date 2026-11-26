@@ -22,10 +22,11 @@ const WORKSET = { $or: [{ caption: { $exists: true } }, { body: { $exists: true 
  * carrier trail (PORCH-157) when this step runs against a hub's archive.
  *
  * Release sequencing (Brian, Nov 26, 2026): the runner builds now; the
- * caption retirement rides the later consolidation cut and cut calls stay
- * Brian's. The step is therefore declared with `activatesIn: null` —
- * ordered, exercised end to end against fixtures, but inert on real hub
- * updates until the consolidation cut stamps its activating release.
+ * caption retirement rides the consolidation cut, and cut calls stay
+ * Brian's. The cut of record is the five-carrier v0.5.2 ruling of Nov 26,
+ * renumbered to v0.5.3 on Brian's Nov 26 word ("just go to the next
+ * version") after PORCH-124's Oct 22 cut had already published 0.5.2 — the
+ * step activates in that release.
  *
  * Idempotency: the step's workset is every post still carrying either
  * legacy key; the write retires caption and body in the same operation that
@@ -37,7 +38,7 @@ export const POST_TEXT_CONSOLIDATION_VERSION = 1;
 export const POST_TEXT_CONSOLIDATION_V1: MigrationStep = {
   version: POST_TEXT_CONSOLIDATION_VERSION,
   name: "post-text-consolidation",
-  activatesIn: null,
+  activatesIn: "0.5.3",
   destructive: false,
   async workRemaining({ store }: Pick<MigrationContext, "store" | "log">): Promise<number> {
     return await store.collection("posts").countDocuments(WORKSET);

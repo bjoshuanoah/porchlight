@@ -54,11 +54,11 @@ function fixtureHubRows(): PostRow[] {
   ];
 }
 
-test("the first versioned step is the caption consolidation, declared inert ahead of its cut", () => {
+test("the first versioned step is the caption consolidation, activating in the cut of record (v0.5.3)", () => {
   assert.equal(POST_TEXT_CONSOLIDATION_VERSION, 1);
   assert.equal(POST_TEXT_CONSOLIDATION_V1.version, 1);
   assert.equal(POST_TEXT_CONSOLIDATION_V1.name, "post-text-consolidation");
-  assert.equal(POST_TEXT_CONSOLIDATION_V1.activatesIn, null, "the caption retirement rides the later cut (PORCH-157)");
+  assert.equal(POST_TEXT_CONSOLIDATION_V1.activatesIn, "0.5.3", "the caption retirement activates in the consolidation cut (Brian, Nov 26, 2026 — renumbered five-carrier cut)");
   assert.equal(POST_TEXT_CONSOLIDATION_V1.destructive, false, "the consolidation never destroys data — it maps it");
 });
 

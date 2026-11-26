@@ -5,6 +5,14 @@ under its `## v` heading is the line of record the release workflow copies
 into that release's notes (the npm-publish workflow fails loudly if the
 heading is missing).
 
+## v0.5.3 — 2026-11-26
+
+- **Mix photos and videos in one post.** Pick a few photos, a video, or both, and they ride one post together — each thing shows at its own true shape, videos still act like videos, and everything arrives the way you lined it up.
+- **One composer, everywhere.** Writing a post now feels the same on every device: on your phone it opens as a bottom sheet, on your computer as a centered window — but it's the same surface underneath, so staging your pictures, choosing where the post lands, and the moment it publishes all work the same way.
+- **When an update is waiting, your porch tells you.** The hub now shows its own banner when an update is ready, and the next time it wakes up it can quietly bring itself up to date — your pages stay fast thanks to the version-matched cache underneath.
+- **Your hub can update its own records, safely.** Updates to your porch now carry an ordered, resumable migration step that runs once, keeps going where it left off if anything interrupts it, and never changes records without you starting it.
+- **Every post says its thing once.** Posts used to keep their words in two different places; now each post holds one text field, and the old duplicate is retired quietly — the words you wrote are the words that stay.
+
 ## v0.5.2 — 2026-10-22
 
 - **Videos play only when you can see them.** A video in the timeline scrolls off your screen and it pauses on its own — no stray sound, nothing playing you can't find. When it scrolls back into view it starts playing again exactly as you left it: quiet if you had it muted, with sound if you turned the sound on.
