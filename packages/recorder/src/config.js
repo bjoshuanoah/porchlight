@@ -41,9 +41,14 @@ export function validateConfig(cfg) {
 			throw new Error("config.highWaterFraction: must be a fraction between 0 and 1");
 		}
 	}
-	if (!Array.isArray(cfg.cameras) || cfg.cameras.length === 0) {
-		throw new Error("config.cameras: must be a non-empty array");
+	if (!Array.isArray(cfg.cameras)) {
+		throw new Error("config.cameras: required array");
 	}
+	// An empty fleet is valid (PORCH-134 ac-1): the fresh deployment Mac boots
+	// headless before any camera is configured, and the supervisor must start
+	// idle so the platform auto-starts with the bootstrap config of record.
+	// The status surfaces render the awaiting-configuration state in plain
+	// language — never a silent stall.
 	const names = new Set();
 	for (const c of cfg.cameras) {
 		if (!c || typeof c !== "object") throw new Error("config.cameras[]: expected an object");
