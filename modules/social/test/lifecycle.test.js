@@ -106,7 +106,7 @@ const planeEvents = async (fx) => (await fx.realtimePlane.readSince(FAMILY, null
 test("ac-1: the author's delete tombstones and cascades in one operation — every surface drops it", async () => {
   const fx = await lifecycleFixture();
   const mediaId = await uploadPhoto(fx, "june", await sampleImageBytes());
-  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], caption: "the pier" });
+  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], text: "the pier" });
   const root = await writeComment(fx, "meg", { postId: post._id, body: "beautiful" });
   const reply = await writeComment(fx, "susan", { postId: post._id, body: "@June the sunset!", parentId: root._id });
   const heart = { postId: post._id, emoji: "❤️" };
@@ -154,7 +154,7 @@ test("ac-1: the author's delete tombstones and cascades in one operation — eve
 
 test("ac-1: the network owner deletes any post in networks they own; a plain member never does", async () => {
   const fx = await lifecycleFixture();
-  const junesPost = await createPost(fx, "june", { type: "text", body: "june's note" });
+  const junesPost = await createPost(fx, "june", { type: "text", text: "june's note" });
 
   // The owner deletes June's post despite not authoring it.
   const ownerResult = await deletePostAs(fx, "susan", junesPost._id);
@@ -165,7 +165,7 @@ test("ac-1: the network owner deletes any post in networks they own; a plain mem
 
   // A plain member's attempt on ANOTHER member's post is refused plainly
   // with zero mutation.
-  const megTarget = await createPost(fx, "june", { type: "text", body: "meg cannot take this" });
+  const megTarget = await createPost(fx, "june", { type: "text", text: "meg cannot take this" });
   await assert.rejects(
     () => deletePostAs(fx, "meg", megTarget._id),
     (error) => error.code === "E_NOT_PERMITTED",
@@ -178,7 +178,7 @@ test("ac-1: a managing member removes a group-origin post with the tombstone att
   const fx = await lifecycleFixture();
   await fx.groups.create({ networkId: FAMILY, name: "Picnic Crew", createdBy: MEG, members: [MEG, JUNE] });
   const groupId = (await fx.collections.groups.findOne({ name: "Picnic Crew" }))._id;
-  const groupPost = await createPost(fx, "june", { type: "text", body: "bring a blanket", groupId });
+  const groupPost = await createPost(fx, "june", { type: "text", text: "bring a blanket", groupId });
   const comment = await writeComment(fx, "june", { postId: groupPost._id, body: "I'm bringing it" });
 
   // The managing member's removal rides the same tombstone pattern.
@@ -197,7 +197,7 @@ test("ac-1: a managing member removes a group-origin post with the tombstone att
   // A group member who is NOT the managing member is refused like anyone.
   await fx.groups.create({ networkId: FAMILY, name: "Second Crew", createdBy: MEG, members: [MEG, JUNE] });
   const secondGroupId = (await fx.collections.groups.findOne({ name: "Second Crew" }))._id;
-  const secondPost = await createPost(fx, "meg", { type: "text", body: "second crew post", groupId: secondGroupId });
+  const secondPost = await createPost(fx, "meg", { type: "text", text: "second crew post", groupId: secondGroupId });
   await assert.rejects(
     () =>
       fx.posts.removePost({
@@ -217,7 +217,7 @@ test("ac-1: a managing member removes a group-origin post with the tombstone att
     (error) => error.code === "E_POST_NOT_FOUND",
   );
   // A non-group post is unreachable through the moderation route.
-  const plainPost = await createPost(fx, "meg", { type: "text", body: "no group" });
+  const plainPost = await createPost(fx, "meg", { type: "text", text: "no group" });
   await assert.rejects(
     () =>
       fx.posts.removePost({
@@ -230,7 +230,7 @@ test("ac-1: a managing member removes a group-origin post with the tombstone att
 
   // The managing member's authority NEVER reaches comments — their attempt
   // on a comment is refused like any other member's, zero mutation.
-  const otherPost = await createPost(fx, "june", { type: "text", body: "june's other note" });
+  const otherPost = await createPost(fx, "june", { type: "text", text: "june's other note" });
   const otherComment = await writeComment(fx, "june", { postId: otherPost._id, body: "june's comment" });
   await assert.rejects(
     () =>
@@ -248,7 +248,7 @@ test("ac-1: a managing member removes a group-origin post with the tombstone att
 
 test("ac-1: a comment delete cascades its reply tree in one operation — owner included, others refused", async () => {
   const fx = await lifecycleFixture();
-  const post = await createPost(fx, "june", { type: "text", body: "the thread post" });
+  const post = await createPost(fx, "june", { type: "text", text: "the thread post" });
   const root = await writeComment(fx, "meg", { postId: post._id, body: "root" });
   const reply1 = await writeComment(fx, "june", { postId: post._id, body: "reply", parentId: root._id });
   const reply2 = await writeComment(fx, "susan", { postId: post._id, body: "nested reply", parentId: reply1._id });
@@ -310,7 +310,7 @@ test("ac-2: renditions purge at delete; the original holds the window and never 
   const juneDev = fx.devs.june;
   void juneDev;
   const mediaId = await uploadPhoto(fx, "june", await sampleImageBytes());
-  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], caption: "trip" });
+  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], text: "trip" });
 
   const renditionRows = await fx.store.collection("media_assets").find({});
   const renditions = renditionRows.filter((row) => row.originalId === mediaId && row.kind === "rendition");
@@ -354,7 +354,7 @@ test("ac-2: renditions purge at delete; the original holds the window and never 
 test("ac-3: one restore re-materializes the subject, its cascade children, and its renditions", async () => {
   const fx = await lifecycleFixture();
   const mediaId = await uploadPhoto(fx, "june", await sampleImageBytes());
-  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], caption: "the album" });
+  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], text: "the album" });
   const comment = await writeComment(fx, "meg", { postId: post._id, body: "great shot" });
   const party = { postId: post._id, emoji: "🎉" };
   await fx.interactions.react({ accessToken: fx.tokens.meg, payload: party, signature: fx.devs.meg.signPayload(party) });
@@ -376,7 +376,7 @@ test("ac-3: one restore re-materializes the subject, its cascade children, and i
   assert.equal(restored.subjectId, post._id);
   // The subject is back, byte-identical to the delete-time capture.
   const backPost = await fx.collections.posts.findOne({ _id: post._id });
-  assert.equal(backPost.caption, "the album");
+  assert.equal(backPost.text, "the album");
   // The cascade children are back: comments, reactions (the interactions
   // captured at delete time — the restore never fabricates state).
   assert.notEqual(await fx.collections.comments.findOne({ _id: comment._id }), null);
@@ -400,7 +400,7 @@ test("ac-3: one restore re-materializes the subject, its cascade children, and i
 test("ac-3: the day-30 reaper purges once — originals destroyed, the tombstone audit-remains, restore refuses loudly", async () => {
   const fx = await lifecycleFixture();
   const mediaId = await uploadPhoto(fx, "june", await sampleImageBytes());
-  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], caption: "old trip" });
+  const post = await createPost(fx, "june", { type: "photo", mediaRefs: [mediaId], text: "old trip" });
   await writeComment(fx, "meg", { postId: post._id, body: "memory" });
   const deleted = await deletePostAs(fx, "june", post._id);
   const originalAsset = await fx.store.collection("media_assets").findOne({ _id: mediaId });
@@ -435,7 +435,7 @@ test("ac-3: the day-30 reaper purges once — originals destroyed, the tombstone
   const again = await fx.lifecycle.sweep({ now: () => new Date() });
   assert.equal(again.purged, 0);
   // A second tombstone due at the same moment purges independently.
-  const otherPost = await createPost(fx, "june", { type: "text", body: "second purge" });
+  const otherPost = await createPost(fx, "june", { type: "text", text: "second purge" });
   const otherDeleted = await deletePostAs(fx, "june", otherPost._id);
   await fx.collections.tombstones.updateOne({ _id: otherDeleted.tombstoneId }, { $set: { purgeAt: past } });
   const concurrent = await Promise.all([
@@ -448,30 +448,30 @@ test("ac-3: the day-30 reaper purges once — originals destroyed, the tombstone
 
 /* ---- ac-4: edit authority and scope -------------------------------------- */
 
-test("ac-4: the author edits text and caption; ownership never confers edit authority; media changes are refused with the delete-and-repost direction", async () => {
+test("ac-4: the author edits the one text field; ownership never confers edit authority; media changes are refused with the delete-and-repost direction", async () => {
   const fx = await lifecycleFixture();
-  const textPost = await createPost(fx, "june", { type: "text", body: "dinner at six" });
-  const photoPost = await createPost(fx, "june", { type: "photo", mediaRefs: [await uploadPhoto(fx, "june", await sampleImageBytes())], caption: "the pier" });
+  const textPost = await createPost(fx, "june", { type: "text", text: "dinner at six" });
+  const photoPost = await createPost(fx, "june", { type: "photo", mediaRefs: [await uploadPhoto(fx, "june", await sampleImageBytes())], text: "the pier" });
 
-  // The author edits their own post's text.
-  const bodyPayload = { body: "dinner at seven" };
+  // The author edits their own post's one text field.
+  const textEdit = { text: "dinner at seven" };
   const edited = await fx.posts.editPost({
     accessToken: fx.tokens.june,
     postId: textPost._id,
-    payload: bodyPayload,
-    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: bodyPayload.body }),
+    payload: textEdit,
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, text: textEdit.text }),
   });
-  assert.equal(edited.post.body, "dinner at seven");
+  assert.equal(edited.post.text, "dinner at seven");
 
-  // …and their caption.
-  const captionPayload = { caption: "the south pier" };
-  const captioned = await fx.posts.editPost({
+  // …and the media post's text rides the same one field.
+  const textEditTwo = { text: "the south pier" };
+  const editedTwo = await fx.posts.editPost({
     accessToken: fx.tokens.june,
     postId: photoPost._id,
-    payload: captionPayload,
-    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: photoPost._id, networkId: FAMILY, caption: captionPayload.caption }),
+    payload: textEditTwo,
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: photoPost._id, networkId: FAMILY, text: textEditTwo.text }),
   });
-  assert.equal(captioned.post.caption, "the south pier");
+  assert.equal(editedTwo.post.text, "the south pier");
 
   // Any other member — the network owner included — is refused loudly.
   for (const key of ["susan", "meg"]) {
@@ -480,20 +480,20 @@ test("ac-4: the author edits text and caption; ownership never confers edit auth
         fx.posts.editPost({
           accessToken: fx.tokens[key],
           postId: textPost._id,
-          payload: { body: "not mine" },
-          signature: fx.devs[key].signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "not mine" }),
+          payload: { text: "not mine" },
+          signature: fx.devs[key].signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, text: "not mine" }),
         }),
       (error) => error.code === "E_EDIT_NOT_AUTHOR",
     );
   }
-  assert.equal((await fx.collections.posts.findOne({ _id: textPost._id })).body, "dinner at seven", "refused edits write nothing");
+  assert.equal((await fx.collections.posts.findOne({ _id: textPost._id })).text, "dinner at seven", "refused edits write nothing");
   // The refusal names the one-directional law.
   try {
     await fx.posts.editPost({
       accessToken: fx.tokens.susan,
       postId: textPost._id,
-      payload: { body: "x" },
-      signature: fx.devs.susan.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "x" }),
+      payload: { text: "x" },
+      signature: fx.devs.susan.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, text: "x" }),
     });
     assert.fail("the owner's edit should have been refused");
   } catch (error) {
@@ -502,14 +502,14 @@ test("ac-4: the author edits text and caption; ownership never confers edit auth
 
   // Media is never edited: the mediaRef change is refused with the
   // delete-and-repost direction.
-  const mediaAttempt = { mediaRefs: ["med_other"], caption: "swapped" };
+  const mediaAttempt = { mediaRefs: ["med_other"], text: "swapped" };
   await assert.rejects(
     () =>
       fx.posts.editPost({
         accessToken: fx.tokens.june,
         postId: photoPost._id,
         payload: mediaAttempt,
-        signature: fx.devs.june.signPayload({ kind: "post-edit", postId: photoPost._id, networkId: FAMILY, caption: "swapped" }),
+        signature: fx.devs.june.signPayload({ kind: "post-edit", postId: photoPost._id, networkId: FAMILY, text: "swapped" }),
       }),
     (error) => {
       assert.equal(error.code, "E_EDIT_MEDIA_IMMUTABLE");
@@ -518,21 +518,21 @@ test("ac-4: the author edits text and caption; ownership never confers edit auth
     },
   );
   const storedPhoto = await fx.collections.posts.findOne({ _id: photoPost._id });
-  assert.equal(storedPhoto.caption, "the south pier", "the media-ref refusal wrote nothing");
+  assert.equal(storedPhoto.text, "the south pier", "the media-ref refusal wrote nothing");
   // A type change refuses beside it.
   await assert.rejects(
     () =>
       fx.posts.editPost({
         accessToken: fx.tokens.june,
         postId: textPost._id,
-        payload: { type: "photo", body: "x" },
-        signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "x" }),
+        payload: { type: "photo", text: "x" },
+        signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, text: "x" }),
       }),
     (error) => error.code === "E_EDIT_TYPE_IMMUTABLE",
   );
   // Every edit write is actor-signed.
   await assert.rejects(
-    () => fx.posts.editPost({ accessToken: fx.tokens.june, postId: textPost._id, payload: { body: "unsigned" }, signature: null }),
+    () => fx.posts.editPost({ accessToken: fx.tokens.june, postId: textPost._id, payload: { text: "unsigned" }, signature: null }),
     (error) => error.code === "E_SIGNATURE_REQUIRED",
   );
 
@@ -566,15 +566,15 @@ test("ac-4: the author edits text and caption; ownership never confers edit auth
 
 test("ac-5: edits are silent — the served document is byte-indistinguishable from the same content authored once", async () => {
   const fx = await lifecycleFixture();
-  const post = await createPost(fx, "june", { type: "text", body: "first draft" });
+  const post = await createPost(fx, "june", { type: "text", text: "first draft" });
   const before = await fx.collections.posts.findOne({ _id: post._id });
   const createdEvents = (await planeEvents(fx)).filter((row) => row.type === "post.created" && row.postId === post._id);
 
   await fx.posts.editPost({
     accessToken: fx.tokens.june,
     postId: post._id,
-    payload: { body: "second draft" },
-    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: post._id, networkId: FAMILY, body: "second draft" }),
+    payload: { text: "second draft" },
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: post._id, networkId: FAMILY, text: "second draft" }),
   });
 
   const after = await fx.collections.posts.findOne({ _id: post._id });
@@ -614,14 +614,14 @@ test("ac-5: edits are silent — the served document is byte-indistinguishable f
 
 test("ac-6: lifecycle events ride the shipped transport in order, idempotent, and the removal replays in catch-up", async () => {
   const fx = await lifecycleFixture();
-  const post = await createPost(fx, "june", { type: "text", body: "live wire" });
+  const post = await createPost(fx, "june", { type: "text", text: "live wire" });
   const comment = await writeComment(fx, "meg", { postId: post._id, body: "on the wire" });
 
   await fx.posts.editPost({
     accessToken: fx.tokens.june,
     postId: post._id,
-    payload: { body: "live wire, edited" },
-    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: post._id, networkId: FAMILY, body: "live wire, edited" }),
+    payload: { text: "live wire, edited" },
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: post._id, networkId: FAMILY, text: "live wire, edited" }),
   });
   await fx.interactions.deleteComment({
     accessToken: fx.tokens.meg,
@@ -662,7 +662,7 @@ test("ac-6: lifecycle events ride the shipped transport in order, idempotent, an
 
 test("ac-7: a mid-flight cascade failure rolls the tombstone back with every row — no half-deleted state is reachable", async () => {
   const fx = await lifecycleFixture();
-  const post = await createPost(fx, "june", { type: "text", body: "rollback case" });
+  const post = await createPost(fx, "june", { type: "text", text: "rollback case" });
   await writeComment(fx, "meg", { postId: post._id, body: "comment one" });
 
   const rawComments = fx.collections.comments;
@@ -690,7 +690,7 @@ test("ac-7: containment — authority and restore resolve within the origin only
   const fx = await lifecycleFixture();
   // A comment tombstone whose post dies afterwards: the restore refuses
   // rather than resurrecting an unreachable child.
-  const post = await createPost(fx, "june", { type: "text", body: "orphan case" });
+  const post = await createPost(fx, "june", { type: "text", text: "orphan case" });
   const comment = await writeComment(fx, "june", { postId: post._id, body: "orphaned comment" });
   const commentDeleted = await fx.interactions.deleteComment({
     accessToken: fx.tokens.june,
@@ -747,15 +747,15 @@ test("ac-2: the location target rides the SAME edit write in both directions, me
   const fx = await lifecycleFixture();
   await fx.groups.create({ networkId: FAMILY, name: "Lake Crew", createdBy: MEG, members: [MEG, JUNE] });
   const groupId = (await fx.collections.groups.findOne({ name: "Lake Crew" }))._id;
-  const textPost = await createPost(fx, "june", { type: "text", body: "dinner at six" });
+  const textPost = await createPost(fx, "june", { type: "text", text: "dinner at six" });
 
   // A general-timeline post moves into the author's group as ONE write —
   // text and target together.
   const moved = await fx.posts.editPost({
     accessToken: fx.tokens.june,
     postId: textPost._id,
-    payload: { body: "dinner at seven", groupId },
-    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "dinner at seven", groupId }),
+    payload: { text: "dinner at seven", groupId },
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, text: "dinner at seven", groupId }),
   });
   assert.equal(moved.post.groupId, groupId, "the move into the author's group lands");
   assert.equal((await fx.collections.posts.findOne({ _id: textPost._id })).groupId, groupId);
@@ -764,8 +764,8 @@ test("ac-2: the location target rides the SAME edit write in both directions, me
   const movedBack = await fx.posts.editPost({
     accessToken: fx.tokens.june,
     postId: textPost._id,
-    payload: { body: "dinner at seven", groupId: null },
-    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "dinner at seven", groupId: null }),
+    payload: { text: "dinner at seven", groupId: null },
+    signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, text: "dinner at seven", groupId: null }),
   });
   assert.equal(movedBack.post.groupId ?? null, null, "the move back to the general timeline lands");
 
@@ -779,8 +779,8 @@ test("ac-2: the location target rides the SAME edit write in both directions, me
       fx.posts.editPost({
         accessToken: fx.tokens.june,
         postId: textPost._id,
-        payload: { body: "dinner at seven", groupId: innerId },
-        signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, body: "dinner at seven", groupId: innerId }),
+        payload: { text: "dinner at seven", groupId: innerId },
+        signature: fx.devs.june.signPayload({ kind: "post-edit", postId: textPost._id, networkId: FAMILY, text: "dinner at seven", groupId: innerId }),
       }),
     (error) => /member/.test(error.message),
     "the non-member author cannot move a post into another group",
@@ -799,7 +799,7 @@ test("ac-2: the location target rides the SAME edit write in both directions, me
 
 test("PORCH-098 ac-2: a tombstoned or cascade-deleted comment refuses any reaction with zero mutation; the restored comment accepts reactions again", async () => {
   const fx = await lifecycleFixture();
-  const post = await createPost(fx, "june", { type: "text", body: "the gate post" });
+  const post = await createPost(fx, "june", { type: "text", text: "the gate post" });
   const root = await writeComment(fx, "meg", { postId: post._id, body: "the subject" });
   const reply = await writeComment(fx, "susan", { postId: post._id, body: "the nested subject", parentId: root._id });
 

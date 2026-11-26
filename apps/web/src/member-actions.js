@@ -188,21 +188,19 @@ export async function removeGroupPost(connection, post) {
 // wire shapes stay pinned by tests and re-verified against a deployed hub
 // by the stage-2 checklist (the Oct 12 contract).
 
-/** The author's post edit: body and caption text, plus the editable
+/** The author's post edit: the ONE text field (the post-text
+ * consolidation, PORCH-157: no separate caption exists), plus the editable
  * location target (Oct 16 location ruling) as ONE write. Media never rides
  * an edit: a delete-and-repost changes media, so no media field exists on
  * this payload (the server refuses one that arrives). */
-export function postEditPayload(post, { body = null, caption = null, groupId = undefined } = {}) {
+export function postEditPayload(post, { text = null, groupId = undefined } = {}) {
   const payload = {
     kind: "post-edit",
     postId: post?._id || post?.id,
     networkId: post?.originNetworkId ?? post?.networkId ?? null,
   };
-  if (body !== null) payload.body = body;
-  // The server's caption normalization runs BEFORE verification (an empty
-  // caption resolves null), so the signed bytes carry the normalized value.
-  if (caption !== null && caption !== undefined) {
-    payload.caption = typeof caption === "string" && caption.trim().length > 0 ? caption : null;
+  if (text !== null && text !== undefined) {
+    payload.text = text;
   }
   if (groupId !== undefined) payload.groupId = groupId || null;
   return payload;

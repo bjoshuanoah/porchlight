@@ -151,7 +151,7 @@ test("emoji picker + frequently used, deployed-hub stage 2: picker chunk serves 
       assert.deepEqual(cold.body.emoji, [], "the cold-state tab reads an empty account list");
 
       // A picker add (the signed reaction write the picker's grid makes):
-      const postPayload = { type: "text", body: "stage-2 picker route family" };
+      const postPayload = { type: "text", text: "stage-2 picker route family" };
       const created = await call(base, "/api/social/posts", { method: "POST", headers: auth, body: JSON.stringify({ payload: postPayload, signature: signPayload(postPayload) }) });
       assert.equal(created.status, 200, `the post write closes (${created.status})`);
       const postId = created.body.post._id;

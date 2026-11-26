@@ -115,8 +115,8 @@ test("ac-1: the group surface carries the '+ New post' compose entry riding the 
 test("ac-2: the destination control always renders, pre-set, in every composer state", () => {
   const renderBody = (props) => renderToString(React.createElement(ComposeSheet, { onClose: () => {}, actions: {}, ...props }));
   const empty = renderBody({ open: true, target: null, data: composeData, staged: null });
-  const draft = renderBody({ open: true, target: null, data: composeData, staged: { type: "text", files: [], body: "Hello", caption: "", notice: null, dropped: [] } });
-  const attached = renderBody({ open: true, target: null, data: composeData, staged: { type: "photo", files: [PHOTO], body: "", caption: "", notice: null, dropped: [] } });
+  const draft = renderBody({ open: true, target: null, data: composeData, staged: { type: "text", files: [], text: "Hello", notice: null, dropped: [] } });
+  const attached = renderBody({ open: true, target: null, data: composeData, staged: { type: "photo", files: [PHOTO], text: "", notice: null, dropped: [] } });
   for (const html of [empty, draft, attached]) {
     assert.match(html, /data-testid="sheet-destination"/, "the destination control is always visible and pre-set");
     assert.match(html, /Main timeline/, "the resting label reads the preselected general timeline");

@@ -34,8 +34,9 @@ export const REPLY_SLICE_LIMIT = 4;
  * - Hidden lists (ac-4): the server stores no hidden-list state. Members
  *   keep hidden post ids client-side (browser storage keyed by origin) and
  *   apply them at render, across base timeline and ranked section alike.
- * - Search (ac-5): plain text over captions, manual people tags, and album
- *   names, scoped to exactly one origin network (the membership token's).
+ * - Search (ac-5): plain text over the post's one text field, manual
+ *   people tags, and album names, scoped to exactly one origin network
+ *   (the membership token's).
  */
 export class FeedService {
   /**
@@ -129,13 +130,13 @@ export class FeedService {
   }
 
   /**
-   * Plain-text search (ac-5): captions, manual people tags, and album
-   * names, scoped to the token's origin network. Tags and album names are
-   * manual-organization surfaces stored as derived-artifact-class rows
-   * (class "tag" / "album_membership" with the member-authored value on the
-   * row); a tag or album name match surfaces its keyed post, and a caption
-   * match surfaces its post. Ordering is the base timeline's (newest first
-   * by latest activity).
+   * Plain-text search (ac-5): the post's one text field, manual people
+   * tags, and album names, scoped to the token's origin network. Tags and
+   * album names are manual-organization surfaces stored as
+   * derived-artifact-class rows (class "tag" / "album_membership" with the
+   * member-authored value on the row); a tag or album name match surfaces
+   * its keyed post, and a post-text match surfaces its post. Ordering is
+   * the base timeline's (newest first by latest activity).
    */
   async search({ accessToken, query } = {}) {
     const { networkId, did } = await this.#perimeterOf(accessToken);
@@ -147,9 +148,11 @@ export class FeedService {
     const rows = await this.#visibleRows(networkId, did);
     const byId = new Map(rows.map((post) => [post._id, post]));
     const matches = new Set();
-    // Captions are a manual-organization search surface (ac-5).
+    // The post's one text field is the search surface (post-text
+    // consolidation, PORCH-157: every shape — text-only, text-under-media,
+    // mixed — matches through the same value; no legacy dual-field branch).
     for (const post of rows) {
-      if (typeof post.caption === "string" && post.caption.toLowerCase().includes(needle)) {
+      if (typeof post.text === "string" && post.text.toLowerCase().includes(needle)) {
         matches.add(post._id);
       }
     }

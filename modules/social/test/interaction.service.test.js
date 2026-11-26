@@ -21,7 +21,7 @@ async function contentFixture() {
   const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
   const megToken = (await fx.admit({ networkId: FAMILY, did: MEG, device: megDev })).accessToken;
 
-  const postPayload = { type: "text", body: "root post" };
+  const postPayload = { type: "text", text: "root post" };
   const post = (await fx.posts.create({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) })).post;
   return { ...fx, dev, juneDev, megDev, familyToken, otherToken, juneToken, megToken, post };
 }
@@ -212,7 +212,7 @@ test("PORCH-091 ac-1: the reaction read attributes reactors (name + avatar); ac-
   const juneDev = device("dev_j");
   const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
   const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
-  const postPayload = { type: "text", body: "chips" };
+  const postPayload = { type: "text", text: "chips" };
   const post = (await fx.posts.create({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) })).post;
 
   // A live origin channel records what reaction.applied delivers.
@@ -363,7 +363,7 @@ test("ac-2: mention names render as the member's family-facing name, resolved at
   const juneDev = device("dev_j");
   const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
   const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
-  const postPayload = { type: "text", body: "root post" };
+  const postPayload = { type: "text", text: "root post" };
   const post = (await fx.posts.create({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) })).post;
 
   const payload = { postId: post._id, body: `thanks @${NAMES[JUNE]}`, mentions: [JUNE] };
@@ -443,7 +443,7 @@ test("PORCH-085 ac-1: the thread read serves the ruled order — threaded roots 
 test("PORCH-085 ac-2: the card slice serves the top four of the ruled sort plus the total-root count", async () => {
   const fx = await contentFixture();
   const feed = await ruledFeed(fx);
-  const cardPayload = { type: "text", body: "ruled card" };
+  const cardPayload = { type: "text", text: "ruled card" };
   const post = (await fx.posts.create({ accessToken: fx.familyToken, payload: cardPayload, signature: fx.dev.signPayload(cardPayload) })).post;
   const at = (minute) => new Date(Date.parse("2026-10-14T10:00:00Z") + minute * 60_000).toISOString();
   const insert = (id, parentId, minute, did = JUNE) =>
@@ -456,7 +456,7 @@ test("PORCH-085 ac-2: the card slice serves the top four of the ruled sort plus 
   await insert("Xr2", "X", 6);
   for (const [id, minute] of [["Y", 60], ["Z", 120], ["W", 180], ["V", 240]]) await insert(id, null, minute);
 
-  const findView = async (body) => (await feed.timeline({ accessToken: fx.familyToken })).posts.find((row) => row.body === body);
+  const findView = async (body) => (await feed.timeline({ accessToken: fx.familyToken })).posts.find((row) => row.text === body);
 
   const view = await findView("ruled card");
   assert.deepEqual(
@@ -495,7 +495,7 @@ test("PORCH-085 ac-3: containment precedes the sort; no vote-bearing field or en
   assert.equal(rows.some((row) => String(row.body).includes("foreign")), false, "foreign-origin rows never enter the ordered thread");
   assert.equal(JSON.stringify(rows).includes("vote"), false, "no vote-bearing field rides any thread row");
 
-  const view = (await feed.timeline({ accessToken: fx.familyToken })).posts.find((row) => row.body === "root post");
+  const view = (await feed.timeline({ accessToken: fx.familyToken })).posts.find((row) => row.text === "root post");
   assert.equal(JSON.stringify(view.replySlice).includes("foreign"), false, "the card slice never carries a foreign-origin row");
   assert.equal("voteRecords" in view, false, "rank inputs stay off the view");
   assert.equal("interactionCounters" in view, false);
@@ -513,7 +513,7 @@ test("PORCH-098 ac-1: a comment reaction rides the signed path with the subject 
   const juneDev = device("dev_j");
   const familyToken = (await base.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
   const juneToken = (await base.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
-  const post = (await base.posts.create({ accessToken: familyToken, payload: { type: "text", body: "root post" }, signature: dev.signPayload({ type: "text", body: "root post" }) })).post;
+  const post = (await base.posts.create({ accessToken: familyToken, payload: { type: "text", text: "root post" }, signature: dev.signPayload({ type: "text", text: "root post" }) })).post;
   const commentPayload = { postId: post._id, body: "a reply" };
   const comment = (await base.interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
   const interactions = base.interactions;
@@ -615,7 +615,7 @@ test("PORCH-098 ac-3: comment reads carry attributed reactor rows in origin orde
   const juneDev = device("dev_j");
   const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
   const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
-  const post = (await fx.posts.create({ accessToken: familyToken, payload: { type: "text", body: "thread home" }, signature: dev.signPayload({ type: "text", body: "thread home" }) })).post;
+  const post = (await fx.posts.create({ accessToken: familyToken, payload: { type: "text", text: "thread home" }, signature: dev.signPayload({ type: "text", text: "thread home" }) })).post;
   const commentPayload = { postId: post._id, body: "the subject comment" };
   const comment = (await fx.interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;
 
@@ -660,7 +660,7 @@ test("PORCH-098 ac-3: comment reads carry attributed reactor rows in origin orde
 
   // Card slice: the commented card's slice row carries the same rows.
   const feed = await ruledFeed(fx);
-  const view = (await feed.timeline({ accessToken: familyToken })).posts.find((row) => row.body === "thread home");
+  const view = (await feed.timeline({ accessToken: familyToken })).posts.find((row) => row.text === "thread home");
   assert.equal(view.reactionRows.length, 1, "comment-subject rows never decorate the post's chips");
   assert.deepEqual(
     view.replySlice.find((row) => row._id === comment._id).reactionRows.map((row) => row.memberName),

@@ -36,7 +36,7 @@ export class FeedController {
     return this.#delegate(res, () => this.feed.ranked({ accessToken: this.bearer(req) }));
   };
 
-  /** GET /search?q= — plain-text search over captions, tags, album names (ac-5). */
+  /** GET /search?q= — plain-text search over post text, tags, album names (ac-5). */
   search = async (req, res) => {
     return this.#delegate(res, () => this.feed.search({ accessToken: this.bearer(req), query: req.query?.q }));
   };

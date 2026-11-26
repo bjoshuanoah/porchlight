@@ -15,7 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 const ME = "did:porch:me";
 const SIS = "did:porch:sis";
-const ownTextPost = { _id: "p1", type: "text", body: "Lake day secret body text", authorName: "June", authorId: SIS };
+const ownTextPost = { _id: "p1", type: "text", text: "Lake day secret body text", authorName: "June", authorId: SIS };
 
 const neverCopy = () => { throw new Error("copy must not run when the native share rides"); };
 
@@ -69,7 +69,7 @@ test("ac-1: a native share that fails for any other reason still leaves the copy
 
 test("ac-2: the sharer's own non-photo post reads 'View my post on Porchlight'", () => {
 	assert.equal(postShareText(
-		{ _id: "p1", type: "text", body: "Hello", authorName: "June", authorId: SIS },
+		{ _id: "p1", type: "text", text: "Hello", authorName: "June", authorId: SIS },
 		SIS, {},
 	), "View my post on Porchlight");
 	// Video and audio posts are non-photo posts too: same own-post frame.
@@ -123,8 +123,7 @@ test("ac-4: the share payload carries no post body, no comments, no media bytes"
 	const share = (payload) => { payloads.push(payload); return Promise.resolve(); };
 	const post = {
 		_id: "p1", type: "photo",
-		body: "the body text of the post is SECRET",
-		caption: "caption is also SECRET",
+		text: "the body text of the post is SECRET",
 		mediaRefs: [{ mediaId: "bytes-a" }, { mediaId: "bytes-b" }],
 		reactionRows: [{ emoji: "🌻", memberDid: SIS, _id: "r1" }],
 		authorName: "Brian", authorId: ME,

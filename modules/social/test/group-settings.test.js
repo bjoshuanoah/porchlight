@@ -105,7 +105,7 @@ test("ac-1: a member with no management authority is refused avatar, color, and 
   try {
     await fx.mod.groupService.create({ networkId: FAMILY, name: "Picnic", createdBy: CASS, members: [CASS, DEVON] });
     const groupId = (await fx.store.collection("groups").findOne({ name: "Picnic" }))._id;
-    const groupPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", body: "bring a blanket", groupId });
+    const groupPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", text: "bring a blanket", groupId });
     const before = await fx.store.collection("groups").findOne({ _id: groupId });
 
     const image = Buffer.from("portrait");
@@ -161,7 +161,7 @@ test("ac-1: the managing member performs every mutation; each lands one audit re
   try {
     await fx.mod.groupService.create({ networkId: FAMILY, name: "Picnic", createdBy: CASS, members: [CASS, DEVON] });
     const groupId = (await fx.store.collection("groups").findOne({ name: "Picnic" }))._id;
-    const groupPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", body: "bring a blanket", groupId });
+    const groupPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", text: "bring a blanket", groupId });
 
     // The managing member sets the avatar (byte route, signed declaration).
     const image = Buffer.from("portrait");
@@ -365,7 +365,7 @@ test("ac-3: the color is presentation data only — never a ranking or delivery 
   const fx = await memberFixture();
   await fx.mod.groupService.create({ networkId: FAMILY, name: "Picnic", createdBy: CASS, members: [CASS, DEVON] });
   const groupId = (await fx.store.collection("groups").findOne({ name: "Picnic" }))._id;
-  await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", body: "sunny day", groupId });
+  await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", text: "sunny day", groupId });
   const colorPayload = (color) => ({ scope: "group-avatar", action: "color", color });
   await fx.mod.groupService.setColor({
     groupId, networkId: FAMILY, actorDid: CASS, actorDeviceId: fx.devs.cass.deviceId, color: GROUP_COLOR_PALETTE[5],
@@ -377,7 +377,7 @@ test("ac-3: the color is presentation data only — never a ranking or delivery 
   const timeline = (await fx.mod.feedService.groupTimeline({ accessToken: fx.tokens.devon, groupId })).posts.map((post) => post._id);
   const rankedNone = (await fx.mod.feedService.ranked({ accessToken: fx.tokens.devon })).posts.map((post) => post._id);
   assert.deepEqual(ranked, rankedNone);
-  assert.ok(timeline.includes((await fx.store.collection("posts").findOne({ body: "sunny day" }))._id));
+  assert.ok(timeline.includes((await fx.store.collection("posts").findOne({ text: "sunny day" }))._id));
 });
 
 /* ---- ac-4: owner post removal with origin cascade ------------------------ */
@@ -395,10 +395,10 @@ test("ac-4: the removal executes the origin deletion cascade and lands one audit
   };
   await fx.store.collection("media_assets").insertOne(asset);
   await fx.mod.mediaService.blobs.put(asset.blobKey, originalBytes);
-  const removedPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "photo", mediaRefs: ["med_removed"], caption: "the picnic", groupId });
+  const removedPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "photo", mediaRefs: ["med_removed"], text: "the picnic", groupId });
   const comment = (await fx.interactions.comment({ accessToken: fx.tokens.cass, payload: { postId: removedPost._id, body: "lovely" }, signature: fx.devs.cass.signPayload({ postId: removedPost._id, body: "lovely" }) })).comment;
   await fx.interactions.react({ accessToken: fx.tokens.cass, payload: { postId: removedPost._id, emoji: "🎉" }, signature: fx.devs.cass.signPayload({ postId: removedPost._id, emoji: "🎉" }) });
-  const untouchedPost = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "different post, stays" });
+  const untouchedPost = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "different post, stays" });
 
   const removed = await fx.mod.postService.removePost({
     accessToken: fx.tokens.cass,
@@ -459,7 +459,7 @@ test("ac-4: a removed post leaves the event catch-up immediately, and every catc
   const fx = await memberFixture();
   await fx.mod.groupService.create({ networkId: FAMILY, name: "Picnic", createdBy: CASS, members: [CASS, DEVON] });
   const groupId = (await fx.store.collection("groups").findOne({ name: "Picnic" }))._id;
-  const groupPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", body: "the picnic", groupId });
+  const groupPost = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", text: "the picnic", groupId });
   const catchUp = await fx.realtime.catchUp({ accessToken: fx.tokens.devon, since: null });
   assert.ok(catchUp.events.some((e) => e.postId === groupPost._id), "the delta was there to replay");
 
@@ -564,26 +564,26 @@ test("ac-6: the send-time gating matrix — group OFF suppresses that group only
   // 1. group OFF suppresses that group's pushes only: DEVON turns G1 off;
   //    a G2 post still delivers.
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: true, events: { groupPost: true }, groupPreferences: { [g1]: false } });
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "one", groupId: g1 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "one", groupId: g1 });
   assert.equal(sends.length, 0, "group OFF suppresses");
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "two", groupId: g2 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "two", groupId: g2 });
   assert.equal(sends.length, 1, "the other group keeps delivering");
   sends.length = 0;
 
   // 2. group ON never resurrects a paused network: DEVON mutes the network;
   //    the group entries carry no weight against it.
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: true, events: { groupPost: true }, groupPreferences: { [g2]: true }, mutes: [FAMILY] });
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "three", groupId: g2 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "three", groupId: g2 });
   assert.equal(sends.length, 0, "muted network stays silent");
   // ...nor a missing global permission (the master switch first).
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: false, events: { groupPost: true }, groupPreferences: { [g2]: true }, mutes: [] });
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "four", groupId: g2 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "four", groupId: g2 });
   assert.equal(sends.length, 0, "no master switch, no send");
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: true, events: { groupPost: true }, groupPreferences: { [g2]: true } });
   // The opt-in contract's other half: the off-write expired the stored
   // subscription — the member's device re-registers on the enable walk.
   await registerDevon("https://push.example/devon-2");
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "five", groupId: g2 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "five", groupId: g2 });
   assert.equal(sends.length, 1, "every gate open, delivered");
 
   // 3. the preference is read as PERSISTED state at send time (never
@@ -592,10 +592,10 @@ test("ac-6: the send-time gating matrix — group OFF suppresses that group only
   sends.length = 0;
   await registerDevon("https://push.example/devon-3");
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: true, events: { groupPost: true }, groupPreferences: { [g2]: false } });
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "six", groupId: g2 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "six", groupId: g2 });
   assert.equal(sends.length, 0, "the persisted row read AT SEND TIME");
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: true, events: { groupPost: true }, groupPreferences: { [g2]: true } });
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "seven", groupId: g2 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "seven", groupId: g2 });
   assert.equal(sends.length, 1, "the persisted row read AT SEND TIME, on");
 
   // 4. unset resolves ON for a group that predates the preference
@@ -606,10 +606,10 @@ test("ac-6: the send-time gating matrix — group OFF suppresses that group only
   sends.length = 0;
   // The event toggle still holds its own gate: off means off.
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: true, events: { groupPost: false } });
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "eight", groupId: g3 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "eight", groupId: g3 });
   assert.equal(sends.length, 0, "per-event toggle first");
   await fx.mod.pushService.updateSettings({ accessToken: fx.tokens.devon, enabled: true, events: { groupPost: true } });
-  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "nine", groupId: g3 });
+  await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "nine", groupId: g3 });
   assert.equal(sends.length, 1, "unset resolves ON for the legacy group");
 });
 

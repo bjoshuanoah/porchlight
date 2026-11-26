@@ -60,7 +60,7 @@ test("realtime: payload privacy — envelopes carry content only, vote writes em
 
   // A real signed write through the post service: the arriving post.created
   // payload must be the member view (content only — no rank inputs).
-  const postPayload = { type: "text", body: "Vote-privacy audit post" };
+  const postPayload = { type: "text", text: "Vote-privacy audit post" };
   await fx.posts.create({ accessToken: owner.accessToken, payload: postPayload, signature: ownerDevice.signPayload(postPayload) });
 
   // The member's private vote: votes modulate prominence internally only —
@@ -99,7 +99,7 @@ test("realtime: payload privacy — envelopes carry content only, vote writes em
   }
   // The post.created payload is the member post view (vote-privacy shape).
   const delivered = seen[0].content;
-  assert.ok("body" in delivered);
+  assert.ok("text" in delivered);
   assert.ok("interactionCounters" in postRow === false);
 });
 

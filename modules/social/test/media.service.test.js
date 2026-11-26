@@ -518,7 +518,7 @@ test("ac-3: signed archive export streams the authored history with per-item sig
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
   const bytes = await sampleImageBytes({ seed: 17 });
   const committed = await upload(fx.media, susan, bytes);
-  const payload = { type: "photo", mediaRefs: [committed.mediaId], caption: "the pier" };
+  const payload = { type: "photo", mediaRefs: [committed.mediaId], text: "the pier" };
   await fx.mod.postService.create({ accessToken: susan.token, payload, signature: susan.dev.signPayload(payload) });
 
   const chunks = [];
@@ -846,8 +846,8 @@ test("PORCH-044: hydration self-heals a pre-format archive before the set of rec
   const committed = await upload(fx.media, susan, bytes);
   await fx.mod.postService.create({
     accessToken: susan.token,
-    payload: { type: "photo", mediaRefs: [committed.mediaId], caption: "the pier" },
-    signature: susan.dev.signPayload({ type: "photo", mediaRefs: [committed.mediaId], caption: "the pier" }),
+    payload: { type: "photo", mediaRefs: [committed.mediaId], text: "the pier" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: [committed.mediaId], text: "the pier" }),
   });
 
   // Simulate the full pre-PORCH-044 archive: no media-geometry stamp on
@@ -935,8 +935,8 @@ test("PORCH-044: every feed surface hydrates mediaMeta — the rendition set of 
   const video = await sampleVideoBytes({ seconds: 1 });
   const photo = await upload(fx.media, susan, bytes);
   const clip = await mediaVideoUpload(fx, susan, video);
-  const photoPayload = { type: "photo", mediaRefs: [photo.mediaId], caption: "the pier" };
-  const videoPayload = { type: "video", mediaRefs: [clip.mediaId], caption: "the ferry" };
+  const photoPayload = { type: "photo", mediaRefs: [photo.mediaId], text: "the pier" };
+  const videoPayload = { type: "video", mediaRefs: [clip.mediaId], text: "the ferry" };
   await fx.mod.postService.create({ accessToken: susan.token, payload: photoPayload, signature: susan.dev.signPayload(photoPayload) });
   await fx.mod.postService.create({ accessToken: susan.token, payload: videoPayload, signature: susan.dev.signPayload(videoPayload) });
 
@@ -978,14 +978,14 @@ test("PORCH-049 ac-1: every payload states the media geometry — display dims, 
   const video = await sampleVideoBytes({ seconds: 1 });
   const photo = await upload(fx.media, susan, bytes);
   const clip = await mediaVideoUpload(fx, susan, video);
-  const photoPayload = { type: "photo", mediaRefs: [photo.mediaId], caption: "the pier" };
-  const videoPayload = { type: "video", mediaRefs: [clip.mediaId], caption: "the ferry" };
+  const photoPayload = { type: "photo", mediaRefs: [photo.mediaId], text: "the pier" };
+  const videoPayload = { type: "video", mediaRefs: [clip.mediaId], text: "the ferry" };
   const photoPost = (await fx.mod.postService.create({ accessToken: susan.token, payload: photoPayload, signature: susan.dev.signPayload(photoPayload) })).post;
   const videoPost = (await fx.mod.postService.create({ accessToken: susan.token, payload: videoPayload, signature: susan.dev.signPayload(videoPayload) })).post;
 
   // Groups ride the same hydrate path (ac-1 names groups among the surfaces).
   const group = await fx.mod.groupService.create({ networkId: FAMILY, name: "Picnic crew", members: [susan.did, june.did], createdBy: susan.did });
-  const groupPayload = { ...photoPayload, groupId: group._id, caption: "the group pier" };
+  const groupPayload = { ...photoPayload, groupId: group._id, text: "the group pier" };
   await fx.mod.postService.create({ accessToken: susan.token, payload: groupPayload, signature: susan.dev.signPayload(groupPayload) });
   await fx.mod.albumService.addItem({ accessToken: susan.token, name: "Lake Album", postId: photoPost._id, signature: susan.dev.signPayload({ kind: "album.add", networkId: FAMILY, postId: photoPost._id, album: "Lake Album" }) });
 
@@ -1038,7 +1038,7 @@ test("PORCH-049 ac-1: a ref without a readable archive states null geometry — 
     deviceSignature: "test",
     mediaRefs: ["med_ghost"],
     previewId: null,
-    caption: "no archive row",
+    text: "no archive row",
     body: null,
     visibility: "members-only",
     displayHint: null,
@@ -1063,7 +1063,7 @@ test("PORCH-121 ac-4: a phone-portrait clip (display-matrix rotation) stamps its
   const june = await admitted(fx, { networkId: FAMILY, did: JUNE, device: fx.juneDev });
   const bytes = await sampleRotatedVideoBytes();
   const clip = await mediaVideoUpload(fx, susan, bytes);
-  const payload = { type: "video", mediaRefs: [clip.mediaId], caption: "the portrait" };
+  const payload = { type: "video", mediaRefs: [clip.mediaId], text: "the portrait" };
   const post = (await fx.mod.postService.create({ accessToken: susan.token, payload, signature: susan.dev.signPayload(payload) })).post;
   const view = (await fx.mod.postService.get({ accessToken: june.token, postId: post._id })).post;
   const meta = view.mediaMeta[clip.mediaId];

@@ -61,7 +61,7 @@ async function mkPost(fx, token, dev, payload) {
 test("ac-1: upCount rides the card/detail payloads and no other vote aggregate does", async () => {
   const { fx, devs, tokens } = await votedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "two ups and a down", caption: "two ups and a down" });
+  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", text: "two ups and a down" });
 
   // Three signed votes through the real write path: two ups, one down.
   // PORCH-113: Susan's self-vote (the creation write, up) rides the post
@@ -106,7 +106,7 @@ test("ac-1: upCount rides the card/detail payloads and no other vote aggregate d
 test("ac-2: the viewer's own vote rides their payload and their flip lands in the next read", async () => {
   const { fx, devs, tokens } = await votedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "flip me" });
+  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", text: "flip me" });
 
   // June holds no vote: myVote is explicitly null, never undefined-shaped
   // absence. The post's upCount already resolves Susan's creation
@@ -161,7 +161,7 @@ test("ac-2: the viewer's own vote rides their payload and their flip lands in th
 test("ac-3: no down-vote count, ratio, or another member's vote record on any surface", async () => {
   const { fx, devs, tokens } = await votedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "five downs and two ups" });
+  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", text: "five downs and two ups" });
 
   // Five up-voters, then flip every one of them down: the post holds
   // exactly five down-votes and two live ups afterwards (JUNE and MEG stay
@@ -219,7 +219,7 @@ test("ac-3: no down-vote count, ratio, or another member's vote record on any su
 
 test("ac-3: event envelopes and catch-up carry upCount only — no myVote, no down data", async () => {
   const { fx, devs, tokens } = await votedFixture();
-  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "live card" });
+  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", text: "live card" });
 
   // Susan casts an up vote: the write recomputes the counter but emits NO
   // vote event (the closed vocabulary has no vote type).
@@ -252,8 +252,8 @@ test("ac-3: event envelopes and catch-up carry upCount only — no myVote, no do
   await fx.posts.editPost({
     accessToken: tokens[SUSAN],
     postId: post._id,
-    payload: { body: "live card, edited" },
-    signature: devs[SUSAN].signPayload({ kind: "post-edit", postId: post._id, networkId: FAMILY, body: "live card, edited" }),
+    payload: { text: "live card, edited" },
+    signature: devs[SUSAN].signPayload({ kind: "post-edit", postId: post._id, networkId: FAMILY, text: "live card, edited" }),
   });
   const replayed = (await fx.realtime.catchUp({ accessToken: tokens[MEG], since: created.seq })).events;
   const updated = replayed.find((event) => event.type === "post.updated");
@@ -267,7 +267,7 @@ test("ac-3: event envelopes and catch-up carry upCount only — no myVote, no do
 test("ac-4: ranking behavior is unchanged — the formula still consumes the stored aggregates only", async () => {
   const { fx, devs, tokens } = await votedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", body: "rank source" });
+  const post = await mkPost(fx, tokens[SUSAN], devs[SUSAN], { type: "text", text: "rank source" });
 
   // Two member ups on top of the self-vote put voteVolume at 3 with ratio
   // 1: rankedScore = (3*1) * (1 + 0.5*(1 - 0.5)) * ageFactor = 3.75 *

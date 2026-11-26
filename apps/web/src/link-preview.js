@@ -3,7 +3,7 @@
 // real links (external links open in a new tab, the standing law), and the
 // hub-origin lookup for a post's preview image.
 
-/** The first http(s) URL in a body/caption, or null (compose detection). */
+/** The first http(s) URL in a text value, or null (compose detection). */
 export function firstUrlIn(text) {
   const match = /https?:\/\/[^\s<>"')\]]+/.exec(String(text ?? ""));
   return match ? match[0] : null;

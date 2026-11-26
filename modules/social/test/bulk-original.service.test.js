@@ -119,7 +119,7 @@ async function upload(media, member, bytes) {
 }
 
 async function createPost(fx, member, mediaRefs, extra = {}) {
-  const payload = { type: "photo", mediaRefs, caption: extra.caption ?? "bulk shot", ...extra };
+  const payload = { type: "photo", mediaRefs, text: extra.text ?? "bulk shot", ...extra };
   const { post } = await fx.posts.create({
     accessToken: member.token,
     payload,
@@ -254,8 +254,8 @@ test("ac-1: the post's originals.zip carries exactly that post's photos; cross-p
   // rides only as a display hint; the twin carries its own mediaRefs).
   const twin = await fx.posts.create({
     accessToken: carol.token,
-    payload: { type: "photo", mediaRefs: [mB2.mediaId], crossPostRef: familyPost._id, caption: "the twin" },
-    signature: carol.dev.signPayload({ type: "photo", mediaRefs: [mB2.mediaId], crossPostRef: familyPost._id, caption: "the twin" }),
+    payload: { type: "photo", mediaRefs: [mB2.mediaId], crossPostRef: familyPost._id, text: "the twin" },
+    signature: carol.dev.signPayload({ type: "photo", mediaRefs: [mB2.mediaId], crossPostRef: familyPost._id, text: "the twin" }),
   });
 
   const { base, close } = await startServer(fx);
@@ -375,8 +375,8 @@ test("ac-2: empty sets and unknown scopes refuse named, never an empty zip", asy
   // An album whose only item is a text post: zero photos.
   const textPost = await fx.posts.create({
     accessToken: susan.token,
-    payload: { type: "text", body: "no photos here" },
-    signature: susan.dev.signPayload({ type: "text", body: "no photos here" }),
+    payload: { type: "text", text: "no photos here" },
+    signature: susan.dev.signPayload({ type: "text", text: "no photos here" }),
   });
   await addItem(fx, susan, "Text-only album", textPost.post._id);
   const { base, close } = await startServer(fx);

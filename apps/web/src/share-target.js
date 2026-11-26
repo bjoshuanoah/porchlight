@@ -34,7 +34,8 @@ function kindOf(type) {
  * Classify one staged share into a compose staging (ac-4): exactly the
  * matching composer mode opens with content staged.
  *   - an image set opens photo compose with every shared photo (carousel
- *     preview shape); a text/title riding the share stages into the caption;
+ *     preview shape); a shared text/title stages into the post's one text
+ *     field;
  *   - one video opens video compose; one audio opens audio compose;
  *   - text (or a bare URL/title) opens text compose with the shared text
  *     in the area;
@@ -56,20 +57,20 @@ export function classifyStagedShare({ title = "", text = "", url = "", files = [
   const linkish = typeof url === "string" && url.trim() ? url.trim() : "";
   const heading = typeof title === "string" && title.trim() ? title.trim() : "";
 
-  let staged = { type: "text", files: [], body: shared || linkish || heading, caption: "", notice: null, dropped: [] };
+  let staged = { type: "text", files: [], text: shared || linkish || heading, notice: null, dropped: [] };
   if (photos.length) {
     staged = {
-      type: "photo", files: photos.map((row) => row.file), body: "", caption: shared,
+      type: "photo", files: photos.map((row) => row.file), text: shared,
       notice: null, dropped: rows.filter((row) => row.kind !== "image"),
     };
   } else if (videos.length) {
     staged = {
-      type: "video", files: videos.slice(0, 1).map((row) => row.file), body: "", caption: shared,
+      type: "video", files: videos.slice(0, 1).map((row) => row.file), text: shared,
       notice: null, dropped: rows.filter((row) => row !== videos[0]),
     };
   } else if (audios.length) {
     staged = {
-      type: "audio", files: audios.slice(0, 1).map((row) => row.file), body: "", caption: shared,
+      type: "audio", files: audios.slice(0, 1).map((row) => row.file), text: shared,
       notice: null, dropped: rows.filter((row) => row !== audios[0]),
     };
   } else {

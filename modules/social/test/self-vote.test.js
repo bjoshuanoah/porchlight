@@ -61,7 +61,7 @@ async function vote(fx, key, postId, value) {
 test("ac-1: creation writes the author's up-vote doc in the same operation, first served truth resolves upCount 1", async () => {
   const fx = await selfVoteFixture();
 
-  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", body: "hands raised on arrival" });
+  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", text: "hands raised on arrival" });
 
   // A first-class vote doc of the existing signed schema: memberId = the
   // author, value up, riding the verified creation signature.
@@ -70,7 +70,7 @@ test("ac-1: creation writes the author's up-vote doc in the same operation, firs
   assert.equal(rows[0].memberDid, SUSAN);
   assert.equal(rows[0].value, "up");
   assert.equal(rows[0].networkId, FAMILY);
-  assert.equal(rows[0].deviceSignature, fx.devs.susan.signPayload({ type: "text", body: "hands raised on arrival" }));
+  assert.equal(rows[0].deviceSignature, fx.devs.susan.signPayload({ type: "text", text: "hands raised on arrival" }));
   assert.equal(rows[0].createdAt != null, true);
 
   // Counters recomputed over the self-vote before anything serves.
@@ -96,7 +96,7 @@ test("ac-1: creation writes the author's up-vote doc in the same operation, firs
 
   // Any post type and any target: a group post self-votes too.
   const group = await fx.groups.create({ networkId: FAMILY, name: "Picnic", members: [SUSAN] });
-  const groupPayload = { type: "photo", mediaRefs: ["med_1"], caption: "the pier", groupId: group._id };
+  const groupPayload = { type: "photo", mediaRefs: ["med_1"], text: "the pier", groupId: group._id };
   const groupPost = await mkPost(fx, fx.tokens.susan, fx.devs.susan, groupPayload);
   const groupVotes = await fx.collections.votes.find({ postId: groupPost._id });
   assert.equal(groupVotes.length, 1);
@@ -109,7 +109,7 @@ test("ac-1: creation writes the author's up-vote doc in the same operation, firs
 test("ac-2: the self-vote is an ordinary vote — change and clear behave exactly like any member's write, rank output is unchanged", async () => {
   const fx = await selfVoteFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", body: "ordinary vote laws" });
+  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", text: "ordinary vote laws" });
 
   // The author changes their self-vote down through the ordinary path
   // (the same signed write every member uses — no special surface).
@@ -127,8 +127,8 @@ test("ac-2: the self-vote is an ordinary vote — change and clear behave exactl
   // came from the creation self-vote, one whose single up came from an
   // ordinary member vote write — score identically. The formula has no
   // self-vote awareness.
-  const selfVoted = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", body: "self-voted up at birth" });
-  const ordinary = await mkPost(fx, fx.tokens.june, fx.devs.june, { type: "text", body: "ordinary up only" });
+  const selfVoted = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", text: "self-voted up at birth" });
+  const ordinary = await mkPost(fx, fx.tokens.june, fx.devs.june, { type: "text", text: "ordinary up only" });
   await vote(fx, "june", ordinary._id, "up");
   // Neutralize Susan's self-vote on the ordinary post? None exists — June
   // authored it. But Susan's self-vote must be cleared from the selfVoted
@@ -154,7 +154,7 @@ test("ac-2: the self-vote is an ordinary vote — change and clear behave exactl
   assert.equal(ordRanked.myVote, null);
 
   // Cross-posted twins each carry their own independent author vote.
-  const twin = await mkPost(fx, fx.tokens.june, fx.devs.june, { type: "text", body: "twin on this network", crossPostRef: selfVoted._id });
+  const twin = await mkPost(fx, fx.tokens.june, fx.devs.june, { type: "text", text: "twin on this network", crossPostRef: selfVoted._id });
   const twinVotes = await fx.collections.votes.find({ postId: twin._id });
   assert.equal(twinVotes.length, 1);
   assert.equal(twinVotes[0].memberDid, JUNE, "each twin's author self-vote is its own");
@@ -168,7 +168,7 @@ test("ac-2: the self-vote is an ordinary vote — change and clear behave exactl
 test("ac-3: the clear write removes only the member's own row; a clear with no vote refuses plainly and idempotently", async () => {
   const fx = await selfVoteFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", body: "clearable" });
+  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", text: "clearable" });
 
   // June and Meg vote up beside the author's self-vote.
   await vote(fx, "june", post._id, "up");
@@ -233,7 +233,7 @@ test("ac-3: the clear write removes only the member's own row; a clear with no v
 test("ac-4: payloads carry exactly the ruled two values — no authorship mark of the self-vote anywhere", async () => {
   const fx = await selfVoteFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", body: "privacy sweep" });
+  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", text: "privacy sweep" });
 
   await vote(fx, "june", post._id, "down");
   const surfaces = {
@@ -268,7 +268,7 @@ test("ac-4: payloads carry exactly the ruled two values — no authorship mark o
 test("ac-5: the cascade removes the self-vote with the post, the restore re-materializes it, nothing survives the purge", async () => {
   const fx = await selfVoteFixture();
 
-  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", body: "cascade bait" });
+  const post = await mkPost(fx, fx.tokens.susan, fx.devs.susan, { type: "text", text: "cascade bait" });
   await vote(fx, "june", post._id, "up");
   assert.equal((await fx.collections.votes.find({ postId: post._id })).length, 2);
 
@@ -303,7 +303,7 @@ test("ac-5: the cascade removes the self-vote with the post, the restore re-mate
   // subject; the day-30 reaper destroys the held originals and the
   // tombstone one time, and nothing vote-shaped survives it (no vote doc
   // survives its subject's purge, and restore is refused after).
-  const later = await mkPost(fx, fx.tokens.june, fx.devs.june, { type: "text", body: "purge bait" });
+  const later = await mkPost(fx, fx.tokens.june, fx.devs.june, { type: "text", text: "purge bait" });
   await vote(fx, "meg", later._id, "down");
   const laterDeleted = await fx.posts.deletePost({
     accessToken: fx.tokens.june,

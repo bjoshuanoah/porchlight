@@ -379,8 +379,8 @@ function explicitSubscribe(channel: SocketChannel, token: string, networkId: str
 }
 
 /** Signed text post through the REST write path. */
-async function createPost(setup: HubSetup, member: Member, body: string): Promise<string> {
-  const payload = { type: "text", body };
+async function createPost(setup: HubSetup, member: Member, text: string): Promise<string> {
+  const payload = { type: "text", text };
   const res = await call(setup.port, "/api/social/posts", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${member.token}` },
@@ -441,7 +441,7 @@ test("ac-1 isolation + ac-2 payload privacy over the wire: origin A's events rea
   assert.equal(((await ownerC.waitEvents(1)) as Json).type, "post.created");
   assert.equal(((await a2C.waitEvents(1)) as Json).type, "post.created");
   assert.equal((ownerC.events.at(-1) as Json)?.postId, postId);
-  assert.equal(((ownerC.events.at(-1) as Json)?.content as Json)?.body, "Live feed arrives");
+  assert.equal(((ownerC.events.at(-1) as Json)?.content as Json)?.text, "Live feed arrives");
   await settle();
   assert.equal(otherC.events.length, 0, "an origin-B subscriber received an origin-A event — isolation violation");
 
@@ -585,7 +585,7 @@ test("ac-3 catch-up over the wire: reconnect replays exactly the missed deltas i
   assert.equal(replay.body.stale, false);
   const replayed = replay.body.events as Json[];
   assert.deepEqual(
-    replayed.map((row) => (row.content as Json).body),
+    replayed.map((row) => (row.content as Json).text),
     ["missed one", "missed two"],
   );
   assert.ok(typeof replay.body.cursor === "string");
@@ -626,5 +626,5 @@ test("ac-3 catch-up over the wire: reconnect replays exactly the missed deltas i
   assert.equal(freshThin.body.stale, false);
   const thinLast = (freshThin.body.events as Json[]).at(-1) as Json;
   assert.equal(thinLast?.type, "post.created");
-  assert.equal((thinLast?.content as Json)?.body, "after trim");
+  assert.equal((thinLast?.content as Json)?.text, "after trim");
 });

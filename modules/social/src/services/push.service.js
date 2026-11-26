@@ -109,7 +109,7 @@ const EXCERPT_MAX_LENGTH = 200;
 const TITLE_MAX_LENGTH = 64;
 const BODY_MAX_LENGTH = 300;
 
-/** Short caption or excerpt: trimmed and bounded, content-only. */
+/** Short excerpt: trimmed and bounded, content-only. */
 export function pushExcerpt(text) {
   if (typeof text !== "string") return null;
   const trimmed = text.trim();

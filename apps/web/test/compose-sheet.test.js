@@ -117,33 +117,32 @@ test("ac-destination: an unavailable destination is named, never silently retarg
 test("ac-publish: text-only publishes as the text shape", () => {
   assert.deepEqual(
     publishPayload({ text: " Hello porch ", attachments: [], mediaRefs: [], groupId: "", previewId: "prev1" }),
-    { type: "text", body: "Hello porch", caption: null, mediaRefs: [], groupId: null, previewId: "prev1" });
+    { type: "text", text: "Hello porch", mediaRefs: [], groupId: null, previewId: "prev1" });
 });
 
 test("ac-publish: mixed (text + photos + videos) rides ONE create with the ordered mediaRefs — no per-kind fork", () => {
   const payload = publishPayload({ text: "Lake day!", attachments: [{ kind: "photo" }, { kind: "video" }, { kind: "photo" }], mediaRefs: ["m1", "m2", "m3"], groupId: "g1" });
   // One write, ordered refs, stored type = the first attachment's kind
   // (type=mixed is the server's read projection); the draft's text rides
-  // the caption; body stays null under media.
+  // the one text field on every shape (the PORCH-157 consolidation).
   assert.deepEqual(payload, {
-    type: "photo", body: null, caption: "Lake day!", mediaRefs: ["m1", "m2", "m3"], groupId: "g1", previewId: null,
+    type: "photo", text: "Lake day!", mediaRefs: ["m1", "m2", "m3"], groupId: "g1", previewId: null,
   });
   const videoFirst = publishPayload({ text: "", attachments: [{ kind: "video" }], mediaRefs: ["m9"], groupId: "" });
   assert.equal(videoFirst.type, "video");
-  assert.equal(videoFirst.caption, null, "media-only publishes without a caption write");
-  assert.equal(videoFirst.body, null);
+  assert.equal(videoFirst.text, null, "media-only publishes without a text write");
 });
 
 /* ---- staged-share mapping --------------------------------------------------- */
 
 test("ac-staging: a staged share opens the unified draft; audio stages nothing but keeps the text", () => {
-  const photoShare = stagedShareDraft({ type: "photo", files: [PHOTO], body: "", caption: "From my phone" });
+  const photoShare = stagedShareDraft({ type: "photo", files: [PHOTO], text: "From my phone" });
   assert.equal(photoShare.text, "From my phone");
   assert.deepEqual(photoShare.attachments.map((row) => row.kind), ["photo"]);
-  const textShare = stagedShareDraft({ type: "text", files: [], body: "Hello", caption: "" });
+  const textShare = stagedShareDraft({ type: "text", files: [], text: "Hello" });
   assert.equal(textShare.text, "Hello");
   assert.deepEqual(textShare.attachments, []);
-  const audioShare = stagedShareDraft({ type: "audio", files: [AUDIO], body: "", caption: "" });
+  const audioShare = stagedShareDraft({ type: "audio", files: [AUDIO], text: "" });
   assert.deepEqual(audioShare.attachments, [], "audio stages nothing on the unified surfaces");
   assert.match(audioShare.notice, /The audio file cannot be added/);
   assert.equal(attachmentKind(PHOTO), "photo");
@@ -198,7 +197,7 @@ test("ac-destination: opening from a group surface preselects that group (Oct 16
 });
 
 test("ac-render: the compact footer holds the Add controls over a draft, no tiles", () => {
-  const html = render({ open: true, target: null, data: sheetData, staged: { type: "text", files: [], body: "Hello porch", caption: "", notice: null, dropped: [] } });
+  const html = render({ open: true, target: null, data: sheetData, staged: { type: "text", files: [], text: "Hello porch", notice: null, dropped: [] } });
   assert.match(html, /data-testid="sheet-add-photo"/);
   assert.match(html, /data-testid="sheet-add-video"/);
   assert.doesNotMatch(html, /sheet-photo-tile/, "the composer never re-renders a large tile over a draft");
@@ -206,17 +205,17 @@ test("ac-render: the compact footer holds the Add controls over a draft, no tile
 });
 
 test("ac-render: one attachment fills the preview width with its remove control; a set rides the carousel with the position indicator", () => {
-  const single = render({ open: true, target: null, data: sheetData, staged: { type: "photo", files: [PHOTO], body: "", caption: "", notice: null, dropped: [] } });
+  const single = render({ open: true, target: null, data: sheetData, staged: { type: "photo", files: [PHOTO], text: "", notice: null, dropped: [] } });
   assert.match(single, /aria-label="Remove photo"/);
   assert.doesNotMatch(single, /data-testid="sheet-carousel"/, "one attachment renders the single full-width preview, never the carousel");
-  const mixed = render({ open: true, target: null, data: sheetData, staged: { type: "photo", files: [PHOTO, VIDEO], body: "", caption: "", notice: null, dropped: [] } });
+  const mixed = render({ open: true, target: null, data: sheetData, staged: { type: "photo", files: [PHOTO, VIDEO], text: "", notice: null, dropped: [] } });
   assert.match(mixed, /data-testid="sheet-carousel"/);
   assert.match(mixed, /aria-label="1 of 2"/, "the quantity position indicator reads the visible slide");
   assert.match(mixed, /aria-label="Remove photo"/);
   assert.match(mixed, /aria-label="Remove video"/);
   assert.match(mixed, /data-testid="attachment-video"/, "a video thumb renders with its play affordance");
   assert.match(mixed, /Attached video 2 of 2/, "the mixed draft's slides render kind-aware in attachment order");
-  const mixedText = render({ open: true, target: null, data: sheetData, staged: { type: "photo", files: [PHOTO, VIDEO], body: "", caption: "Both", notice: null, dropped: [] } });
+  const mixedText = render({ open: true, target: null, data: sheetData, staged: { type: "photo", files: [PHOTO, VIDEO], text: "Both", notice: null, dropped: [] } });
   assert.match(mixedText, /Both/, "the staged text rides the field under the carousel");
 });
 

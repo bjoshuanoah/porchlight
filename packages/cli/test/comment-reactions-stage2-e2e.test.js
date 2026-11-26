@@ -173,7 +173,7 @@ test("comment reactions, deployed-hub stage 2: the comment-subject reaction rout
       body: JSON.stringify({ payload, signature: signNonce(privJwk, canonical(payload)) }),
     });
 
-    const postPayload = { type: "text", body: "the comment chip post" };
+    const postPayload = { type: "text", text: "the comment chip post" };
     const post = (await runStep("post created (signed)", (async () => {
       const res = await fetch(`${base}/api/social/posts`, writeHeaders(ownerPrivJwk, ownerToken, postPayload));
       const body = await res.json();

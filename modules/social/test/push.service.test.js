@@ -229,7 +229,7 @@ test("ac-2: reply and mention triggers resolve through the hub-enforced settings
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunset at the lake" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunset at the lake" });
   await mod.interactionService.comment({
     accessToken: tokens.bob,
     payload: { postId: post._id, parentId: null, body: "Beautiful evening!", mentions: [ALICE] },
@@ -271,11 +271,11 @@ test("ac-2: reply and mention triggers resolve through the hub-enforced settings
   });
 });
 
-test("ac-2: reactions to your post deliver with the caption as the excerpt", async () => {
+test("ac-2: reactions to your post deliver with the post text as the excerpt", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "First dance" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "First dance" });
   await mod.interactionService.react({
     accessToken: tokens.bob,
     payload: { postId: post._id, emoji: "🎉" },
@@ -297,7 +297,7 @@ test("PORCH-115 ac-1: the main line is the origin network's display name as auth
   const { collections, mod, devs, tokens } = await pushFixture({ sender });
   await collections.networks.updateOne({ _id: FAMILY }, { $set: { name: "The Noah Family Network" } });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Waiting on insulation and an mechanicals inspection" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Waiting on insulation and an mechanicals inspection" });
   await mod.interactionService.react({
     accessToken: tokens.bob,
     payload: { postId: post._id, emoji: "🎉" },
@@ -341,7 +341,7 @@ test("PORCH-115 ac-2: a group post whose display name does not resolve composes 
 test("ac-2: without a live subscription there is no send attempt", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   await mod.interactionService.react({ accessToken: tokens.bob, payload: { postId: post._id, emoji: "❤️" }, signature: devs.bob.signPayload({ postId: post._id, emoji: "❤️" }) });
   assert.equal(sender.sends.length, 0);
 });
@@ -350,7 +350,7 @@ test("ac-2: the global switch and per-event toggles gate at send time — never 
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   const react = (emoji) =>
     mod.interactionService.react({
       accessToken: tokens.bob,
@@ -421,8 +421,8 @@ test("ac-2: the gating matrix is enforced over ROUTE-persisted settings — ever
     await route("/push/subscriptions", tokens.alice, { endpoint: "https://push.example.com/routes", keys: { p256dh: "B_routes", auth: "A_routes" } });
     await route("/push/subscriptions", tokens.bob, { endpoint: "https://push.example.com/revoked", keys: { p256dh: "B_revoked", auth: "A_revoked" } });
     const { post: sunday } = await route("/posts", tokens.alice, {
-      payload: { type: "text", body: "Sunday dinner at six" },
-      signature: devs.alice.signPayload({ type: "text", body: "Sunday dinner at six" }),
+      payload: { type: "text", text: "Sunday dinner at six" },
+      signature: devs.alice.signPayload({ type: "text", text: "Sunday dinner at six" }),
     });
     const react = (emoji) =>
       route(`/posts/${sunday._id}/reactions`, tokens.bob, {
@@ -477,14 +477,14 @@ test("ac-2: the gating matrix is enforced over ROUTE-persisted settings — ever
     const { group } = await route("/groups", tokens.alice, { name: "Picnic", members: [OWNER, ALICE, BOB] });
     await putSettings({ enabled: true, events: { groupPost: true } });
     await route("/posts", tokens.bob, {
-      payload: { type: "text", groupId: group._id, body: "Potluck list" },
-      signature: devs.bob.signPayload({ type: "text", groupId: group._id, body: "Potluck list" }),
+      payload: { type: "text", groupId: group._id, text: "Potluck list" },
+      signature: devs.bob.signPayload({ type: "text", groupId: group._id, text: "Potluck list" }),
     });
     assert.equal(sender.sends[3].plaintext.type, "groupPost", "the toggle-on member receives the group post");
     await putSettings({ enabled: true, events: { groupPost: false } });
     await route("/posts", tokens.bob, {
-      payload: { type: "text", groupId: group._id, body: "Rain check" },
-      signature: devs.bob.signPayload({ type: "text", groupId: group._id, body: "Rain check" }),
+      payload: { type: "text", groupId: group._id, text: "Rain check" },
+      signature: devs.bob.signPayload({ type: "text", groupId: group._id, text: "Rain check" }),
     });
     assert.equal(sender.sends.length, 4, "the toggled-off groupPost class produces no further send");
     // PORCH-108 ac-3: no backfill — the persisted OFF toggle reads verbatim
@@ -495,8 +495,8 @@ test("ac-2: the gating matrix is enforced over ROUTE-persisted settings — ever
     // Removed member: bob's post still stands, alice reacts — deliverability
     // died at the revocation write (revoked through the console route).
     const { post: bobPost } = await route("/posts", tokens.bob, {
-      payload: { type: "text", body: "Before leaving" },
-      signature: devs.bob.signPayload({ type: "text", body: "Before leaving" }),
+      payload: { type: "text", text: "Before leaving" },
+      signature: devs.bob.signPayload({ type: "text", text: "Before leaving" }),
     });
     await route("/console/members/revoke", tokens.owner, { did: BOB });
     await route(`/posts/${bobPost._id}/reactions`, tokens.alice, {
@@ -514,7 +514,7 @@ test("ac-2: muted networks produce no send attempt", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, mutes: [FAMILY] });
   await mod.interactionService.react({ accessToken: tokens.bob, payload: { postId: post._id, emoji: "❤️" }, signature: devs.bob.signPayload({ postId: post._id, emoji: "❤️" }) });
   assert.equal(sender.sends.length, 0, "the muted origin stays silent");
@@ -531,7 +531,7 @@ test("ac-2: a removed member is unreachable at the same write that revoked them"
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
   await subscribe(mod, tokens.bob, "https://push.example.com/bob", "bob");
-  const bobPost = await mkPost(mod, tokens.bob, devs.bob, { type: "text", body: "Before leaving" });
+  const bobPost = await mkPost(mod, tokens.bob, devs.bob, { type: "text", text: "Before leaving" });
   await mod.membershipService.revokeMember({ networkId: FAMILY, did: BOB });
   // Alice reacts to bob's still-standing post — the trigger fires for bob:
   await mod.interactionService.react({
@@ -598,7 +598,7 @@ test("ac-2: group posts deliver by default once enabled; the member's toggle gat
   const group = await mod.groupService.create({ networkId: FAMILY, name: "Picnic", members: [OWNER, ALICE, BOB], createdBy: OWNER });
   // PORCH-108 (Brian, Oct 19, 2026): the member walked the enable flow —
   // group posts ride the shipped default-ON toggle from now on.
-  const post1 = await mkPost(mod, tokens.owner, devs.owner, { type: "text", groupId: group._id, body: "Picnic planning" });
+  const post1 = await mkPost(mod, tokens.owner, devs.owner, { type: "text", groupId: group._id, text: "Picnic planning" });
   const defaultSends = sender.sends.filter((s) => s.plaintext.type === "groupPost");
   assert.equal(defaultSends.length, 2, "both enabled members receive the group post with zero event writes");
   assert.deepEqual(defaultSends[0].plaintext, {
@@ -614,7 +614,7 @@ test("ac-2: group posts deliver by default once enabled; the member's toggle gat
   // The toggle still gates: the member's explicit OFF act suppresses
   // exactly their own delivery.
   await mod.pushService.updateSettings({ accessToken: tokens.alice, enabled: true, events: { groupPost: false } });
-  await mkPost(mod, tokens.owner, devs.owner, { type: "text", groupId: group._id, body: "Rain check" });
+  await mkPost(mod, tokens.owner, devs.owner, { type: "text", groupId: group._id, text: "Rain check" });
   const afterSends = sender.sends.filter((s) => s.plaintext.type === "groupPost");
   assert.equal(afterSends.length, 3, "only the still-toggled-on member receives after the explicit OFF");
   assert.equal(afterSends[2].subscription.identityId, BOB, "alice's OFF suppressed only her own delivery");
@@ -690,7 +690,7 @@ test("ac-3: a real push decrypts with the subscription's own keys and carries co
   const auth = randomBytes(16).toString("base64url");
   await mod.pushService.registerSubscription({ accessToken: tokens.alice, endpoint, keys: { p256dh: clientPub, auth } });
 
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Lake morning" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Lake morning" });
   await mod.interactionService.react({
     accessToken: tokens.bob,
     payload: { postId: post._id, emoji: "🌅" },
@@ -760,7 +760,7 @@ test("ac-4: a 410 endpoint response expires the stored subscription server-side,
   const logLines = [];
   const { mod, devs, tokens, subs } = await pushFixture({ sender, log: (line) => logLines.push(line) });
   await subscribe(mod, tokens.alice, "https://push.example.com/dying", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   await mod.interactionService.react({ accessToken: tokens.bob, payload: { postId: post._id, emoji: "❤️" }, signature: devs.bob.signPayload({ postId: post._id, emoji: "❤️" }) });
   const stored = await subs.find({});
   assert.equal(stored.length, 0, "the 410 expired the subscription");
@@ -778,7 +778,7 @@ test("ac-4: transient failure takes one bounded retry then drop; a recovered ret
   const logLines = [];
   const { mod, devs, tokens, subs } = await pushFixture({ sender, log: (line) => logLines.push(line) });
   await subscribe(mod, tokens.alice, "https://push.example.com/flaky", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   await mod.interactionService.react({ accessToken: tokens.bob, payload: { postId: post._id, emoji: "❤️" }, signature: devs.bob.signPayload({ postId: post._id, emoji: "❤️" }) });
   assert.equal(sender.sends.length, 2, "exactly one bounded retry after the first failure");
   assert.equal(sender.sends[0].subscription._id, sender.sends[1].subscription._id, "the retry aims at the same subscription");
@@ -789,7 +789,7 @@ test("ac-4: transient failure takes one bounded retry then drop; a recovered ret
   const recovering = senderOf(503, 201);
   const recoveringFx = await pushFixture({ sender: recovering });
   await subscribe(recoveringFx.mod, recoveringFx.tokens.alice, "https://push.example.com/recovering", "alice");
-  const post2 = await mkPost(recoveringFx.mod, recoveringFx.tokens.alice, recoveringFx.devs.alice, { type: "text", body: "Sunday" });
+  const post2 = await mkPost(recoveringFx.mod, recoveringFx.tokens.alice, recoveringFx.devs.alice, { type: "text", text: "Sunday" });
   await recoveringFx.mod.interactionService.react({
     accessToken: recoveringFx.tokens.bob,
     payload: { postId: post2._id, emoji: "❤️" },
@@ -807,7 +807,7 @@ test("ac-4: a relay reject's status and reason ride the drop line — the delive
   const logLines = [];
   const { mod, devs, tokens } = await pushFixture({ sender, log: (line) => logLines.push(line) });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   await mod.interactionService.react({
     accessToken: tokens.bob,
     payload: { postId: post._id, emoji: "❤️" },
@@ -829,7 +829,7 @@ test("ac-4: delivery outcomes land only in the local structured log — a sender
   const logLines = [];
   const { mod, devs, tokens } = await pushFixture({ sender: crashy, log: (line) => logLines.push(line) });
   await subscribe(mod, tokens.alice, "https://push.example.com/crashy", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   await mod.interactionService.react({
     accessToken: tokens.bob,
     payload: { postId: post._id, emoji: "❤️" },
@@ -843,7 +843,7 @@ test("ac-4: every silent skip class lands a local structured line — the trail'
   const sender = senderOf(201);
   const logLines = [];
   const { mod, devs, tokens } = await pushFixture({ sender, log: (line) => logLines.push(line) });
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   const react = (emoji) =>
     mod.interactionService.react({
       accessToken: tokens.bob,
@@ -892,7 +892,7 @@ test("ac-4: a hub boot without an injected log sink still lands push lines on th
   // never dropped.
   const { mod, devs, tokens } = await pushFixture({ sender });
   await subscribe(mod, tokens.alice, "https://push.example.com/alice", "alice");
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   const written = [];
   const original = console.log;
   console.log = (line) => written.push(line);
@@ -984,7 +984,7 @@ test("ac-5: the settings routes read and update the hub-enforced member controls
 test("ac-2: settings written through the PUT route gate real trigger writes — the matrix against persisted route state", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Sunday" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Sunday" });
   const react = (emoji) =>
     mod.interactionService.react({
       accessToken: tokens.bob,
@@ -1101,7 +1101,7 @@ test("PORCH-063 ac-1: a fresh identity and a freshly created row both resolve en
 test("PORCH-063 ac-1: an off-state member (default or pre-set) produces no send attempt for any event — no composition, no Web Push", async () => {
   const sender = senderOf(201);
   const { mod, devs, tokens } = await pushFixture({ sender });
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Quiet by default" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Quiet by default" });
   const react = (emoji) =>
     mod.interactionService.react({
       accessToken: tokens.bob,
@@ -1166,7 +1166,7 @@ test("PORCH-063 ac-4: the master switch enforces first and no backfill flips an 
   assert.equal(kept.enabled, true, "the enabling member's row is not backfilled to the new default");
   assert.equal(kept.events.groupPost, true);
 
-  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", body: "Kept setting" });
+  const post = await mkPost(mod, tokens.alice, devs.alice, { type: "text", text: "Kept setting" });
   await mod.interactionService.react({
     accessToken: tokens.bob,
     payload: { postId: post._id, emoji: "🎊" },

@@ -636,7 +636,7 @@ test("PORCH-093: the lifecycle route family serves the author edit, the comment 
   const member = await bootMember(hub, port, owner.auth, "June", "dev_june");
 
   // Member writes a post and a two-level comment tree.
-  const postPayload = { type: "text", body: "route family" };
+  const postPayload = { type: "text", text: "route family" };
   const created = await call(port, "/api/social/posts", {
     method: "POST",
     headers: member.auth,
@@ -664,26 +664,26 @@ test("PORCH-093: the lifecycle route family serves the author edit, the comment 
   assert.equal(replyRes.status, 200);
   const replyId = ((replyRes.body.comment as Json)._id) as string;
 
-  // PUT /posts/:postId — the author's edit applies.
+  // PUT /posts/:postId — the author's edit applies (one text field).
   const editBody = "route family, revised";
   const editRes = await call(port, `/api/social/posts/${postId}`, {
     method: "PUT",
     headers: member.auth,
     body: JSON.stringify({
-      payload: { body: editBody },
-      signature: signPayload(member.pair, { kind: "post-edit", postId, networkId, body: editBody }),
+      payload: { text: editBody },
+      signature: signPayload(member.pair, { kind: "post-edit", postId, networkId, text: editBody }),
     }),
   });
   assert.equal(editRes.status, 200);
-  assert.equal(((editRes.body.post as Json).body) as string, editBody);
+  assert.equal(((editRes.body.post as Json).text) as string, editBody);
 
   // The author-only gate: the network owner's edit is refused loudly.
   const ownerEditRes = await call(port, `/api/social/posts/${postId}`, {
     method: "PUT",
     headers: owner.auth,
     body: JSON.stringify({
-      payload: { body: "owner edit" },
-      signature: signPayload(owner.pair, { kind: "post-edit", postId, networkId, body: "owner edit" }),
+      payload: { text: "owner edit" },
+      signature: signPayload(owner.pair, { kind: "post-edit", postId, networkId, text: "owner edit" }),
     }),
   });
   assert.equal(ownerEditRes.status, 403);
@@ -766,7 +766,7 @@ test("PORCH-093: the lifecycle route family serves the author edit, the comment 
   assert.equal(((restoreRes.body as Json).restored) as boolean, true);
   const backRes = await call(port, `/api/social/posts/${postId}`, { headers: member.auth });
   assert.equal(backRes.status, 200);
-  assert.equal(((backRes.body.post as Json).body) as string, editBody, "the edited content re-materialized");
+  assert.equal(((backRes.body.post as Json).text) as string, editBody, "the edited content re-materialized");
   const threadBack = await call(port, `/api/social/posts/${postId}/comments`, { headers: member.auth });
   assert.deepEqual(((threadBack.body.comments as Json[]) ?? []).map((row) => row._id), [rootId, replyId]);
 

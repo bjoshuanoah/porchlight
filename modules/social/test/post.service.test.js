@@ -8,7 +8,7 @@ const FAMILY = "net_family";
 const OTHER = "net_other";
 
 function textPayload(overrides = {}) {
-  return { type: "text", body: "picnic at noon", ...overrides };
+  return { type: "text", text: "picnic at noon", ...overrides };
 }
 
 /** Susan on the family network only. */
@@ -53,7 +53,7 @@ test("ac-1: text, photo, video, audio posts store one origin with signed authors
   assert.equal(text.authorId, SUSAN);
   assert.equal(text.visibility, "members-only");
 
-  const photoPayload = { type: "photo", mediaRefs: ["med_1"], caption: "the pier" };
+  const photoPayload = { type: "photo", mediaRefs: ["med_1"], text: "the pier" };
   const photo = (await posts.create({ accessToken, payload: photoPayload, signature: dev.signPayload(photoPayload) })).post;
   const videoPayload = { type: "video", mediaRefs: ["med_2"] };
   const video = (await posts.create({ accessToken, payload: videoPayload, signature: dev.signPayload(videoPayload) })).post;
@@ -85,7 +85,7 @@ test("ac-1: write shapes fail plainly — unknown type, empty text, media-less p
     (error) => error.code === "E_TYPE_REQUIRED",
   );
   await assert.rejects(
-    () => posts.create({ accessToken, payload: { type: "text", body: "   " }, signature: dev.signPayload({ type: "text", body: "   " }) }),
+    () => posts.create({ accessToken, payload: { type: "text", text: "   " }, signature: dev.signPayload({ type: "text", text: "   " }) }),
     (error) => error.code === "E_BODY_REQUIRED",
   );
   const photoPayload = { type: "photo", mediaRefs: [] };
@@ -101,8 +101,8 @@ test("ac-1: a write claiming a foreign origin never resolves", async () => {
     () =>
       posts.create({
         accessToken,
-        payload: { type: "text", body: "hi", networkId: OTHER },
-        signature: dev.signPayload({ type: "text", body: "hi", networkId: OTHER }),
+        payload: { type: "text", text: "hi", networkId: OTHER },
+        signature: dev.signPayload({ type: "text", text: "hi", networkId: OTHER }),
       }),
     (error) => error.code === "E_NOT_PERMITTED",
   );
@@ -116,7 +116,7 @@ test("ac-1: every write is actor-signed — tampered payloads do not verify", as
   assert.ok(ok.post._id);
 
   await assert.rejects(
-    () => posts.create({ accessToken, payload: textPayload({ body: "tampered" }), signature }),
+    () => posts.create({ accessToken, payload: textPayload({ text: "tampered" }), signature }),
     (error) => error.code === "E_SIGNATURE_INVALID",
   );
   await assert.rejects(
@@ -170,12 +170,12 @@ test("ac-1: group containment rejects foreign groups and non-members", async () 
 test("ac-2: cross-post creates an independent post — display hint is the only link", async () => {
   const { posts, collections, dev, familyToken, otherToken } = await dualFixture();
 
-  const photoPayload = { type: "photo", mediaRefs: ["med_src"], caption: "sunset" };
+  const photoPayload = { type: "photo", mediaRefs: ["med_src"], text: "sunset" };
   const source = (await posts.create({ accessToken: familyToken, payload: photoPayload, signature: dev.signPayload(photoPayload) })).post;
 
   // Cross-post to the second network under ITS token: an independent write
   // with its own media ingest (own mediaRefs), no dedupe machinery.
-  const crossPayload = { type: "photo", mediaRefs: ["med_own_ingest"], caption: "sunset", crossPostRef: source._id };
+  const crossPayload = { type: "photo", mediaRefs: ["med_own_ingest"], text: "sunset", crossPostRef: source._id };
   const cross = (await posts.create({ accessToken: otherToken, payload: crossPayload, signature: dev.signPayload(crossPayload) })).post;
 
   assert.notEqual(cross._id, source._id);
@@ -221,7 +221,7 @@ test("ac-2: cross-post interactions stay contained — voting on one copy leaves
 
 test("ac-5: post deletion cascades transactionally — interactions, derived rows, artifacts all go", async () => {
   const { posts, interactions, quota, collections, dev, familyToken, juneToken, juneDev, realtimePlane } = await dualFixture();
-  const payload = { type: "photo", mediaRefs: ["med_a"], caption: "trip" };
+  const payload = { type: "photo", mediaRefs: ["med_a"], text: "trip" };
   const post = (await posts.create({ accessToken: familyToken, payload, signature: dev.signPayload(payload) })).post;
 
   // Derived artifacts ledger rows + derived-data container rows keyed to the
@@ -326,9 +326,9 @@ test("ac-5: a mid-flight cascade failure rolls every removal back", async () => 
 test("ac-5: member-level deletion sweeps all authored originals at the origin", async () => {
   const { posts, interactions, collections, dev, juneDev, familyToken, juneToken } = await dualFixture();
 
-  const minePayload = textPayload({ body: "first" });
+  const minePayload = textPayload({ text: "first" });
   const mine = (await posts.create({ accessToken: familyToken, payload: minePayload, signature: dev.signPayload(minePayload) })).post;
-  const junePayload = { type: "text", body: "june post" };
+  const junePayload = { type: "text", text: "june post" };
   const junePostObj = (await posts.create({ accessToken: juneToken, payload: junePayload, signature: juneDev.signPayload(junePayload) })).post;
 
   // Susan interacts with June's post: a comment and a vote, both to be swept.
@@ -360,7 +360,7 @@ test("ac-5: member-level deletion sweeps all authored originals at the origin", 
 
 test("ac-5: the member sweep is origin-contained — the other network's posts survive", async () => {
   const { posts, collections, dev, familyToken, otherToken } = await dualFixture();
-  const crossPayload = { type: "text", body: "on the other network" };
+  const crossPayload = { type: "text", text: "on the other network" };
   const otherPost = (await posts.create({ accessToken: otherToken, payload: crossPayload, signature: dev.signPayload(crossPayload) })).post;
 
   const signature = dev.signPayload({ kind: "delete", scope: "member", networkId: FAMILY });

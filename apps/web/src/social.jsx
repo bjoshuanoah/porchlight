@@ -563,12 +563,12 @@ function MediaItem({ id, post, actions, detail = false, slide = false, index = 0
       src={renditionSrc(meta, origin) ?? playableVideoUrl(meta, origin)}
       srcSet={renditionSrcset(meta, origin) || undefined}
       sizes={detail ? detailImageSizes(meta) : timelineImageSizes()}
-      alt={post.caption || 'Shared photo'} loading="lazy" decoding="async"
+      alt={post.text || 'Shared photo'} loading="lazy" decoding="async"
       onLoad={slotLoaded}
       onClick={(event) => { if (tapTogglesOverlay) setOverlayShown((shown) => !shown); event.stopPropagation(); }}
       onError={() => classifyDirectFailure(renditionSrc(meta, origin) ?? playableVideoUrl(meta, origin))}
       sx={{ ...mediaSx, ...fitSx }} />}
-    {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.caption || 'Shared photo'} loading="lazy"
+    {post.type === 'photo' && !direct && resource && <Box component="img" src={resource.url} alt={post.text || 'Shared photo'} loading="lazy"
       onClick={(event) => { if (tapTogglesOverlay) setOverlayShown((shown) => !shown); event.stopPropagation(); }}
       sx={{ ...mediaSx, ...fitSx }} />}
     {directVideo && phase !== 'failed-terminal' && <Box key={`vid-${attempt}`} sx={{ position: 'relative', ...mediaSx, ...fitSx }}>
@@ -1253,13 +1253,12 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
   // truth again.
   useEffect(() => {
     if (!editedFields) return undefined;
-    if ((post.body ?? null) === (editedFields.body ?? null)
-      && (post.caption ?? null) === (editedFields.caption ?? null)
+    if ((post.text ?? null) === (editedFields.text ?? null)
       && String(post.groupId ?? '') === String(editedFields.groupId ?? '')) {
       setEditedFields(null);
     }
     return undefined;
-  }, [editedFields, post.body, post.caption, post.groupId]);
+  }, [editedFields, post.text, post.groupId]);
   // Remove post (PORCH-089 ac-3): the owner's entry on a group post carries
   // Remove — the group's managing member (or the network owner) — from the
   // group surface's card or the detail card alike. The confirmation names
@@ -1289,15 +1288,14 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconcile rides the server slice signature
   }, [sliceIdentity]);
   if (localHidden || tombstoned || actions?.isHidden?.(post) || !visibleAtOrigin(post, data)) return null;
-  // The applied edit's view override (PORCH-094 ac-2): body, caption, and
-  // the location context render from the applied fields until the next
+  // The applied edit's view override (PORCH-094 ac-2): the text and the
+  // location context render from the applied fields until the next
   // served read carries them — no full-card remount, and no stale chip or
   // stale text outlives the reload's reconciliation.
   const row = editedFields
     ? {
       ...post,
-      ...(editedFields.body !== undefined ? { body: editedFields.body } : {}),
-      ...(editedFields.caption !== undefined ? { caption: editedFields.caption } : {}),
+      ...(editedFields.text !== undefined ? { text: editedFields.text } : {}),
       ...(editedFields.groupId !== undefined ? { groupId: editedFields.groupId, groupName: editedFields.groupName ?? null } : {}),
     }
     : post;
@@ -1526,7 +1524,7 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
           spacing; the body line stays 16px/25px on the timeline with the
           readable 68ch length. */}
       {/* Edit mode (PORCH-094 ac-2) is a mode of the ruled composer: the
-          text/caption fields render pre-filled in place, media stays
+          text field renders pre-filled in place, media stays
           rendered read-only beneath (no swap, add, or remove affordance
           exists in edit mode — changes ride delete-and-repost), and the
           location control carries the Oct 16 location ruling. */}
@@ -1534,7 +1532,7 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
         post={post}
         row={row}
         data={data}
-        initial={readDraft('edit:post') ?? { body: row.body ?? '', caption: row.caption ?? '', locationId: currentLocationId(row) }}
+        initial={readDraft('edit:post') ?? { text: row.text ?? '', locationId: currentLocationId(row) }}
         onDraft={(value) => holdDraft('edit:post', value)}
         onSaved={applyEditResult}
         // Cancel (Brian, Oct 16, 2026): the composer closes with the pre-edit
@@ -1543,9 +1541,8 @@ export function PostCard({ post, data, actions, navigate, detail = false, onHide
         onCancel={() => { setEditFor(null); holdDraft('edit:post', ''); }}
         onSubmit={(fields) => invoke(actions, 'editPost', post, fields)}
       />}
-      {editFor !== 'post' && (row.body || row.caption) && <Box sx={{ mt: detail ? 2 : 1 }}>
-        {row.body && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch' }}><LinkedBody text={row.body} /></Typography>}
-        {row.caption && <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch', ...(row.body ? { mt: 0.5 } : {}) }}><LinkedBody text={row.caption} /></Typography>}
+      {editFor !== 'post' && row.text && <Box sx={{ mt: detail ? 2 : 1 }}>
+        <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: detail ? 17 : 16, lineHeight: detail ? '27px' : '25px', maxWidth: '68ch' }}><LinkedBody text={row.text} /></Typography>
       </Box>}
       {/* Link preview (PORCH-052): the compact embed facade or og:image card
           rides the text rail — inside the 16px padding band, never
@@ -1993,31 +1990,30 @@ function GroupHeader({ group, data, actions, onchanged }) {
 // rendered-surface sweep in test/reply-order.test.js); no routing outside
 // social.jsx needs them.
 // The edit composer (PORCH-094 ac-2): a mode of the ruled composer family —
-// pre-filled with the post's current text and caption, full width of its
-// rail, one composer at a time per surface. Media renders read-only in
-// place on the card it belongs to (this composer never offers a media
-// affordance: changes ride delete-and-repost). The location control carries
-// the Oct 16 location ruling: pre-set to the post's current target,
-// offering the general timeline plus the groups the author belongs to —
-// never another network, never a group the author does not belong to. Save
-// applies text, caption, and target as ONE write; a failed write holds the
-// full draft including the staged target choice.
+// pre-filled with the post's one text field (the PORCH-157 consolidation:
+// no separate caption field exists), full width of its rail, one composer
+// at a time per surface. Media renders read-only in place on the card it
+// belongs to (this composer never offers a media affordance: changes ride
+// delete-and-repost). The location control carries the Oct 16 location
+// ruling: pre-set to the post's current target, offering the general
+// timeline plus the groups the author belongs to — never another network,
+// never a group the author does not belong to. Save applies the text and
+// target as ONE write; a failed write holds the full draft including the
+// staged target choice.
 function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved = null, onCancel = null, onSubmit }) {
-  const [body, setBody] = useState(initial?.body ?? '');
-  const [caption, setCaption] = useState(initial?.caption ?? '');
+  const [text, setText] = useState(initial?.text ?? '');
   const [locationId, setLocationId] = useState(initial?.locationId ?? currentLocationId(post));
   const operation = useOperation();
   const offline = Boolean(data.offline);
   const locationRows = editLocationRows(post, data);
-  const stage = { body, caption, locationId };
+  const stage = { text, locationId };
   const report = (next) => { onDraft?.(next); };
   return <Stack component="form" spacing={1.5} sx={{ my: 1.5 }} onSubmit={(event) => {
     event.preventDefault();
-    if (offline || operation.busy || !body.trim()) return;
+    if (offline || operation.busy || !text.trim()) return;
     operation.run(
-      // One write: text, caption, and target ride the same signed edit (the
-      // empty caption and the general timeline ride their null values).
-      () => onSubmit({ body: body.trim(), caption: caption.trim() ? caption : null, groupId: locationId === GENERAL_LOCATION_ID ? null : locationId }),
+      // One write: the post's text and target ride the same signed edit.
+      () => onSubmit({ text: text.trim(), groupId: locationId === GENERAL_LOCATION_ID ? null : locationId }),
       () => onSaved?.(stage),
       () => {}, // the composer stays open; the full draft holds through the failure
     );
@@ -2025,19 +2021,11 @@ function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved =
     <TextField
       fullWidth
       label="Edit your post"
-      value={body}
+      value={text}
       disabled={offline}
       multiline minRows={2}
-      onChange={(event) => { const next = { ...stage, body: event.target.value }; setBody(event.target.value); report(next); }}
+      onChange={(event) => { const next = { ...stage, text: event.target.value }; setText(event.target.value); report(next); }}
       helperText={offline ? 'Editing needs your family server. It is unreachable right now.' : undefined}
-    />
-    <TextField
-      fullWidth
-      label="Caption"
-      value={caption}
-      disabled={offline}
-      multiline minRows={1}
-      onChange={(event) => { const next = { ...stage, caption: event.target.value }; setCaption(event.target.value); report(next); }}
     />
     <TextField
       fullWidth
@@ -2058,7 +2046,7 @@ function PostEditForm({ post, row, data = {}, initial, onDraft = null, onSaved =
         draft is dropped so a fresh Edit loads the post's current content
         again. Disabled mid-write: the save's outcome decides the close. */}
     <Stack direction="row" spacing={1}>
-      <Button type="submit" variant="contained" disabled={offline || operation.busy || !body.trim()} sx={{ alignSelf: 'flex-start' }}>
+      <Button type="submit" variant="contained" disabled={offline || operation.busy || !text.trim()} sx={{ alignSelf: 'flex-start' }}>
         {operation.busy ? 'Saving…' : 'Save changes'}
       </Button>
       <Button data-testid="cancel-edit-post" disabled={operation.busy} onClick={() => onCancel?.()}>Cancel</Button>
@@ -2640,7 +2628,7 @@ function renderReplyBody(reply, data, navigate) {
 // the post-detail conversation and card-level replies when they exist.
 // PORCH-084: the one on-demand composer per comment surface. The open
 // target stays legible — the composer names the comment or post it answers
-// (replyingTo caption) — and a displaced draft persists per target through
+// (replyingTo text) — and a displaced draft persists per target through
 // the surface-held draft map (initialText/onDraft) so switching targets
 // mid-draft never silently loses text.
 function ReplyForm({ label, onSubmit, offline, post, actions, replyingTo = null, initialText = '', onDraft = null, onDone = null }) {
@@ -3047,7 +3035,7 @@ export function Search({ data = {}, actions = {}, navigate }) {
   const [result, setResult] = useState(null);
   const operation = useOperation();
   return <Box>
-    <Heading title="Search" subtitle="Find captions, people tags, and album names within your family network" />
+    <Heading title="Search" subtitle="Find post text, people tags, and album names within your family network" />
     {data.offline && <Alert severity="warning" sx={{ mb: 2 }}>Search needs a reachable family server. Saved moments remain on your timeline.</Alert>}
     <Stack component="form" direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 3 }} onSubmit={(event) => {
       event.preventDefault();

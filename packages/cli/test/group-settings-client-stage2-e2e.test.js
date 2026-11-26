@@ -353,7 +353,7 @@ test("group settings menu, deployed-hub stage 2: the route family the client cal
     // The owner remove-post flow (the card ··· entry's write, the client's
     // payload shape built through groupPostRemovePayload).
     await runStep("DELETE /groups/:groupId/posts/:postId (the card's Remove commits)", (async () => {
-      const payload = { type: "text", body: "the picnic table by the lake", caption: null, mediaRefs: [], groupId };
+      const payload = { type: "text", text: "the picnic table by the lake", mediaRefs: [], groupId };
       const createPost = await fetch(`${base}/api/social/posts`, {
         method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${linda.token}` },
         body: JSON.stringify({ payload, signature: signWith(linda.privJwk, canonicalJson(payload)) }),

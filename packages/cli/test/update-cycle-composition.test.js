@@ -447,7 +447,7 @@ async function seedContent(base) {
 	const memberToken = admit.body.accessToken;
 
 	const postOf = async (token, key, bodyText, caption) => {
-		const payload = { type: "text", body: bodyText, caption };
+		const payload = { type: "text", text: bodyText, caption };
 		const created = await call(base, "/api/social/posts", {
 			method: "POST",
 			headers: bearer(token),

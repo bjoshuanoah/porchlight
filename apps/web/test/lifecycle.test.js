@@ -125,22 +125,21 @@ test("ac-1: the rendered owner card on a non-authored post carries Delete and no
 
 /* ---- ac-2: the edit composer mode and the location ruling --------------- */
 
-test("ac-2: the signed edit write carries text, caption, and target as ONE write — never a media field", () => {
+test("ac-2: the signed edit write carries the one text field and target as ONE write — never a media field, never a caption key", () => {
   const post = { _id: "p1", originNetworkId: "net1" };
-  const payload = postEditPayload(post, { body: "edited text", caption: "a caption", groupId: "g1" });
+  const payload = postEditPayload(post, { text: "edited text", groupId: "g1" });
   assert.deepEqual(payload, {
     kind: "post-edit", postId: "p1", networkId: "net1",
-    body: "edited text", caption: "a caption", groupId: "g1",
+    text: "edited text", groupId: "g1",
   });
   assert.equal("mediaRefs" in payload, false, "no media field exists on an edit write — changes ride delete-and-repost");
-  // The caption normalization runs before signing (the server normalizes
-  // the same way before verification): an emptied caption carries null.
-  assert.equal(postEditPayload(post, { body: "x", caption: "   ", groupId: null }).caption, null);
-  assert.equal(postEditPayload(post, { body: "x", groupId: "" }).groupId, null);
+  for (const legacy of ["caption", "body"]) {
+    assert.equal(legacy in payload, false, `no ${legacy} key on the edit write (the post-text consolidation)`);
+  }
   // A text-only save still rides one write (the composer always sends its
   // fields); the payload never reveals an edit through any marker field.
-  const textOnly = postEditPayload(post, { body: "x", caption: null, groupId: undefined });
-  assert.deepEqual(textOnly, { kind: "post-edit", postId: "p1", networkId: "net1", body: "x" });
+  const textOnly = postEditPayload(post, { text: "x", groupId: undefined });
+  assert.deepEqual(textOnly, { kind: "post-edit", postId: "p1", networkId: "net1", text: "x" });
 });
 
 test("ac-2: the comment edit write carries text only — no location, no media", () => {
@@ -160,13 +159,13 @@ test("ac-2: the tombstone deletes sign exactly the values the server rebuilds", 
 
 test("ac-2: the edit composer is pre-filled, media read-only, with the location control carrying the author's groups only", () => {
   const composer = social.slice(social.indexOf("function PostEditForm("), social.indexOf("function CommentEditForm("));
-  // Pre-filled from the current text/caption/target (or the held draft).
-  assert.match(card, /initial=\{readDraft\('edit:post'\) \?\? \{ body: row\.body \?\? '', caption: row\.caption \?\? '', locationId: currentLocationId\(row\) \}\}/);
+  // Pre-filled from the current text/target (or the held draft).
+  assert.match(card, /initial=\{readDraft\('edit:post'\) \?\? \{ text: row\.text \?\? '', locationId: currentLocationId\(row\) \}\}/);
   assert.match(composer, /label="Edit your post"/);
-  assert.match(composer, /label="Caption"/);
+  assert.doesNotMatch(composer, /label="Caption"/, "no separate caption field exists (the post-text consolidation)");
   assert.match(composer, /label="Post to"/);
-  // One save, three fields: text, caption, and target as ONE signed write.
-  assert.match(composer, /body: body\.trim\(\), caption: caption\.trim\(\) \? caption : null, groupId: locationId === GENERAL_LOCATION_ID \? null : locationId/);
+  // One save, two fields: the one text field and the target as ONE signed write.
+  assert.match(composer, /text: text\.trim\(\), groupId: locationId === GENERAL_LOCATION_ID \? null : locationId/);
   assert.match(composer, /Save changes/);
   // Media renders read-only in place; no swap/add/remove affordance exists
   // in the composer — only the delete-and-repost direction is offered.
@@ -193,8 +192,9 @@ test("ac-2: an absent edit draft reads undefined — the composers pre-fill from
   assert.match(social, /const readDraft = \(target\) => drafts\.get\(target\);/,
     "the draft read never coerces an absent draft to '' — that swallowed the edit prefill");
   // The fallbacks of record stay in place: the post edit pre-fills from the
-  // row's current text/caption/target, comment edits from the row's text.
-  assert.match(card, /initial=\{readDraft\('edit:post'\) \?\? \{ body: row\.body \?\? '', caption: row\.caption \?\? '', locationId: currentLocationId\(row\) \}\}/);
+  // row's one text field/target (the PORCH-157 consolidation), comment
+  // edits from the row's text.
+  assert.match(card, /initial=\{readDraft\('edit:post'\) \?\? \{ text: row\.text \?\? '', locationId: currentLocationId\(row\) \}\}/);
   assert.match(social, /initialText=\{readDraft\?\.\(`edit:\$\{editTarget\}`\) \?\? editRow\?\.body \?\? ''\}/);
   assert.match(social, /initialText=\{readDraft\(`edit:\$\{editFor\}`\) \?\? editRow\?\.body \?\? ''\}/);
 });
@@ -237,15 +237,15 @@ test("ac-2: the location rows offer the general timeline plus the author's group
 
 test("ac-2: the edit merge re-renders the changed fields in place — copy-on-write, no key change, no slice churn", () => {
   const river = [
-    { _id: "p1", body: "before", caption: "cap", groupId: null, replySlice: [{ _id: "r1", body: "a reply" }], replyTotal: 1 },
-    { _id: "p2", body: "other" },
+    { _id: "p1", text: "before", groupId: null, replySlice: [{ _id: "r1", body: "a reply" }], replyTotal: 1 },
+    { _id: "p2", text: "other" },
   ];
   const next = applyPostEditedRow(river, {
-    postId: "p1", fields: { body: "after", caption: "new cap", groupId: "g1", groupName: "Lake Weekend" },
+    postId: "p1", fields: { text: "after", groupId: "g1", groupName: "Lake Weekend" },
     viewerDid: "did:me", groups: [{ _id: "g1", name: "Lake Weekend", members: ["did:me"] }],
   });
   assert.equal(next.length, river.length, "the edit never reshapes the river");
-  assert.equal(next[0].body, "after");
+  assert.equal(next[0].text, "after");
   assert.equal(next[0].groupName, "Lake Weekend", "the chip context re-renders in place");
   assert.deepEqual(next[0].replySlice, river[0].replySlice, "the conversation slice is untouched");
   assert.equal(next[1], river[1], "unmodified rows return as-is");
@@ -277,7 +277,7 @@ test("ac-2: a location change the viewer loses drops the card in the same merge 
 });
 
 test("ac-2: a failed edit holds the draft and restores the exact pre-action row", () => {
-  const river = [{ _id: "p1", body: "before", caption: "cap" }, { _id: "p2", body: "other" }];
+  const river = [{ _id: "p1", text: "before" }, { _id: "p2", body: "other" }];
   const snapshot = snapshotPostRow(river, "p1", null);
   const optimistic = applyPostEditedRow(river, { postId: "p1", fields: { body: "after" }, viewerDid: null, groups: [] });
   const restored = revertPostEditedRow(optimistic, { postId: "p1", snapshot });
@@ -400,13 +400,12 @@ test("ac-5: the lifecycle event vocabulary rides the closed plane — post and c
   ]);
   const context = { origin: "https://hub", network: "Home", viewerDid: "did:me", viewerGroups: [{ _id: "g1", name: "L", members: ["did:me"] }] };
   // post.updated: the fields merge in place, slice and reactions untouched.
-  const river = [{ _id: "p1", originNetworkId: "net1", body: "before", replySlice: [{ _id: "r1" }], reactionRows: [{ emoji: "🌻" }], replyTotal: 1 }];
+  const river = [{ _id: "p1", originNetworkId: "net1", text: "before", replySlice: [{ _id: "r1" }], reactionRows: [{ emoji: "🌻" }], replyTotal: 1 }];
   const merged = applyEvent(river, {
     type: "post.updated", networkId: "net1", postId: "p1",
-    content: { _id: "p1", body: "after", caption: "fresh", groupId: null, groupName: null },
+    content: { _id: "p1", text: "after", groupId: null, groupName: null },
   }, context);
-  assert.equal(merged[0].body, "after");
-  assert.equal(merged[0].caption, "fresh");
+  assert.equal(merged[0].text, "after");
   assert.equal(merged[0].groupName, null, "no stale chip survives the cleared target");
   assert.deepEqual(merged[0].reactionRows, river[0].reactionRows);
   assert.deepEqual(merged[0].replySlice, river[0].replySlice);

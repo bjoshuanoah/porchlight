@@ -289,7 +289,7 @@ test("device notifications, deployed-hub stage 2: every push route + every send 
       assert.ok([200, 201].includes(res.status), JSON.stringify(res.body));
       return res.body.post;
     };
-    const ownerPostA = await mkPost(ownerToken, ownerPrivJwk, { type: "text", body: "Sunday dinner at six" });
+    const ownerPostA = await mkPost(ownerToken, ownerPrivJwk, { type: "text", text: "Sunday dinner at six" });
     const react = (member, emoji, targetPost) => call(`/posts/${targetPost._id}/reactions`, member.token, {
       payload: { postId: targetPost._id, emoji },
       signature: signPayload(member.priv, { postId: targetPost._id, emoji }),
@@ -314,7 +314,7 @@ test("device notifications, deployed-hub stage 2: every push route + every send 
     // Reaction → the real production sender → the relay ciphertext →
     // content-only plaintext under the device's own keys. Linda's own post
     // makes Linda the reaction target.
-    const lindaPost = await mkPost(memberToken, memberPrivJwk, { type: "text", body: "Lake morning was cold" });
+    const lindaPost = await mkPost(memberToken, memberPrivJwk, { type: "text", text: "Lake morning was cold" });
     const deliveredReact = await runStep("reaction at an enabled pair", react(owner, "🌅", lindaPost));
     assert.ok([200, 201].includes(deliveredReact.status), JSON.stringify(deliveredReact.body));
     const reactionCaptures = captured.filter((c) => c.endpoint === "/push/ok");
@@ -368,8 +368,8 @@ test("device notifications, deployed-hub stage 2: every push route + every send 
     await runStep("owner re-registers (relay /ok)", register(ownerToken, okEndpoint, { p256dh: ownerKeys.p256dh, auth: ownerKeys.auth }));
     await runStep("group post rides the shipped default ON", (async () => {
       const res = await call("/posts", memberToken, {
-        payload: { type: "text", groupId: group._id, body: "Picnic planning" },
-        signature: signPayload(memberPrivJwk, { type: "text", groupId: group._id, body: "Picnic planning" }),
+        payload: { type: "text", groupId: group._id, text: "Picnic planning" },
+        signature: signPayload(memberPrivJwk, { type: "text", groupId: group._id, text: "Picnic planning" }),
       });
       assert.ok([200, 201].includes(res.status), JSON.stringify(res.body));
       // The owner enabled with no per-event write: the absent groupPost
@@ -386,8 +386,8 @@ test("device notifications, deployed-hub stage 2: every push route + every send 
     await runStep("owner toggles groupPost off", call("/push/settings", ownerToken, { enabled: true, events: { groupPost: false } }, "PUT"));
     await runStep("group post at the toggled-off member", (async () => {
       const res = await call("/posts", memberToken, {
-        payload: { type: "text", groupId: group._id, body: "Potluck list" },
-        signature: signPayload(memberPrivJwk, { type: "text", groupId: group._id, body: "Potluck list" }),
+        payload: { type: "text", groupId: group._id, text: "Potluck list" },
+        signature: signPayload(memberPrivJwk, { type: "text", groupId: group._id, text: "Potluck list" }),
       });
       assert.ok([200, 201].includes(res.status), JSON.stringify(res.body));
       assert.equal(captured.filter((c) => c.endpoint === "/push/ok").length, 2, "the explicit OFF produced no further push");

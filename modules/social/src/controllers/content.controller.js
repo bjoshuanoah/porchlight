@@ -138,7 +138,7 @@ export class ContentController {
     );
   };
 
-  /** PUT /posts/:postId — the author's signed text/caption edit (PORCH-093 ac-4). */
+  /** PUT /posts/:postId — the author's signed text edit, one field (PORCH-093 ac-4; PORCH-157 consolidation). */
   editPost = async (req, res) => {
     const { payload, signature } = req.body ?? {};
     return this.#delegate(res, () =>
@@ -270,6 +270,10 @@ export class ContentController {
       E_EDIT_MEDIA_IMMUTABLE: 400,
       E_EDIT_TYPE_IMMUTABLE: 400,
       E_EDIT_EMPTY: 400,
+      // The retired caption/body keys refuse loudly (PORCH-157): a stale
+      // composer's write is a bad request, never hub trouble.
+      E_LEGACY_TEXT_KEY: 400,
+      E_EDIT_LEGACY_TEXT_KEY: 400,
       E_MEDIA_UNCOMMITTED: 422,
     };
     const status = statusByCode[error.code] ?? 500;

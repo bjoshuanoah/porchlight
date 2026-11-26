@@ -43,7 +43,7 @@ test("ac-5: the event vocabulary is closed and logged on unknown types, never gu
 
 const existing = (id, extra = {}) => ({
   _id: id, originNetworkId: "net_family", authorId: "did_cara", authorName: "Cara",
-  type: "text", body: `body ${id}`, createdAt: "2026-10-15T10:00:00Z", ...extra,
+  type: "text", text: `body ${id}`, createdAt: "2026-10-15T10:00:00Z", ...extra,
 });
 const envelope = (type, { postId, content, seq = "1000-1", networkId = "net_family", groupId = null } = {}) => ({
   type, networkId, postId: postId ?? null, groupId, content, createdAt: "2026-10-15T11:00:00Z", seq,

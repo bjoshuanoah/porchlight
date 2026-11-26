@@ -150,7 +150,7 @@ function ViewerSlidePhoto({ post, id, actions, origin, originalUrl, active, zoom
   const box = fit
     ? { width: fit.width, height: fit.height }
     : { maxWidth: '100%', maxHeight: '100%', aspectRatio: stampedAspect(meta) ?? 1.5 };
-  return <Box component="img" key={`viewer-${attempt}`} src={url} alt={post.caption || 'Shared photo'}
+  return <Box component="img" key={`viewer-${attempt}`} src={url} alt={post.text || 'Shared photo'}
     draggable={false}
     onError={() => {
       // The direct slide's failed rendition re-issues through the keyed

@@ -86,7 +86,7 @@ test("PORCH-143 ac-1: one photo, one video, and text create one Post — ordered
   const video = await upload(fx.media, fx.token, fx.dev, await sampleVideoBytes({ seconds: 1 }), "video/mp4");
 
   // Attachment order is exactly what was staged: photo first, video second.
-  const payload = { type: "photo", mediaRefs: [photo, video], caption: "the lake day" };
+  const payload = { type: "photo", mediaRefs: [photo, video], text: "the lake day" };
   const { post } = await createPost(fx, payload);
 
   const stored = await fx.collections.posts.findOne({ _id: post._id });
@@ -124,10 +124,10 @@ test("PORCH-143 ac-1: one photo, one video, and text create one Post — ordered
   assert.equal(created.content.mediaRefs[1], video);
   assertNoBytesOnPayload(created.content);
 
-  // The post.updated envelope (a silent caption edit) carries the same
+  // The post.updated envelope (a silent text edit) carries the same
   // ordered mixed shape — every event consumer sees the one list model.
-  const editPayload = { kind: "post-edit", postId: post._id, networkId: FAMILY, caption: "the lake day, two" };
-  await fx.mod.postService.editPost({ accessToken: fx.token, postId: post._id, payload: { caption: "the lake day, two" }, signature: fx.dev.signPayload(editPayload) });
+  const editPayload = { kind: "post-edit", postId: post._id, networkId: FAMILY, text: "the lake day, two" };
+  await fx.mod.postService.editPost({ accessToken: fx.token, postId: post._id, payload: { text: "the lake day, two" }, signature: fx.dev.signPayload(editPayload) });
   const eventsNow = (await fx.realtimePlane.readSince(FAMILY, null)).events;
   const updated = eventsNow.find((event) => event.type === "post.updated" && event.postId === post._id);
   assert.ok(updated, "post.updated emitted");
@@ -145,7 +145,7 @@ test("PORCH-143 ac-2: a create attempted with an unverified/failed upload refs n
 
   // A reference whose upload never committed: the create refuses whole —
   // no document, and no half-state any read surface could serve.
-  const payload = { type: "photo", mediaRefs: [photo, "med_never_committed"], caption: "half staged" };
+  const payload = { type: "photo", mediaRefs: [photo, "med_never_committed"], text: "half staged" };
   await assert.rejects(
     () => createPost(fx, payload),
     (error) => {
@@ -157,7 +157,7 @@ test("PORCH-143 ac-2: a create attempted with an unverified/failed upload refs n
       return true;
     },
   );
-  assert.equal((await fx.collections.posts.find({ networkId: FAMILY })).filter((row) => row.caption === "half staged").length, 0);
+  assert.equal((await fx.collections.posts.find({ networkId: FAMILY })).filter((row) => row.text === "half staged").length, 0);
   const events = (await fx.realtimePlane.readSince(FAMILY, null)).events;
   assert.equal(events.filter((event) => event.type === "post.created").length, 0, "no post.created for a refused create");
 
@@ -168,12 +168,12 @@ test("PORCH-143 ac-2: a create attempted with an unverified/failed upload refs n
   const { accessToken: otherToken } = await fx.admit({ networkId: "net_other", did: SUSAN, device: otherDev });
   const foreign = await upload(fx.media, otherToken, otherDev, await sampleImageBytes({ seed: 9 }), "image/jpeg");
   await assert.rejects(
-    () => createPost(fx, { type: "photo", mediaRefs: [photo, foreign], caption: "foreign ref" }),
+    () => createPost(fx, { type: "photo", mediaRefs: [photo, foreign], text: "foreign ref" }),
     (error) => error.code === "E_MEDIA_UNCOMMITTED",
   );
   // The committed origin ref still works alone: the mixed path rides the
   // ordinary photo/video path.
-  const { post } = await createPost(fx, { type: "photo", mediaRefs: [photo], caption: "single ref ok" });
+  const { post } = await createPost(fx, { type: "photo", mediaRefs: [photo], text: "single ref ok" });
   assert.ok(post._id.startsWith("post_"));
 });
 
@@ -202,7 +202,7 @@ test("PORCH-143 ac-3: a mixed item over the owner storage ceiling is refused at 
   // Mixed commit at attachment count: no per-post ceiling refuses a mixed
   // draft — the same classes (storage quota, disk guard) count the bytes,
   // never the item count.
-  const { post } = await createPost(fx, { type: "photo", mediaRefs: [photo, video], caption: "under the byte ceiling" });
+  const { post } = await createPost(fx, { type: "photo", mediaRefs: [photo, video], text: "under the byte ceiling" });
   assert.equal((await fx.collections.posts.findOne({ _id: post._id })).type, "photo");
   const view = (await fx.mod.feedService.timeline({ accessToken: fx.token })).posts.find((row) => row._id === post._id);
   assert.equal(view.type, "mixed");
@@ -214,8 +214,8 @@ test("PORCH-143 ac-5: posts created before the change resolve through the same p
   const fx = await mixedFixture();
   const photo = await upload(fx.media, fx.token, fx.dev, await sampleImageBytes({ seed: 31 }), "image/jpeg");
   const video = await upload(fx.media, fx.token, fx.dev, await sampleVideoBytes({ seconds: 1 }), "video/mp4");
-  const photoPost = await createPost(fx, { type: "photo", mediaRefs: [photo], caption: "before" });
-  const videoPost = await createPost(fx, { type: "video", mediaRefs: [video], caption: "before too" });
+  const photoPost = await createPost(fx, { type: "photo", mediaRefs: [photo], text: "before" });
+  const videoPost = await createPost(fx, { type: "video", mediaRefs: [video], text: "before too" });
 
   const timeline = (await fx.mod.feedService.timeline({ accessToken: fx.token })).posts;
   const photoView = timeline.find((row) => row._id === photoPost.post._id);

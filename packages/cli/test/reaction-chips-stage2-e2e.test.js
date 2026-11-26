@@ -163,7 +163,7 @@ test("reaction chips, deployed-hub stage 2: the reaction read/add/remove route f
       body: JSON.stringify({ payload, signature: signNonce(privJwk, canonical(payload)) }),
     });
 
-    const postPayload = { type: "text", body: "the chip post" };
+    const postPayload = { type: "text", text: "the chip post" };
     const post = (await runStep("post created (signed)", (async () => {
       const res = await fetch(`${base}/api/social/posts`, writeHeaders(ownerPrivJwk, ownerToken, postPayload));
       const body = await res.json();

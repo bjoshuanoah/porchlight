@@ -241,7 +241,7 @@ test("member avatar, deployed-hub stage 2: every client route the Profile flow c
         headers: { "content-type": "application/json", authorization: `Bearer ${memberToken}` },
         body: JSON.stringify({ payload: commitDecl, signature: signNonce(memberPrivJwk, canonical(commitDecl)) }),
       })).json();
-      const post = { scope: "post-create", type: "photo", caption: "Aunt Linda at the lake", mediaRefs: [done.mediaId] };
+      const post = { scope: "post-create", type: "photo", text: "Aunt Linda at the lake", mediaRefs: [done.mediaId] };
       const createdPost = await (await fetch(`${base}/api/social/posts`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${memberToken}` },
