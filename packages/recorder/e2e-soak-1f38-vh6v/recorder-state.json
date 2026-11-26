@@ -1,0 +1,44 @@
+{
+  "service": "porchlight-recorder",
+  "pid": 66212,
+  "startedAt": 1795696635321,
+  "uptimeMs": 14183,
+  "storageRoot": "e2e-soak-1f38-vh6v",
+  "segmentSeconds": 10,
+  "retentionDays": 7,
+  "health": "degraded",
+  "stopping": true,
+  "cameras": [
+    {
+      "camera": "soak-a",
+      "state": "stopped",
+      "pid": null,
+      "restarts": 0,
+      "startedAt": 1795696635323,
+      "currentSegment": null,
+      "lastExit": {
+        "code": 255,
+        "signal": null,
+        "at": 1795696649476,
+        "stderrTail": "[h264_videotoolbox @ 0x799d025180] Color range not set for nv12. Using MPEG range.\n"
+      },
+      "audioMode": "transcode"
+    },
+    {
+      "camera": "soak-b",
+      "state": "stopped",
+      "pid": null,
+      "restarts": 0,
+      "startedAt": 1795696635325,
+      "currentSegment": null,
+      "lastExit": {
+        "code": 255,
+        "signal": null,
+        "at": 1795696649499,
+        "stderrTail": ""
+      },
+      "audioMode": "transcode"
+    }
+  ],
+  "events": []
+}
