@@ -28,6 +28,10 @@ const KNOWN_INPUT_KEYS = [
 	"ffprobePath",
 	"statusPort",
 	"statusHost",
+	"failoverRoot",
+	"eventRetentionDays",
+	"retentionRules",
+	"busUrl",
 ];
 
 /**

@@ -23,11 +23,15 @@
 	},
 	"dependencies": {
 		"@porchlight/hal": "0.5.3",
-		"yaml": "^2.9.1"
+		"yaml": "^2.9.1",
+		"mqtt": "^5.16.1"
 	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
 		"directory": "packages/recorder"
+	},
+	"devDependencies": {
+		"aedes": "^1.2.0"
 	}
 }

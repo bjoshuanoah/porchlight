@@ -41,6 +41,35 @@ export function validateConfig(cfg) {
 			throw new Error("config.highWaterFraction: must be a fraction between 0 and 1");
 		}
 	}
+	if (cfg.failoverRoot !== undefined) {
+		if (typeof cfg.failoverRoot !== "string" || !cfg.failoverRoot.startsWith("/")) {
+			throw new Error("config.failoverRoot: must be an absolute path (or omit it)");
+		}
+	}
+	if (cfg.eventRetentionDays !== undefined) intField(cfg, "eventRetentionDays", 1, Infinity);
+	if (cfg.healthProbeMs !== undefined) intField(cfg, "healthProbeMs", 1000, Infinity);
+	if (cfg.busUrl !== undefined && (typeof cfg.busUrl !== "string" || !cfg.busUrl)) {
+		throw new Error("config.busUrl: must be a non-empty MQTT URL");
+	}
+	if (cfg.retentionRules !== undefined) {
+		if (!Array.isArray(cfg.retentionRules)) throw new Error("config.retentionRules: must be an array");
+		cfg.retentionRules.forEach((rule, i) => {
+			if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
+				throw new Error(`config.retentionRules[${i}]: expected an object`);
+			}
+			for (const key of ["cameraId", "eventClass", "zoneId"]) {
+				if (rule[key] !== undefined && (typeof rule[key] !== "string" || !CAMERA_NAME_RE.test(rule[key]))) {
+					throw new Error(`config.retentionRules[${i}].${key}: invalid identifier ${JSON.stringify(rule[key])}`);
+				}
+			}
+			if (rule.cameraId === undefined && rule.eventClass === undefined && rule.zoneId === undefined) {
+				throw new Error(`config.retentionRules[${i}]: needs at least one scope key (cameraId, eventClass, zoneId)`);
+			}
+			if (!Number.isInteger(rule.keepDays) || rule.keepDays < 1) {
+				throw new Error(`config.retentionRules[${i}].keepDays: must be an integer >= 1`);
+			}
+		});
+	}
 	if (!Array.isArray(cfg.cameras)) {
 		throw new Error("config.cameras: required array");
 	}
@@ -66,6 +95,14 @@ export function validateConfig(cfg) {
 		if (c.audioMode !== undefined && c.audioMode !== "transcode" && c.audioMode !== "copy") {
 			throw new Error(`config.cameras[${c.name}].audioMode: must be "transcode" or "copy"`);
 		}
+		if (c.recordingMode !== undefined && c.recordingMode !== "continuous" && c.recordingMode !== "event") {
+			throw new Error(`config.cameras[${c.name}].recordingMode: must be "continuous" or "event"`);
+		}
+		for (const key of ["preRollSeconds", "postRollSeconds"]) {
+			if (c[key] !== undefined && (!Number.isInteger(c[key]) || c[key] < 0 || c[key] > 86400)) {
+				throw new Error(`config.cameras[${c.name}].${key}: must be an integer in [0, 86400]`);
+			}
+		}
 	}
 	return cfg;
 }
@@ -88,6 +125,8 @@ export function resolveDefaults(cfg) {
 		segmentSeconds: cfg.segmentSeconds ?? 600,
 		retentionDays: cfg.retentionDays ?? 7,
 		highWaterFraction: cfg.highWaterFraction ?? 0.9,
+		eventRetentionDays: cfg.eventRetentionDays ?? 30,
+		healthProbeMs: cfg.healthProbeMs ?? 30000,
 		port: cfg.port ?? 8971,
 		statePath: cfg.statePath ?? `${cfg.storageRoot}/recorder-state.json`,
 		ffmpegPath: cfg.ffmpegPath ?? "ffmpeg",

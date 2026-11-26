@@ -17,6 +17,7 @@ export const DOC_NAMES = Object.freeze([
 	"profiles",
 	"base",
 	"active-profile",
+	"storage",
 ]);
 
 /** The console document directory for a Porchlight root. */
@@ -31,6 +32,7 @@ export class Store {
 	 */
 	constructor(root, opts = {}) {
 		this.fs = opts.fs ?? fsDefault;
+		this.root = root;
 		this.dir = consoleDirFor(root);
 		/** @type {Map<string, object>} parsed docs by name, loaded lazily */
 		this.cache = new Map();

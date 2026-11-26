@@ -84,7 +84,38 @@ export function createApi(baseUrl = "") {
 
     // Scheduler control
     tickScheduler: (now) => request("/api/config/tick", { method: "POST", body: { now } }),
+
+    // Storage backend (PORCH-136): status, first-run configuration, the
+    // location probe, and the manual failback a degraded write demands.
+    getStorage: () => request("/api/storage"),
+    configureStorage: (storage) => request("/api/storage", { method: "PUT", body: storage }),
+    testStorageLocation: (location) => request("/api/storage/test", { method: "POST", body: { location } }),
+    storageFailback: () => failSafe(() => request("/api/storage/failback", { method: "POST" })),
+
+    // Retention rules: which recordings outlive the rolling window.
+    listStorageRules: () => request("/api/storage/rules"),
+    addStorageRule: (rule) => request("/api/storage/rules", { method: "POST", body: rule }),
+    updateStorageRule: (ruleId, rule) => request(`/api/storage/rules/${encodeURIComponent(ruleId)}`, { method: "PUT", body: rule }),
+    deleteStorageRule: (ruleId) => request(`/api/storage/rules/${encodeURIComponent(ruleId)}`, { method: "DELETE" }),
+
+    // Manual recording (PORCH-136 ac-3): a 200 body passes through as-is,
+    // including a { ok: false, reason } refusal the recorder itself sent.
+    // A refused request (409/422) still throws ApiError so the server's
+    // plain-language error surfaces verbatim; a fetch that never reaches
+    // the service resolves to { ok: false, reason } instead of throwing,
+    // so the console always has something plain-language to show.
+    manualRecord: (cameraId, action) =>
+      failSafe(() => request(`/api/cameras/${encodeURIComponent(cameraId)}/record/${action === "stop" ? "stop" : "start"}`, { method: "POST" })),
   };
+
+  async function failSafe(call) {
+    try {
+      return await call();
+    } catch (failure) {
+      if (failure instanceof ApiError) throw failure;
+      return { ok: false, reason: failure.message };
+    }
+  }
 }
 
 export const api = createApi();

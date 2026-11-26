@@ -4,6 +4,7 @@
 // create/activate, and the knob layer inspector.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -252,4 +253,179 @@ test("profile activation persists in the store (a fresh service resumes state)",
     await relaunched.close();
   }
   await api.deleteProfile(revived.id);
+});
+
+// Storage & recording wrappers (PORCH-136): the recorder-side endpoints
+// live behind a stub service that records every request it receives, so
+// the wrapper contract — methods, paths, bodies, and error propagation —
+// is pinned independently of the live config service below.
+const STORAGE_DOC = {
+  state: "degraded-write",
+  configured: true,
+  activeLocation: "/media/failover",
+  primary: "/media/porchlight",
+  failover: "/media/failover",
+  reason: "The primary location has not answered writes in 30 seconds.",
+  driveHealthy: true,
+  paused: false,
+  usage: {
+    tiers: { rolling: { segments: 12, bytes: 1536000 }, events: { segments: 4, bytes: 512000 }, manual: { segments: 1, bytes: 1024 } },
+    diskUsedFraction: 0.63,
+  },
+  source: "recorder",
+};
+
+const STORAGE_RULES = [
+  { id: "rule-1", eventClass: "person", keepDays: 30 },
+  { id: "rule-2", cameraId: "cam-9", keepDays: 14 },
+];
+
+let stub;
+let stubRequests;
+let stubApi;
+
+before(async () => {
+  stubRequests = [];
+  const json = (res, status, payload) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(payload));
+  };
+  stub = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      let body = null;
+      try {
+        body = raw ? JSON.parse(raw) : null;
+      } catch {
+        body = raw;
+      }
+      stubRequests.push({ method: req.method, url: req.url, body });
+      const { method, url } = req;
+
+      if (method === "GET" && url === "/api/storage") return json(res, 200, STORAGE_DOC);
+      if (method === "PUT" && url === "/api/storage") {
+        if (body?.primary === "/media/nope") return json(res, 422, { error: "The primary location /media/nope does not exist yet." });
+        return json(res, 201, { ...STORAGE_DOC, state: "primary", primary: body?.primary });
+      }
+      if (method === "POST" && url === "/api/storage/test") {
+        if (!body?.location) return json(res, 422, { error: "Enter a location to test." });
+        return json(res, 200, { ok: true, location: body.location });
+      }
+      if (method === "POST" && url === "/api/storage/failback") {
+        return json(res, 409, { error: "Recordings cannot switch back while the primary location is still not responding." });
+      }
+      if (method === "GET" && url === "/api/storage/rules") return json(res, 200, STORAGE_RULES);
+      if (method === "POST" && url === "/api/storage/rules") {
+        if (!body?.keepDays) return json(res, 422, { error: "Keep-days must be a positive number of days." });
+        return json(res, 201, { id: "rule-3", ...body });
+      }
+      if (method === "PUT" && url === "/api/storage/rules/rule-1") return json(res, 200, { id: "rule-1", ...body });
+      if (method === "DELETE" && url === "/api/storage/rules/rule-1") return json(res, 200, { ok: true });
+      if (method === "DELETE" && url === "/api/storage/rules/rule-gone") return json(res, 404, { error: "That retention rule is already gone." });
+      if (method === "POST" && url === "/api/cameras/cam-9/record/start") return json(res, 200, { ok: true, cameraId: "cam-9", mode: "manual" });
+      if (method === "POST" && url === "/api/cameras/cam-9/record/stop") return json(res, 200, { ok: false, reason: "The camera was not recording, so there is nothing to stop." });
+      return json(res, 404, { error: `No handler for ${method} ${url}` });
+    });
+  });
+  await new Promise((resolve) => stub.listen(0, "127.0.0.1", resolve));
+  stubApi = createApi(`http://127.0.0.1:${stub.address().port}`);
+});
+
+after(async () => {
+  await new Promise((resolve) => stub.close(resolve));
+});
+
+test("storage status passes through and configuration round-trips (422s keep the server's words)", async () => {
+  const doc = await stubApi.getStorage();
+  assert.deepEqual(doc, STORAGE_DOC);
+
+  const created = await stubApi.configureStorage({ primary: "/media/new", failover: "/media/spare", eventRetentionDays: 14 });
+  assert.equal(created.state, "primary");
+  assert.equal(created.primary, "/media/new");
+
+  const put = stubRequests.find((entry) => entry.method === "PUT" && entry.url === "/api/storage");
+  assert.ok(put, "configuration reached the service");
+  assert.deepEqual(put.body, { primary: "/media/new", failover: "/media/spare", eventRetentionDays: 14 });
+
+  await assert.rejects(
+    () => stubApi.configureStorage({ primary: "/media/nope" }),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 422 &&
+      error.message === "The primary location /media/nope does not exist yet.",
+  );
+});
+
+test("storage location test reports ok and refuses a missing location with a 422", async () => {
+  const checked = await stubApi.testStorageLocation("/media/new");
+  assert.deepEqual(checked, { ok: true, location: "/media/new" });
+
+  await assert.rejects(
+    () => stubApi.testStorageLocation(""),
+    (error) => error instanceof ApiError && error.status === 422 && error.message === "Enter a location to test.",
+  );
+});
+
+test("failback surfaces a recorder refusal as a 409 ApiError", async () => {
+  await assert.rejects(
+    () => stubApi.storageFailback(),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 409 &&
+      error.message === "Recordings cannot switch back while the primary location is still not responding.",
+  );
+  assert.ok(stubRequests.some((entry) => entry.method === "POST" && entry.url === "/api/storage/failback"));
+});
+
+test("retention rules list, add, update, and delete through the wrappers", async () => {
+  const listed = await stubApi.listStorageRules();
+  assert.equal(listed.length, 2);
+  assert.ok(listed.some((rule) => rule.id === "rule-1" && rule.eventClass === "person"));
+
+  const added = await stubApi.addStorageRule({ cameraId: "cam-9", keepDays: 7 });
+  assert.equal(added.id, "rule-3");
+  assert.equal(added.keepDays, 7);
+  const post = stubRequests.find((entry) => entry.method === "POST" && entry.url === "/api/storage/rules");
+  assert.deepEqual(post.body, { cameraId: "cam-9", keepDays: 7 });
+
+  const updated = await stubApi.updateStorageRule("rule-1", { eventClass: "vehicle", keepDays: 60 });
+  assert.equal(updated.keepDays, 60);
+  const put = stubRequests.find((entry) => entry.method === "PUT" && entry.url === "/api/storage/rules/rule-1");
+  assert.deepEqual(put.body, { eventClass: "vehicle", keepDays: 60 });
+
+  await stubApi.deleteStorageRule("rule-1");
+  assert.ok(stubRequests.some((entry) => entry.method === "DELETE" && entry.url === "/api/storage/rules/rule-1"));
+
+  // An already-gone rule keeps the server's plain-language error.
+  await assert.rejects(
+    () => stubApi.deleteStorageRule("rule-gone"),
+    (error) => error instanceof ApiError && error.status === 404 && error.message === "That retention rule is already gone.",
+  );
+
+  await assert.rejects(
+    () => stubApi.addStorageRule({ keepDays: 0 }),
+    (error) => error instanceof ApiError && error.status === 422 && error.message === "Keep-days must be a positive number of days.",
+  );
+});
+
+test("manual record start/stop send recorder requests and pass refusal bodies through", async () => {
+  const started = await stubApi.manualRecord("cam-9", "start");
+  assert.deepEqual(started, { ok: true, cameraId: "cam-9", mode: "manual" });
+  assert.ok(stubRequests.some((entry) => entry.method === "POST" && entry.url === "/api/cameras/cam-9/record/start"));
+
+  // The recorder's own { ok: false, reason } refusal is the return value,
+  // not an exception — the console shows the reason verbatim.
+  const refused = await stubApi.manualRecord("cam-9", "stop");
+  assert.deepEqual(refused, { ok: false, reason: "The camera was not recording, so there is nothing to stop." });
+  assert.ok(stubRequests.some((entry) => entry.method === "POST" && entry.url === "/api/cameras/cam-9/record/stop"));
+});
+
+test("a fetch that never reaches the recorder resolves to { ok: false, reason }", async () => {
+  const deadApi = createApi("http://127.0.0.1:1"); // nothing listens on port 1
+  const failed = await deadApi.manualRecord("cam-9", "start");
+  assert.equal(failed.ok, false);
+  assert.ok(failed.reason, "a plain-language reason comes back for the console to show");
 });
