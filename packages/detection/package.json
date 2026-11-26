@@ -1,0 +1,34 @@
+{
+	"name": "@porchlight/detection",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight engine detection service — the pluggable InferenceProvider seam (PORCH-128): CoreML EP onnxruntime provider, Swift Vision helper provider, ByteTrack-style tracking, and normalized DetectedObject MQTT publishing.",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"scripts": {
+		"test": "node --test 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'detection ships plain JS (no build)'",
+		"soak": "node soak/run-detect.mjs"
+	},
+	"dependencies": {
+		"mqtt": "^5.16.1",
+		"onnxruntime-node": "^1.31.1"
+	},
+	"devDependencies": {
+		"aedes": "^1.2.0"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/detection"
+	}
+}
