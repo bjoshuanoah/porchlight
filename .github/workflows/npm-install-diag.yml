@@ -1,0 +1,35 @@
+name: npm-install-diag
+
+# TEMPORARY diagnostic (PORCH-158 session): the npm-publish verify-install
+# legs swallow npm output (>/dev/null 2>&1) while every attempt returns
+# "got version none" even with the registry fully propagated. This
+# workflow re-runs the exact commands with output visible on the same
+# runner OSes to capture the real npm error. Remove after diagnosis.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    name: visible registry install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Env
+        run: |
+          node --version
+          npm --version
+          npm config list
+      - name: Install global (visible output)
+        run: npm install -g "porchlight@0.5.3"
+      - name: Binary run
+        run: |
+          which porchlight || echo "no porchlight on PATH"
+          npm ls -g --depth=0 || true
+          porchlight --version
