@@ -3,7 +3,8 @@ import * as http from "node:http";
 import type { Server as SocketIOServer } from "socket.io";
 import type { ExpressWithRealtime } from "./router.js";
 import { connectDependencies, type Dependencies } from "./dependencies.js";
-import { mongoStore } from "./store-adapter.js";
+import { mongoStore, mongoMigrationStore } from "./store-adapter.js";
+import { parseMigrationCliArgs, runHubMigrations, runtimeReleaseVersion } from "./services/migration.service.js";
 import { createServer } from "./router.js";
 import { attachRealtimeGateway } from "./realtime-gateway.js";
 import { createRedisEventPlane } from "./services/event-plane.redis.js";
@@ -34,6 +35,18 @@ export async function bootServer(): Promise<BootResult> {
     );
   }
   const deps = await connectDependencies(config);
+  // PORCH-156: the versioned data migrations complete BEFORE the hub accepts
+  // traffic. The pending set runs here, once-only per hub: a failed step
+  // refuses the whole boot with plain-language diagnostics naming the
+  // failing step (start() exits 1; the supervisor respawns with backoff —
+  // the hub never serves half-migrated data), and each completed step is
+  // recorded with its outcome counts in the hub's migration ledger, so an
+  // interrupted set resumes exactly at the incomplete step on the next boot.
+  await runHubMigrations({
+    store: mongoMigrationStore(deps.db),
+    release: runtimeReleaseVersion(),
+    log: (line) => process.stdout.write(`${line}\n`),
+  });
   const store = mongoStore(deps.db);
   const bootstrap = new BootstrapService(store, config, home.root);
   // PORCH-047: the Redis-backed real-time event plane — fan-out rides the
@@ -124,6 +137,42 @@ export default start;
 // Entry detection: the supervisor spawns this file with `--serve`; imports
 // from tests and the CLI never trigger a listener. (Symlinked workspace
 // installs break import.meta.url comparisons, so the flag is explicit.)
-if (process.argv.includes("--serve")) {
+// PORCH-156: the update-time migration phase spawns this file with
+// `--migrate` — it runs the pending versioned set against this hub's own
+// data and exits 0 (complete, outcome counts on stdout) or 1 (the
+// incomplete set, the failing step named in plain language on stderr).
+// It is never a server: no listener is ever created in this mode.
+if (process.argv.includes("--migrate")) {
+  void migrateOnly();
+} else if (process.argv.includes("--serve")) {
   void start();
+}
+
+/** The migration-only mode of record: run the pending set, exit. */
+async function migrateOnly(): Promise<void> {
+  try {
+    const home = homePaths(process.env);
+    const config = loadConfig(home.root);
+    if (!config) {
+      throw new Error("No porchlight runtime config at " + home.root + " — the migration runner only runs inside an installed hub.");
+    }
+    const deps = await connectDependencies(config);
+    try {
+      const options = parseMigrationCliArgs(process.argv);
+      const outcome = await runHubMigrations({
+        store: mongoMigrationStore(deps.db),
+        release: runtimeReleaseVersion(),
+        log: (line) => process.stdout.write(`${line}\n`),
+        options,
+      });
+      process.stdout.write(`migration done: applied ${outcome.applied.length} step(s)\n`);
+    } finally {
+      await deps.redis.quit().catch(() => {});
+    }
+    await deps.db.client.close().catch(() => {});
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`porchlight hub data migration failed: ${(error as Error).message}\n`);
+    process.exit(1);
+  }
 }
