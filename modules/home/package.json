@@ -1,0 +1,34 @@
+{
+  "name": "@porchlight/home",
+  "version": "0.5.3",
+  "description": "Porchlight Home domain: homes, rooms and outdoor areas, everyday device controls, scenes, simple automations, and the home audit trail (PORCH-137).",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./models": "./src/models.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "echo 'home ships plain JS (no build)'",
+    "test": "node --test 'test/**/*.test.js'",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@porchlight/shared": "0.5.3",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjoshuanoah/porchlight.git"
+  }
+}

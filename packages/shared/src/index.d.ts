@@ -10,6 +10,8 @@ export interface PorchlightConfig {
     deploymentMode: "self-hosted" | "hosted" | "identity-only";
     identityServingEnabled: boolean;
     socialServingEnabled: boolean;
+    /** PORCH-137: the home module's serving toggle (default on). */
+    homeServingEnabled: boolean;
   };
   hub: {
     host: string;

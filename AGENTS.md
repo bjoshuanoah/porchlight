@@ -24,7 +24,8 @@ porchlight/
 │   └── web/        # Static SPA shell placeholder — @porchlight/web (private)
 ├── modules/
 │   ├── identity/   # Identity domain: routes → controllers → services → models — @porchlight/identity (public)
-│   └── social/     # Social domain: routes → controllers → services → models — @porchlight/social (public)
+│   ├── social/     # Social domain: routes → controllers → services → models — @porchlight/social (public)
+│   └── home/       # Home domain: homes, rooms/outdoor areas, device command lifecycle, scenes, automations, home audit — @porchlight/home (public) (PORCH-137)
 ├── packages/
 │   ├── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)
 │   ├── hal/        # Platform HAL: the thin native integration layer (VideoToolbox/CoreML/Vision on macOS, Linux first cut) — @porchlight/hal (private); the only package allowed to touch OS frameworks (PORCH-132)
@@ -40,9 +41,10 @@ porchlight/
 
 Every domain module owns its complete route → controller → service → model path. Endpoints are traceable to exactly one owning module:
 
-- `apps/server` routes/controllers call into `@porchlight/identity` and `@porchlight/social`; it performs no domain logic. It is published (`@porchlight/server`) because the global `porchlight` CLI carries the hub runtime as its install-closure dependency (PORCH-003: `npm install -g porchlight` must be dependency-complete); the CLI spawns it as the hub child process and imports no domain code.
+- `apps/server` routes/controllers call into `@porchlight/identity`, `@porchlight/social`, and `@porchlight/home`; it performs no domain logic. It is published (`@porchlight/server`) because the global `porchlight` CLI carries the hub runtime as its install-closure dependency (PORCH-003: `npm install -g porchlight` must be dependency-complete); the CLI spawns it as the hub child process and imports no domain code.
 - `@porchlight/identity` owns all identity models and identity-only service logic.
 - `@porchlight/social` owns all social models and social-only service logic.
+- `@porchlight/home` owns all home models and home-only service logic (homes, areas, devices/scenes/automations, the home audit trail, and the device adapter seam); identity is referenced only through injected callbacks, and the engine (PORCH-I-009) stays a separate service boundary.
 - `@porchlight/shared` owns no domain models — only cross-domain-agnostic helpers.
 - `packages/cli` (`porchlight`) is the global install surface and entrypoint — the one-command bring-up owner (`setup`/`start`/`stop`/`status`/`bootstrap`/`service`): it manages daemon processes (installer-managed Mongo + Redis binaries), the tunnel, launchd/systemd supervision, and drives bootstrap over HTTP. It performs no domain logic and imports no domain models (domain behavior lives in the hub server's module services).
 - `apps/web` is a static shell; no server-side imports.
@@ -75,7 +77,7 @@ route (REST/MCP surface)
 
 1. a cross-module import (a module reaching into another module's source tree);
 2. a module importing another module's models (identity/social share zero models); or
-3. a model shared between the identity and social domains.
+3. a model shared between the identity, social, and home domains.
 
 This check runs in CI on every push and pull request (`.github/workflows/ci.yml`).
 

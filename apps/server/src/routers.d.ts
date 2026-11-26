@@ -36,6 +36,8 @@ declare module "@porchlight/identity" {
     authService: {
       /** Opaque-token session verification (identity plane, DID resolution). */
       verifyAccessToken(token: string): Promise<{ did: string; sessionId: unknown } | null>;
+      /** The (did, deviceId) pair the session's own device resolves to — the pair a member-issued home write signature verifies against (PORCH-137). */
+      verifyAccessTokenWithDevice(token: string | null): Promise<{ did: string; sessionId: unknown; deviceId?: string } | null>;
       /** Active device registration row for (did, deviceId) — the possession-proven public key. */
       activeDeviceRegistration(did: string, deviceId: string): Promise<{ deviceId: string; did: string; publicKeyJwk: Record<string, unknown>; [key: string]: unknown } | null>;
     };
@@ -306,4 +308,30 @@ declare module "@porchlight/social" {
       events: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean;
     }>;
   }
+}
+declare module "@porchlight/home" {
+  export interface HomeModule {
+    api: import("express").Router;
+    homeService: unknown;
+    areaService: unknown;
+    deviceService: unknown;
+    sceneService: unknown;
+    automationService: unknown;
+    auditService: unknown;
+    adapters: unknown;
+  }
+  export function assembleHomeModule(
+    store: { collection(name: string): unknown },
+    options?: {
+      /** The identity-plane access-token verifier (with its own device). */
+      verifySession: (token: string | null) => Promise<{ did: string; deviceId?: string } | null>;
+      /** The possession-proven device key behind member-signed writes. */
+      registeredDeviceKey?: ((did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null>) | null;
+      /** Hub installation org of record, stamped on homes. */
+      orgId?: (() => string | null) | null;
+      /** Auth-failure capture sink (PORCH-019 shape). */
+      log?: ((line: string) => void) | null;
+    },
+  ): HomeModule;
+  export function createHomeRouter(controllers: unknown): import("express").Router;
 }

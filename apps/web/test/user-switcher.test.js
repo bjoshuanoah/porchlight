@@ -117,9 +117,10 @@ test("ac-4: chrome discipline and copy audit hold", () => {
   // audit.test.js runs that script against the live tree.
 
   // The Profile destination renders as Settings: labels, routes, page
-  // branch, and the retired Profile labels swept member-facing.
-  assert.match(mainSource, /const primary = \["\/timeline", "\/groups", "\/compose", "\/settings"\];/);
-  assert.match(mainSource, /const labels = \["Timeline", "Groups", "Compose", "Settings"\];/);
+  // branch, and the retired Profile labels swept member-facing. PORCH-137
+  // prepends the Home tab, so the pinned nav arrays now hold five entries.
+  assert.match(mainSource, /const primary = \["\/home", "\/timeline", "\/groups", "\/compose", "\/settings"\];/);
+  assert.match(mainSource, /const labels = \["Home", "Timeline", "Groups", "Compose", "Settings"\];/);
   assert.match(mainSource, /route === "\/settings"\) page = <Settings/);
   // Stale /profile deep links land on the renamed destination.
   assert.match(mainSource, /next === "\/profile" \? "\/settings" : next/);

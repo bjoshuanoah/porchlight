@@ -1,0 +1,178 @@
+/**
+ * Home-owned models (PORCH-137, PRD 1 / TS 1 of the Porchlight Home initiative).
+ * These types are owned by the home domain only. identity and social MUST NOT
+ * import this file; identity, social, and home share zero models.
+ *
+ * Property-agnostic law (Brian, Nov 24 2026): one installation manages one
+ * home or fifteen. Nothing here is built to a specific property, home count,
+ * or device fleet — home count and fleet shape are deployment inputs.
+ */
+export const homeModels = {
+  /**
+   * Home. One document per home under one hub installation; orgId is the
+   * hub installation's org of record (injected at assembly; null when the
+   * hub carries none). Enforcement never keys on it — home scope resolves
+   * through home memberships and grants.
+   */
+  home: {
+    type: "object",
+    required: ["_id", "name", "createdBy", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      /** Hub installation org of record; null when unwired. */
+      orgId: { type: ["string", "null"] },
+      /** Any household-chosen label. */
+      name: { type: "string" },
+      /** Identity reference (member DID) of the creator. */
+      createdBy: { type: "string" },
+      deviceSignature: { type: "string" },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Home membership. The enforcement base for V1 access: a caller is a home
+   * member (owner | member) or they hold a live grant (later access task).
+   * Owner is the creator; added members ride exactly their membership.
+   */
+  homeMember: {
+    type: "object",
+    required: ["_id", "homeId", "did", "role", "addedBy", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      did: { type: "string" },
+      role: { type: "string", enum: ["owner", "member"] },
+      addedBy: { type: "string" },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Area. Rooms and outdoor areas are ONE collection so the family app
+   * renders one grouping surface; outdoor areas carry kind "outdoor".
+   */
+  area: {
+    type: "object",
+    required: ["_id", "homeId", "kind", "name", "order", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      /** room | outdoor. */
+      kind: { type: "string", enum: ["room", "outdoor"] },
+      /** Driveway, walkway, porch class labels. */
+      name: { type: "string" },
+      /** Display ordering within the home's grouping surface. */
+      order: { type: "integer" },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Device. The adapter binding (Matter node id, native adapter reference)
+   * resolves through the device adapter seam; the capability list drives
+   * the control surface. Read-back from the device is the state of record.
+   */
+  device: {
+    type: "object",
+    required: ["_id", "homeId", "areaId", "name", "capabilities", "adapter", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      areaId: { type: "string" },
+      name: { type: "string" },
+      /** capability list drives the control surface: switch | light | thermostat | lock. */
+      capabilities: { type: "array", items: { type: "string" } },
+      /** { name, binding } — resolves through the device adapter seam. */
+      adapter: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name: { type: "string" },
+          binding: { type: ["string", "object", "null"] },
+        },
+      },
+      /** Last READ-BACK state of record — never an optimistic flip. */
+      lastKnownState: { type: ["object", "null"] },
+      /** When lastKnownState was confirmed from the device. */
+      stateConfirmedAt: { type: ["string", "null"] },
+      lastCommandAt: { type: ["string", "null"] },
+      /** confirmed | failed — the last command's outcome of record. */
+      lastCommandResult: { type: ["string", "null"] },
+      /**
+       * Unreachable marker { at, reason }: the device's last-known state is
+       * stale while set; commands fail fast with the same explanation.
+       */
+      unreachable: {
+        type: ["object", "null"],
+        properties: { at: { type: "string" }, reason: { type: "string" } },
+      },
+      createdBy: { type: "string" },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Scene. One home, one ordered action list; run executes each action
+   * through the confirmed-state command path (per-action outcomes).
+   */
+  scene: {
+    type: "object",
+    required: ["_id", "homeId", "name", "actions", "createdBy", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      name: { type: "string" },
+      /** [{ deviceId, command }] — devices validated into the same home. */
+      actions: { type: "array", items: { type: "object" } },
+      createdBy: { type: "string" },
+      deviceSignature: { type: "string" },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Automation rule. Event-driven (bus subscription), never polling.
+   * Conditions resolve from hub-local state; a time window of absolute
+   * clock times always evaluates locally, afterDark only when a sunset
+   * provider is wired (computed locally, never a WAN call).
+   */
+  automation: {
+    type: "object",
+    required: ["_id", "homeId", "name", "trigger", "actions", "enabled", "createdAt"],
+    properties: {
+      _id: { type: "string" },
+      homeId: { type: "string" },
+      name: { type: "string" },
+      /** { eventClass, areaId?, timeWindow? { afterDark?, from?, to? } } */
+      trigger: { type: "object" },
+      /** [{ deviceId, command }] — devices validated into the same home. */
+      actions: { type: "array", items: { type: "object" } },
+      enabled: { type: "boolean" },
+      lastFiredAt: { type: ["string", "null"] },
+      createdBy: { type: "string" },
+      deviceSignature: { type: "string" },
+      createdAt: { type: "string" },
+    },
+  },
+  /**
+   * Home audit. Append-only, one row per mutation: who, which home, which
+   * device, when, what outcome. state-source-change rows carry the source
+   * (physical | read-back) in detail so "changed by command" is
+   * distinguishable from "changed at the switch".
+   */
+  homeAudit: {
+    type: "object",
+    required: ["_id", "type", "actorIdentityRef", "homeId", "detail", "outcome", "at"],
+    properties: {
+      _id: { type: "string" },
+      /** command | grant | revoke | family-distribute | automation-fire | state-source-change. */
+      type: { type: "string" },
+      /** Actor of record: a member DID, or an automation ref for rule-issued actions. */
+      actorIdentityRef: { type: ["string", "null"] },
+      homeId: { type: "string" },
+      deviceId: { type: ["string", "null"] },
+      detail: { type: "object" },
+      /** confirmed | failed | denied. */
+      outcome: { type: "string", enum: ["confirmed", "failed", "denied"] },
+      at: { type: "string" },
+      /** The member's device signature, present only on member-issued writes. */
+      deviceSignature: { type: ["string", "null"] },
+    },
+  },
+};

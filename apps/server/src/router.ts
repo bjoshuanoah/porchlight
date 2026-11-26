@@ -9,6 +9,7 @@ import { createFrontDoorRouter } from "./routes/frontdoor.routes.js";
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule, treatAvatar } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
+import { assembleHomeModule } from "@porchlight/home";
 import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
@@ -181,6 +182,7 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
   let identityModule: ReturnType<typeof assembleIdentityModule> | null = null;
   let identityAuth: {
     verifyAccessToken: (token: string) => Promise<{ did: string; sessionId: unknown } | null>;
+    verifyAccessTokenWithDevice: (token: string | null) => Promise<{ did: string; sessionId: unknown; deviceId?: string } | null>;
     activeDeviceRegistration: (did: string, deviceId: string) => Promise<{ publicKeyJwk: Record<string, unknown>; [key: string]: unknown } | null>;
   } | null = null;
   let socialModule: ReturnType<typeof assembleSocialModule> | null = null;
@@ -275,6 +277,9 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     wellKnown = identity.wellKnown;
     identityAuth = {
       verifyAccessToken: (token: string) => identity.authService.verifyAccessToken(token),
+      // The session's own device (did, deviceId) — the pair a member-issued
+      // home write signature verifies against (PORCH-137).
+      verifyAccessTokenWithDevice: (token: string | null) => identity.authService.verifyAccessTokenWithDevice(token ?? ""),
       // The possession-proven device key (identity plane) — the social
       // founder binding copies it for write verification (PORCH-018).
       activeDeviceRegistration: (did: string, deviceId: string) => identity.authService.activeDeviceRegistration(did, deviceId),
@@ -393,6 +398,21 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     // and its readiness state (ready / volume not ready) — late-bound to
     // the social module's volume status, never a stale copy.
     hub.setMediaStatus(() => socialModule!.mediaVolume.status());
+  }
+  if (options.store && options.config.mode.homeServingEnabled && identityAuth) {
+    // PORCH-137: the home module assembles after identity on the same
+    // injected-callback boundary — the device-bound identity plane is the
+    // only auth surface (no new passwords, emails, or vendor auth), and the
+    // hub side enforces home scope on every read and command. The bus
+    // subscription seam rides the module's onDeviceEvent injection; the
+    // engine's detection/entity events feed automations from there.
+    const homeModule = assembleHomeModule(options.store, {
+      verifySession: (token: string | null) => identityAuth!.verifyAccessTokenWithDevice(token ?? ""),
+      registeredDeviceKey: (did: string, deviceId: string) => identityAuth!.activeDeviceRegistration(did, deviceId),
+      orgId: () => null,
+      log: options.log ?? null,
+    });
+    router.use("/home", homeModule.api);
   }
   if (identityModule && socialModule) {
     // PORCH-065: the owner re-auth orchestration — the system-vertical
