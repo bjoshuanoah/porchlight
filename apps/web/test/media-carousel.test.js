@@ -89,7 +89,7 @@ test('PORCH-045 ac-4: quiet position indicator, quantity only', () => {
 test('PORCH-045 ac-5: interactions bind to the post, never the slide', () => {
   // The carousel writes no interaction state: no invoke, no reaction, vote,
   // or reply call lives in the carousel; the slide position is local state.
-  const carousel = social.slice(social.indexOf('function MediaCarousel'), social.indexOf('// PORCH-045: upload previews'));
+  const carousel = social.slice(social.indexOf('function MediaCarousel'), social.indexOf('// PORCH-082:'));
   assert.doesNotMatch(carousel, /\binvoke\(|\bunreact\b|\bsubmitReply\b/);
   // PostCard's writes bind to the post object, never to a slide. The
   // optimistic card reply (PORCH-046) rides the same submitReply call.
@@ -100,16 +100,12 @@ test('PORCH-045 ac-5: interactions bind to the post, never the slide', () => {
   assert.match(reactions, /invoke\(actions, isOwn \? 'unreact' : 'react', post/);
 });
 
-test('PORCH-045: composer upload previews render the carousel preview shape', () => {
-  assert.match(social, /function ComposerPreviewCarousel\(\{ files \}\)/);
-  assert.match(social, /type === 'photo' && <ComposerPreviewCarousel files=\{files\} \/>/);
-  // Same snap track, same slide treatment, same quantity indicator,
-  // same adaptive height behavior (user-testing amendment below).
-  const preview = social.slice(social.indexOf('function ComposerPreviewCarousel'), social.indexOf('function Media('));
-  assert.match(preview, /sx=\{carouselTrackSx\}/);
-  assert.match(preview, /carouselSlideSx/);
-  assert.match(preview, /\{position \+ 1\}\/\{count\}/);
-});
+// PORCH-144 desktop extension: the retired type-grid dialogue's upload
+// preview (ComposerPreviewCarousel) is gone — the unified composer's
+// staging (single preview + carousel with the peek and the quantity
+// indicator) carries the PORCH-045 preview shape and is render-pinned in
+// test/compose-sheet.test.js on the shared Composer; the old source pins
+// are deleted with the surface they named.
 
 // PORCH-045 (Brian, Oct 10, 2026 user-testing note): "as the swiping happens
 // that the page slides into the right size as different aspect ratios are
@@ -137,16 +133,17 @@ test('PORCH-045: the page slides into the right size across differing slide heig
   assert.equal(adaptiveTrackHeight([422, 0], 1), 422);
   assert.equal(adaptiveTrackHeight([422, 0, 300], 0.5), 422);
   assert.equal(adaptiveTrackHeight([422, 0, 300], 1.5), 361);
-  // Both carousel surfaces (post and composer preview) ride the same
-  // adaptive hook: measured slide heights land before paint (layout
-  // effect), scroll events re-derive the height, and a ResizeObserver
-  // re-measures whenever a slide's box resolves on load. The track clips
-  // its own vertical overflow so neighbors keep natural height, never crop.
+  // The post carousel rides the same adaptive hook (measured slide heights
+  // land before paint (layout effect), scroll events re-derive the height,
+  // and a ResizeObserver re-measures whenever a slide's box resolves on
+  // load). The track clips its own vertical overflow so neighbors keep
+  // natural height, never crop. The composer's staging preview rides the
+  // unified composer's own fixed-height slide design (PORCH-144).
   const trackShape = social.slice(social.indexOf('// Shared snap-track treatment'), social.indexOf('function useAdaptiveTrackHeight('));
   assert.match(trackShape, /overflowY: 'hidden'/);
   assert.match(social, /function useAdaptiveTrackHeight\(trackRef, count\)/);
-  assert.equal(social.match(/\[adaptiveHeight, measure\] = useAdaptiveTrackHeight\(trackRef, count\)/g).length, 2);
+  assert.equal(social.match(/\[adaptiveHeight, measure\] = useAdaptiveTrackHeight\(trackRef, count\)/g).length, 1);
   assert.match(social, /useLayoutEffect\(\(\) => \{/);
   assert.match(social, /new ResizeObserver\(measure\)/);
-  assert.equal(social.match(/style=\{adaptiveHeight != null \? \{ height: adaptiveHeight \} : undefined\}/g).length, 2);
+  assert.equal(social.match(/style=\{adaptiveHeight != null \? \{ height: adaptiveHeight \} : undefined\}/g).length, 1);
 });

@@ -37,7 +37,7 @@ const { ComposeSheet } = await (async () => {
   const outDir = join(here, ".tmp144");
   await mkdir(outDir, { recursive: true });
   await build({
-    stdin: { contents: 'export { ComposeSheet } from "./src/compose-sheet.jsx";', resolveDir: webRoot, loader: "jsx", sourcefile: "entry.jsx" },
+    stdin: { contents: 'export { ComposeSheet, Compose } from "./src/compose-sheet.jsx";', resolveDir: webRoot, loader: "jsx", sourcefile: "entry.jsx" },
     bundle: true, format: "esm", jsx: "automatic", platform: "neutral",
     external: ["react", "react-dom", "@mui/*", "@emotion/*", "@noble/*", "socket.io-client", "unicode-emoji-json", "react-transition-group", "hoist-non-react-statics"],
     outfile: join(outDir, "compose-sheet.built.mjs"), logLevel: "silent",
@@ -226,12 +226,63 @@ test("ac-render: the sheet renders nothing when closed and the offline state nam
 });
 
 test("ac-shell: the shell mounts the surface selector — the sheet below the mobile line, the modal frozen on desktop", () => {
-  assert.match(shell, /import \{ ComposeSheet \} from "\.\/compose-sheet\.jsx";/);
+  assert.match(shell, /import \{ Compose, ComposeSheet \} from "\.\/compose-sheet\.jsx";/);
   assert.match(shell, /import \{ MOBILE_CLASS_MAX \} from "\.\/compose-sheet\.js";/);
   assert.match(shell, /composeVariant === "mobile"\n\s*\? <ComposeSheet open=\{composeOpen\}/,
     "below the mobile line the bottom sheet is the composer of record");
   assert.match(shell, /: <Compose open=\{composeOpen\} onClose/,
-    "at ≥900px the existing desktop modal carries unchanged");
+    "at ≥900px the desktop modal carries the same unified composer (only the bottom-sheet presentation stays mobile)");
   assert.match(shell, /if \(!composeOpenRef\.current\) setComposeVariant\(query\.matches \? "mobile" : "desktop"\);/,
     "the surface variant freezes while the composer is open — no remount under a live draft");
+});
+
+/* ---- the desktop modal (≥900px): the unified composer, modal presentation
+   ---- (Section 18 "Desktop modal: build contract": same composer, never a
+   ---- bottom sheet; no keyboard state machine) --------------------------- */
+// MUI's server renderer does not paint portal interiors, so the modal's
+// presentation pins read the composer's desktop branch source; the SHARED
+// body (states, media row, carousel, footer, destination, publish path) is
+// rendered-verified above through the same Composer code path.
+
+const composerSource = await readFile(join(webRoot, "src/compose-sheet.jsx"), "utf8");
+const desktopBranch = composerSource.slice(composerSource.indexOf('if (presentation === "desktop") {'), composerSource.indexOf("return <Box\n    data-testid=\"compose-sheet\""));
+const composeWrapper = composerSource.slice(composerSource.indexOf("export function Compose("), composerSource.indexOf("/** One composer:"));
+
+test("ac-desktop: the desktop modal carries the unified composer in the modal presentation", () => {
+  // The centered modal (720px class, max height calc(100vh − 80px), 18px
+  // radius from the MuiDialog override, warm surface fill, backdrop scrim
+  // + ≤4px blur from the token set, publish-locked dismissal).
+  assert.match(desktopBranch, /<Dialog\s+open/);
+  assert.match(desktopBranch, /"data-testid": "compose-modal"/);
+  assert.match(desktopBranch, /maxWidth: 720/);
+  assert.match(desktopBranch, /maxHeight: "calc\(100vh - 80px\)"/);
+  assert.match(desktopBranch, /bgcolor: "porchlight\.warm"/, "surface fill per display mode (no mode branch here)");
+  assert.match(desktopBranch, /cssVars\.composeBackdrop/);
+  assert.match(desktopBranch, /blur\(4px\)/);
+  assert.match(desktopBranch, /aria-labelledby="compose-modal-title"/);
+  assert.match(desktopBranch, /onClose=\{publishing \? undefined : \(\) => onClose\?\.\(\)\}/,
+    "while a publish write is in flight the backdrop and Escape dismiss nothing");
+  assert.doesNotMatch(desktopBranch, /safe-area-inset-bottom/, "no safe-area choreography in the modal (the footer law stays mobile)");
+  assert.doesNotMatch(desktopBranch, /Drag handle/, "no drag handle in the modal presentation");
+});
+
+test("ac-desktop: the desktop surface mounts the shared Composer with no keyboard state machine", () => {
+  // The desktop branch of the collapse law resolves on focus + draft
+  // alone (sheetMode with keyboardOpen: keyboard?.raised ?? false), the
+  // keyboard measurement hook rides ONLY the bottom-sheet wrapper, and the
+  // wrapper passes presentation="desktop" — one composer, two shells.
+  assert.match(composeWrapper, /<Composer open=\{open\}[\s\S]*?presentation="desktop" \/>/);
+  assert.match(composeWrapper, /presentation="desktop"/);
+  assert.doesNotMatch(composeWrapper, /useKeyboardSheet|keyboard/);
+  assert.match(composerSource, /const keyboard = useKeyboardSheet\(open\);\n\s*return <Composer/,
+    "the keyboard hook lives only in the bottom-sheet wrapper");
+  assert.match(composerSource, /keyboardOpen: keyboard\?\.raised \?\? false/);
+  // The one shared body renders in both presentations — never a forked
+  // surface (mobile anatomy is render-verified above through the same code).
+  assert.match(composerSource, /const body = <[>]/);
+  assert.match(desktopBranch, /\{body\}/);
+  // The drag handle renders only off-desktop; the footer's safe-area
+  // padding is the sheet's alone.
+  assert.match(composerSource, /\{presentation !== "desktop" && <Box sx=\{\{ pt: 1, display: "flex", justifyContent: "center" \}\}>/);
+  assert.match(composerSource, /pb: presentation === "desktop" \? 1 : "calc\(8px \+ env\(safe-area-inset-bottom\)\)"/);
 });

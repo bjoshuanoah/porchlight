@@ -72,6 +72,9 @@ export const lightTokens = {
   // shadow lifts from the page; the staged-media scrim and its ink sit over
   // photo/video previews (remove control, play glyph, duration chip).
   shadowSheet: "0 -8px 40px rgba(16,36,58,.26)",
+  // PORCH-144: the desktop composer modal's backdrop scrim (the prior
+  // desktop contract's token set) — dim over the page, ≤4px blur.
+  composeBackdrop: "rgba(10,20,32,.48)",
   mediaOverlay: "rgba(16,36,58,.72)",
   mediaOverlayHover: "rgba(16,36,58,.88)",
   mediaOverlayInk: "#FFFFFF",
@@ -109,6 +112,9 @@ export const darkTokens = {
   // PORCH-144: the sheet's dark steps stay in the warm family — the scrim
   // rides the mode's own charcoal ink, never a cold gray.
   shadowSheet: "0 -8px 40px rgba(0,0,0,.45)",
+  // PORCH-144: the desktop modal's backdrop scrim — the mode's own warm
+  // charcoal deepening the dim, never a cold gray.
+  composeBackdrop: "rgba(23,18,14,.6)",
   mediaOverlay: "rgba(23,18,14,.72)",
   mediaOverlayHover: "rgba(23,18,14,.88)",
   mediaOverlayInk: "#F3EDE6",
@@ -308,6 +314,7 @@ const CSS_VAR_NAMES = [
   ["timelineDivider", "timeline-divider"],
   ["shadowCard", "shadow-card"], ["shadowModal", "shadow-modal"], ["shadowCompose", "shadow-compose"],
   ["shadowSheet", "shadow-sheet"],
+  ["composeBackdrop", "compose-backdrop"],
   ["mediaOverlay", "media-overlay"], ["mediaOverlayHover", "media-overlay-hover"], ["mediaOverlayInk", "media-overlay-ink"],
   ["appbarBg", "appbar-bg"], ["lampGlow", "lamp-glow"], ["lampGlowSoft", "lamp-glow-soft"],
   ["amberInk", "amber-ink"],

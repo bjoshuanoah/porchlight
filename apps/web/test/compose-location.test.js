@@ -18,14 +18,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = fileURLToPath(new URL("../", import.meta.url));
 const social = await readFile(join(webRoot, "src/social.jsx"), "utf8");
 const shell = await readFile(join(webRoot, "src/main.jsx"), "utf8");
+const composeSheetSource = await readFile(join(webRoot, "src/compose-sheet.jsx"), "utf8");
 
 import { composableGroups, composePresetLocationId, groupRows, isGroupMember } from "../src/groups.js";
 
-const { Groups } = await (async () => {
+const { Groups, ComposeSheet } = await (async () => {
   const outDir = join(here, ".tmp096");
   await mkdir(outDir, { recursive: true });
   await build({
-    stdin: { contents: 'export { Groups } from "./src/social.jsx";', resolveDir: webRoot, loader: "jsx", sourcefile: "entry.jsx" },
+    stdin: { contents: 'export { Groups } from "./src/social.jsx"; export { ComposeSheet } from "./src/compose-sheet.jsx";', resolveDir: webRoot, loader: "jsx", sourcefile: "entry.jsx" },
     bundle: true, format: "esm", jsx: "automatic", platform: "neutral",
     external: ["react", "react-dom", "@mui/*", "@emotion/*", "@noble/*", "socket.io-client", "unicode-emoji-json", "react-transition-group", "hoist-non-react-statics"],
     outfile: join(outDir, "surfaces.built.mjs"), logLevel: "silent",
@@ -35,7 +36,12 @@ const { Groups } = await (async () => {
   return loaded;
 })();
 
-const composeSlice = social.slice(social.indexOf("export function Compose("), social.indexOf("export function Albums("));
+// PORCH-144 desktop extension (Brian, 11/26/2026): the compose card is the
+// unified composer — the same shared surface as the mobile bottom sheet
+// (compose-sheet.jsx's Composer), presented as the centered desktop modal.
+// The pins below ride the composer's shared source, never the retired
+// type-grid dialog.
+const composerSlice = composeSheetSource.slice(composeSheetSource.indexOf("function Composer("), composeSheetSource.indexOf("/** The Empty state's Photo tile"));
 const groupsSlice = social.slice(social.indexOf("export function Groups("), social.indexOf("function CreateGroupDialog("));
 
 const ME = "did:porch:me";
@@ -51,6 +57,7 @@ const composeData = {
   network: { _id: NET, name: "The Noah Family" },
   groups: groupsFixture,
 };
+const PHOTO = { name: "lake.jpg", type: "image/jpeg" };
 
 /* ---- ac-1: pre-population from context ---------------------------------- */
 
@@ -65,10 +72,16 @@ test("ac-1: the pre-set resolver carries a context group the author belongs to, 
   assert.equal(composePresetLocationId("g3", offered, ME), "", "a foreign network's group falls back to the general timeline");
 });
 
-test("ac-1: the compose card pre-sets the staged target on every open, never mid-open", () => {
-  assert.match(composeSlice, /presetRef\.current = composePresetLocationId\(target, groups, data\.identity\?\.id\)/);
-  assert.match(composeSlice, /if \(open && !lastOpenRef\.current\) \{\n\s*setGroupId\(presetRef\.current\);[\s\S]*?\n\s*\}\n\s*lastOpenRef\.current = open;/,
-    "the open transition pre-populates the location control from context");
+test("ac-1: the compose card pre-sets the staged target at the open transition, never mid-open", () => {
+  // The preselect derives from context each render; only the open
+  // transition commits it (the render-phase open check never races a
+  // roster refresh while the card stays open).
+  assert.match(composerSlice, /presetRef\.current = composePresetLocationId\(target, groups, data\.identity\?\.id\)/);
+  assert.match(composerSlice, /if \(open !== lastOpenRef\.current\) \{\n\s*lastOpenRef\.current = open;\n\s*if \(open\) \{\n\s*const share = stagedRef\.current;/,
+    "the open transition pre-populates the destination from context");
+  // Rendered: the preselect is exercised through the shared body — the
+  // same Composer — as the compose-sheet test's group-preselect sweep
+  // (MUI's server renderer cannot paint the portal interior here).
 });
 
 test("ac-1: the shell derives the context target from the surface — a group route pre-sets that group, anywhere else the general timeline", () => {
@@ -99,32 +112,38 @@ test("ac-1: the group surface carries the '+ New post' compose entry riding the 
 
 /* ---- ac-2: the option law ----------------------------------------------- */
 
-test("ac-2: the location control always renders, pre-set, with the general timeline plus the author's groups only", () => {
-  assert.match(composeSlice, /label="Post to"/, "the same control the edit composer carries");
-  assert.doesNotMatch(composeSlice, /Group \(optional\)/, "the silent optional-group phrasing is superseded");
-  assert.doesNotMatch(composeSlice, /groups\.length > 0 && <FormControl/, "the target is always visible and pre-set");
-  assert.match(composeSlice, /<MenuItem value="">General timeline<\/MenuItem>/);
-  assert.match(composeSlice, /composableGroups\(groupRows\(data\.groups, data\.network\?\.id\), data\.identity\?\.id\)/,
+test("ac-2: the destination control always renders, pre-set, in every composer state", () => {
+  const renderBody = (props) => renderToString(React.createElement(ComposeSheet, { onClose: () => {}, actions: {}, ...props }));
+  const empty = renderBody({ open: true, target: null, data: composeData, staged: null });
+  const draft = renderBody({ open: true, target: null, data: composeData, staged: { type: "text", files: [], body: "Hello", caption: "", notice: null, dropped: [] } });
+  const attached = renderBody({ open: true, target: null, data: composeData, staged: { type: "photo", files: [PHOTO], body: "", caption: "", notice: null, dropped: [] } });
+  for (const html of [empty, draft, attached]) {
+    assert.match(html, /data-testid="sheet-destination"/, "the destination control is always visible and pre-set");
+    assert.match(html, /Main timeline/, "the resting label reads the preselected general timeline");
+    assert.doesNotMatch(html, /data-testid="compose-location"/, "the retired type-grid Select never renders");
+  }
+  // The offered rows are the author's groups within the open network.
+  assert.match(composerSlice, /composableGroups\(groupRows\(data\.groups, data\.network\?\.id\), data\.identity\?\.id\)/,
     "the offered rows are the author's groups within the open network");
-  // The rows the control actually consumes: member groups of the open
-  // network only — never a non-member group, never another network.
   const rows = composableGroups(groupRows(groupsFixture, NET), ME).map((group) => group.name);
   assert.deepEqual(rows, ["Lake Weekend"]);
 });
 
 test("ac-2: a staged choice survives roster refreshes — only the open transition pre-sets", () => {
-  assert.match(composeSlice, /lastOpenRef\.current = open;\n\s{2}\}, \[open\]\)/,
-    "the preset effect holds only the open transition, not [target]/[groups]");
+  // The open transition is keyed on `open` alone (never [target]/[groups]
+  // effects): the render-phase check runs only when the open state flips.
+  assert.match(composerSlice, /if \(open !== lastOpenRef\.current\) \{/);
 });
 
 /* ---- ac-3: the write path ------------------------------------------------ */
 
 test("ac-3: the staged target rides the existing create write — no new server surface", () => {
-  // General timeline → null (the existing general creation); group → the
-  // group id through the same submitPost contract.
-  assert.match(composeSlice, /groupId: groupId \|\| null/);
-  assert.match(social, /invoke\(actions, 'submitPost', \{ type, body: mediaType \? null : body\.trim\(\), caption/);
-  assert.match(composeSlice, /operation\.error && <Alert severity="error">\{operation\.error\}<\/Alert>/,
+  // General timeline → null; group → the group id, both through the ONE
+  // publish payload (publishPayload, pinned against the shared laws in
+  // compose-sheet.test.js) and the same submitPost contract.
+  assert.match(composerSlice, /publishPayload\(\{/);
+  assert.match(composerSlice, /invoke\(actions, 'submitPost', payload\)/);
+  assert.match(composerSlice, /operation\.error && <Alert severity="error" data-testid="sheet-error">\{operation\.error\}<\/Alert>/,
     "a refused target renders the hub's plain-language copy and posts nothing");
 });
 
@@ -133,12 +152,12 @@ test("ac-3: the staged target rides the existing create write — no new server 
 test("ac-4: the compose card binds the single-network path — no cross-post block exists in it", () => {
   // The cross-post block renders only when the member belongs to multiple
   // networks; the V1 compose card is bound to the open network (connection
-  // per origin), so the block does not exist here and the location control
-  // binds the single-network path (general timeline + this network's
-  // groups via groupRows' networkId scoping).
-  assert.doesNotMatch(composeSlice, /Each network gets its own post|checked|Checkbox|networks\.map/,
+  // per origin), so the block does not exist here and the destination
+  // control binds the single-network path (general timeline + this
+  // network's groups via groupRows' networkId scoping).
+  assert.doesNotMatch(composerSlice, /Each network gets its own post|data-testid="cross-post"|<Checkbox|networks\.map/,
     "no per-network checkbox block in the compose card");
-  assert.match(composeSlice, /groupRows\(data\.groups, data\.network\?\.id\)/,
+  assert.match(composerSlice, /groupRows\(data\.groups, data\.network\?\.id\)/,
     "the control scopes its groups to the open network — the single-network path");
   // Cross-network writes are per-post origin-decided (a group post rides
   // its own origin, never the active connection) — pinned in
