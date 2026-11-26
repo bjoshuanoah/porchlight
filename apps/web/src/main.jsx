@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { ThemeProvider } from "@mui/material/styles";
 import { AppBar, Alert, BottomNavigation, BottomNavigationAction, Box, Button, Container, CssBaseline, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Paper, Snackbar, Stack, Toolbar, Typography } from "@mui/material";
 import HomeOutlined from "@mui/icons-material/HomeOutlined";
+import PhotoLibraryOutlined from "@mui/icons-material/PhotoLibraryOutlined";
 import GroupsOutlined from "@mui/icons-material/GroupsOutlined";
 import AddOutlined from "@mui/icons-material/AddOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutline";
@@ -43,6 +44,8 @@ import { Timeline, Groups, PostDetail, Albums, Uploads, Search } from "./social.
 import { Compose, ComposeSheet } from "./compose-sheet.jsx";
 import { MOBILE_CLASS_MAX } from "./compose-sheet.js";
 import { Join, Settings, Pair, DeviceLink, WhoIsHere, OwnerConsole, Members, Setup, UserSwitcher, hasLocalPin, AUDIT_PAGE } from "./identity.jsx";
+import { HomeDashboard } from "./home.jsx";
+import { createHomeActions } from "./home-actions.js";
 import { Lockup } from "./brand.jsx";
 // PORCH-095: the boot surface (first paint, before route resolution) and
 // the app-ready bus — readiness ends the boot, never a timer.
@@ -90,9 +93,9 @@ const standaloneBoot = isStandaloneLaunch({
   standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
 });
 const localIdentities = [...new Set(initialConnections.map((item) => item.identity?.id).filter(Boolean))];
-const primary = ["/timeline", "/groups", "/compose", "/settings"];
-const labels = ["Timeline", "Groups", "Compose", "Settings"];
-const icons = [<HomeOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />];
+const primary = ["/home", "/timeline", "/groups", "/compose", "/settings"];
+const labels = ["Home", "Timeline", "Groups", "Compose", "Settings"];
+const icons = [<HomeOutlined />, <PhotoLibraryOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />];
 
 /** A photo post's media ids — the same id-extraction the share surfaces use. */
 function mediaRefIds(post) {
@@ -1821,6 +1824,9 @@ function App() {
     // rendition worker is live — surfaces then load rendition URLs directly
     // (srcset/sizes, video poster/src) and the browser cache answers repeats.
     mediaTransport,
+    // PORCH-137: the Home tab's actions ride the same factory spread — one
+    // request per action, signed writes via the device key.
+    ...createHomeActions(active, { navigate }),
     // PORCH-081 ac-4: the catch-up note's resolve — one member-initiated
     // refresh when the replay window was exceeded, never a poll cycle.
     refreshFeeds: () => reload(),
@@ -1952,6 +1958,9 @@ function App() {
   else if (route === "/search") page = <Search {...props} />;
   else if (route === "/owner") page = <OwnerConsole {...props} />;
   else if (route === "/members") page = <Members {...props} />;
+  // PORCH-137: the Home tab renders for any signed-in connection; the home
+  // module fetches on its own mount and never gates on social bootstrap.
+  else if (route === "/home" || route.startsWith("/home/")) page = <HomeDashboard {...props} />;
   else if (!connections.length) page = <Join {...props} />;
   else page = <Timeline {...props} />;
   // PORCH-051: which install surface this device earns — capability checks
@@ -2023,7 +2032,7 @@ function App() {
         {/* Brand lockup (PORCH-032): the new lamp mark plus the navy wordmark. */}
         <Lockup onClick={() => navigate("/timeline")} size={30} sx={{ cursor: "pointer", flex: { xs: 1, lg: 0 }, minWidth: { lg: 180 } }} />
         <Stack direction="row" spacing={3} alignItems="center" sx={{ display: { xs: "none", lg: "flex" }, flex: 1, justifyContent: "center" }}>
-          {primary.map((path, index) => index === 2
+          {primary.map((path, index) => index === 3
             ? <IconButton key={path} aria-label="Compose" onClick={openCompose} sx={{ bgcolor: "secondary.main", color: "var(--porch-amber-ink)", boxShadow: "var(--porch-shadow-compose)", "&:hover": { bgcolor: "secondary.dark" } }}><AddOutlined /></IconButton>
             : <Button key={path} onClick={() => navigate(path)} sx={{ color: route.startsWith(path) ? "primary.main" : "text.secondary" }}>{labels[index]}</Button>)}
         </Stack>
@@ -2047,9 +2056,9 @@ function App() {
       {page}
     </Container>
     {!frontDoor && <Paper elevation={0} sx={{ display: { xs: "block", lg: "none" }, position: "fixed", left: 0, bottom: 0, right: 0, zIndex: 10, borderTop: "1px solid", borderColor: "divider", pb: "env(safe-area-inset-bottom)" }}>
-      <BottomNavigation showLabels value={primary.findIndex((path) => route.startsWith(path))} onChange={(_event, value) => value === 2 ? openCompose() : navigate(primary[value])} sx={{ minHeight: 68 }}>
+      <BottomNavigation showLabels value={primary.findIndex((path) => route.startsWith(path))} onChange={(_event, value) => value === 3 ? openCompose() : navigate(primary[value])} sx={{ minHeight: 68 }}>
         {primary.map((path, index) => <BottomNavigationAction key={path} label={labels[index]} icon={icons[index]}
-          sx={{ ...(index === 2
+          sx={{ ...(index === 3
             ? { "& .MuiSvgIcon-root": { bgcolor: "secondary.main", color: "var(--porch-amber-ink)", width: 52, height: 52, p: 1.5, borderRadius: "50%", transform: "translateY(-8px)", boxShadow: "var(--porch-shadow-compose)" } }
             : { minWidth: 44 }), ...(route.startsWith(path) ? { "&::before": { content: '""', position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", width: 24, height: 2, borderRadius: 1, bgcolor: "secondary.main" } } : {}) }} />)}
       </BottomNavigation>

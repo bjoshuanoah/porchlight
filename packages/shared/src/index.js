@@ -79,6 +79,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     deploymentMode: "self-hosted",
     identityServingEnabled: true,
     socialServingEnabled: true,
+    homeServingEnabled: true,
   },
   /** Hub listener + tunnel binding. */
   hub: {
