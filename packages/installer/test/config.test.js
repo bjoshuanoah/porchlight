@@ -35,6 +35,23 @@ test("deployment inputs override the defaults through the same validation", () =
 	assert.equal(pruned.statusPort, 9001);
 });
 
+test("the storage failover plane rides the deployment inputs (PORCH-136)", () => {
+	const cfg = defaultConfigDocument({
+		failoverRoot: "/Volumes/Failover",
+		eventRetentionDays: 14,
+		retentionRules: [{ cameraId: "front-door", keepDays: 3 }],
+		busUrl: "mqtt://127.0.0.1:1883",
+	});
+	assert.equal(cfg.failoverRoot, "/Volumes/Failover");
+	assert.equal(cfg.eventRetentionDays, 14);
+	assert.deepEqual(cfg.retentionRules, [{ cameraId: "front-door", keepDays: 3 }]);
+	assert.equal(cfg.busUrl, "mqtt://127.0.0.1:1883");
+	// invalid values fail loudly through the recorder contract
+	assert.throws(() => defaultConfigDocument({ failoverRoot: "relative/path" }), /failoverRoot/);
+	assert.throws(() => defaultConfigDocument({ eventRetentionDays: 0 }), /eventRetentionDays/);
+	assert.throws(() => defaultConfigDocument({ busUrl: "" }), /busUrl/);
+});
+
 test("invalid inputs fail loudly through the recorder contract", () => {
 	assert.throws(() => defaultConfigDocument({ segmentSeconds: "nope" }), /segmentSeconds/);
 	assert.throws(() => defaultConfigDocument({ statusPort: 0 }), /statusPort/);

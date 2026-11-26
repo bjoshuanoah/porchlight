@@ -13,6 +13,7 @@ import { createCameras, createBaseService } from "./baseconfig.js";
 import { createSpeedService } from "./speed.js";
 import { createProfileService } from "./profiles.js";
 import { createScheduler } from "./scheduler.js";
+import { createStorageService } from "./storage.js";
 import { createConfigServer } from "./server.js";
 import { polygonIntersectsPolygon } from "./geometry.js";
 
@@ -106,13 +107,16 @@ function crossKindPairs(zoneDefs, maskDefs) {
 
 /**
  * Create the config console service.
- * @param {{ root?: string, now?: () => Date, consoleDist?: string | null }} [opts]
+ * @param {{ root?: string, now?: () => Date, consoleDist?: string | null,
+ *   recorderBase?: string }} [opts]
  *   root — Porchlight root dir (default /Library/Porchlight); docs under
  *   <root>/config/console/. now — injectable clock for the scheduler.
  *   consoleDist — static console build dir (default packages/console/dist;
  *   pass null to disable static serving).
+ *   recorderBase — recorder supervisor base URL for the storage plane
+ *   (default http://127.0.0.1:8971).
  * @returns {{ root, store, publisher, cameras, zones, masks, compose, speed,
- *   profiles, base, scheduler, server, start(httpPort) }}
+ *   profiles, base, scheduler, storage, server, start(httpPort) }}
  */
 export function createConfigService(opts = {}) {
 	const root = opts.root ?? DEFAULT_ROOT;
@@ -127,6 +131,7 @@ export function createConfigService(opts = {}) {
 	const profiles = createProfileService({ store, publisher, now });
 	const scheduler = createScheduler({ profiles, now });
 	const compose = createCompose({ zones, masks });
+	const storage = createStorageService({ store, recorderBase: opts.recorderBase });
 	const parts = {
 		store,
 		publisher,
@@ -138,6 +143,7 @@ export function createConfigService(opts = {}) {
 		profiles,
 		base,
 		scheduler,
+		storage,
 	};
 	const server = createConfigServer(parts, { consoleDist: opts.consoleDist });
 	/** @type {any} */

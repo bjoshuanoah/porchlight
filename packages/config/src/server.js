@@ -73,11 +73,11 @@ function readJsonBody(req) {
 
 /**
  * Build the config console HTTP server.
- * @param {object} parts service parts: { cameras, zones, masks, compose, speed, profiles, base, scheduler }
+ * @param {object} parts service parts: { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage }
  * @param {{ consoleDist?: string | null }} [opts] static console dist override (null disables)
  */
 export function createConfigServer(parts, opts = {}) {
-	const { cameras, zones, masks, compose, speed, profiles, base, scheduler } = parts;
+	const { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage } = parts;
 	const consoleDist = opts.consoleDist === undefined ? defaultConsoleDistPath() : opts.consoleDist;
 
 	const server = httpDefault.createServer((req, res) => {
@@ -137,6 +137,35 @@ export function createConfigServer(parts, opts = {}) {
 				if (method === "POST" && r[2] === "speed" && r[3] === "test") {
 					if (!cameras.get(cameraId)) throw new NotFoundError(`unknown camera "${cameraId}"`);
 					return sendJson(res, 200, speed.estimate(cameraId, body?.track));
+				}
+				if (method === "POST" && r[2] === "record") {
+					return sendJson(res, 200, await storage.trigger(cameraId, r[3]));
+				}
+			}
+		}
+
+		if (r[0] === "storage") {
+			if (r.length === 1) {
+				if (method === "GET") return sendJson(res, 200, await storage.status());
+				if (method === "PUT") return sendJson(res, 201, storage.configure(body));
+			}
+			if (r.length === 2 && r[1] === "test" && method === "POST") {
+				return sendJson(res, 200, storage.testLocation(body?.location));
+			}
+			if (r.length === 2 && r[1] === "failback" && method === "POST") {
+				return sendJson(res, 200, await storage.failback());
+			}
+			if (r[1] === "rules") {
+				if (r.length === 2) {
+					if (method === "GET") return sendJson(res, 200, storage.listRules());
+					if (method === "POST") return sendJson(res, 201, storage.addRule(body));
+				} else if (r.length === 3) {
+					const ruleId = requireId(r[2]);
+					if (method === "PUT") return sendJson(res, 200, storage.updateRule(ruleId, body));
+					if (method === "DELETE") {
+						storage.removeRule(ruleId);
+						return sendJson(res, 200, { ok: true });
+					}
 				}
 			}
 		}

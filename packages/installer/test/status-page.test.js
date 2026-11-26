@@ -39,6 +39,75 @@ test("a missing supervisor is a stated stopped state, not a lie", () => {
 	assert.equal(agg.services.find((s) => s.name === "recorder").state, "stopped");
 });
 
+test("the storage plane rides the supervisor state as its own service row", () => {
+	const agg = aggregateHealth({
+		supervisor: fakeSupervisor({
+			...idleState,
+			storage: { state: "primary", activeLocation: "/Volumes/Recordings", primary: "/Volumes/Recordings", failover: null, reason: null, driveHealthy: true, driveReason: null, paused: false },
+		}),
+	});
+	const storage = agg.services.find((s) => s.name === "storage");
+	assert.equal(storage.healthy, true);
+	assert.equal(storage.state, "primary");
+	assert.equal(storage.detail, "recording to /Volumes/Recordings");
+	assert.equal(agg.storage.state, "primary");
+	assert.equal(agg.status, "healthy");
+});
+
+test("an unavailable or drive-failing storage plane is degraded in plain language", () => {
+	const unavailable = aggregateHealth({
+		supervisor: fakeSupervisor({
+			...idleState,
+			storage: { state: "unavailable", activeLocation: null, primary: "/Volumes/Recordings", failover: "/Volumes/Failover", reason: "no writable storage location — recording is paused", driveHealthy: true, driveReason: null, paused: true },
+		}),
+	});
+	assert.equal(unavailable.status, "degraded");
+	const row = unavailable.services.find((s) => s.name === "storage");
+	assert.equal(row.healthy, false);
+	assert.equal(row.detail, "no writable storage location — recording is paused");
+
+	const driveFail = aggregateHealth({
+		supervisor: fakeSupervisor({
+			...idleState,
+			storage: { state: "primary", activeLocation: "/Volumes/Recordings", primary: "/Volumes/Recordings", failover: null, reason: null, driveHealthy: false, driveReason: "the drive reported an I/O error", paused: false },
+		}),
+	});
+	assert.equal(driveFail.services.find((s) => s.name === "storage").healthy, false);
+	assert.equal(driveFail.services.find((s) => s.name === "storage").detail, "the drive reported an I/O error");
+});
+
+test("a supervisor state without a storage plane is a stated unknown, not a lie", () => {
+	const agg = aggregateHealth({ supervisor: fakeSupervisor(idleState) });
+	const row = agg.services.find((s) => s.name === "storage");
+	assert.equal(row.state, "unknown");
+	assert.equal(row.detail, "the recorder has not reported storage status yet");
+	assert.equal(agg.storage, null);
+});
+
+test("storage states render as a reason line in the HTML", () => {
+	const ok = renderStatusHtml(aggregateHealth({
+		supervisor: fakeSupervisor({
+			...idleState,
+			storage: { state: "primary", activeLocation: "/Volumes/Recordings", primary: "/Volumes/Recordings", failover: null, reason: null, driveHealthy: true, driveReason: null, paused: false },
+		}),
+	}));
+	assert.match(ok, /Storage: primary — recording to \/Volumes\/Recordings\./);
+
+	const bad = renderStatusHtml(aggregateHealth({
+		supervisor: fakeSupervisor({
+			...idleState,
+			storage: { state: "unavailable", activeLocation: null, primary: "/Volumes/Recordings", failover: null, reason: "no writable storage location — recording is paused", driveHealthy: true, driveReason: null, paused: true },
+		}),
+	}));
+	assert.match(bad, /Storage: unavailable — no writable storage location — recording is paused\./);
+	assert.equal(bad, renderStatusHtml(aggregateHealth({
+		supervisor: fakeSupervisor({
+			...idleState,
+			storage: { state: "unavailable", activeLocation: null, primary: "/Volumes/Recordings", failover: null, reason: "no writable storage location — recording is paused", driveHealthy: true, driveReason: null, paused: true },
+		}),
+	})), "storage line must be deterministic given the same aggregate");
+});
+
 test("camera fleet details ride the recorder plane of the aggregate", () => {
 	const agg = aggregateHealth({
 		supervisor: fakeSupervisor({ ...idleState, cameras: [{ name: "front-door", state: "recording" }] }),

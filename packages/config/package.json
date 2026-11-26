@@ -19,6 +19,7 @@
 		"build": "echo 'config ships plain JS (no build)'"
 	},
 	"dependencies": {
+		"@porchlight/recorder": "0.5.3",
 		"yaml": "^2.9.1"
 	},
 	"repository": {

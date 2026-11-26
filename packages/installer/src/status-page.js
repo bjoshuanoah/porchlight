@@ -35,6 +35,37 @@ export function aggregateHealth({ supervisor = null, version = "unknown", halSta
 	} else {
 		services.push({ name: "recorder", healthy: false, state: "stopped", detail: "not started" });
 	}
+	// The storage plane (PORCH-136) rides the supervisor state; a supervisor
+	// state without it (or no supervisor) is a stated unknown, not a lie.
+	const storage = recorderState?.storage ?? null;
+	const storageHealthy = supervisor
+		? storage?.state !== "unavailable" && storage?.driveHealthy !== false
+		: false;
+	if (supervisor) {
+		let storageDetail;
+		if (storage?.reason) {
+			storageDetail = storage.reason;
+		} else if (storage?.driveHealthy === false) {
+			storageDetail = storage.driveReason ?? "the storage drive is reporting a problem";
+		} else if (storage?.activeLocation) {
+			storageDetail = `recording to ${storage.activeLocation}`;
+		} else {
+			storageDetail = "the recorder has not reported storage status yet";
+		}
+		services.push({
+			name: "storage",
+			healthy: storageHealthy,
+			state: storage?.state ?? "unknown",
+			detail: storageDetail,
+		});
+	} else {
+		services.push({
+			name: "storage",
+			healthy: false,
+			state: "not started",
+			detail: "the recorder is not running — storage state unknown",
+		});
+	}
 	services.push({ name: "status-page", healthy: true, state: "ok", detail: "served" });
 	const cameras = recorderState?.cameras ?? [];
 	const degraded = services.some((s) => !s.healthy);
@@ -50,6 +81,14 @@ export function aggregateHealth({ supervisor = null, version = "unknown", halSta
 			cameraNames: cameras.map((/** @type {{name?: string}} */ c) => c.name ?? "unnamed"),
 			storageRoot: recorderState.storageRoot,
 			uptimeMs: recorderState.uptimeMs,
+		} : null,
+		storage: storage ? {
+			state: storage.state ?? "unknown",
+			activeLocation: storage.activeLocation ?? null,
+			reason: storage.reason ?? null,
+			driveHealthy: storage.driveHealthy ?? null,
+			driveReason: storage.driveReason ?? null,
+			paused: storage.paused ?? null,
 		} : null,
 		awaitingConfiguration: supervisor ? cameras.length === 0 : false,
 	};
@@ -70,6 +109,11 @@ export function renderStatusHtml(agg) {
 	const recorder = agg.recorder
 		? `		<p class="note">Recorder: ${agg.recorder.cameraCount} camera(s) recorded${
 			agg.recorder.storageRoot ? ` to ${agg.recorder.storageRoot}` : ""}. Uptime ${Math.round(agg.recorder.uptimeMs / 1000)}s.</p>\n`
+		: "";
+	const storage = agg.storage
+		? `		<p class="note">Storage: ${agg.storage.state}${
+			agg.storage.reason ? ` — ${agg.storage.reason}`
+				: agg.storage.activeLocation ? ` — recording to ${agg.storage.activeLocation}` : ""}.</p>\n`
 		: "";
 	const awaiting = agg.awaitingConfiguration
 		? `		<p class="note">No cameras configured yet — add cameras to the config of record to start recording. The platform is running and healthy.</p>\n`
@@ -98,7 +142,7 @@ footer { margin-top: 2rem; font-size: .875rem; opacity: .7; }
 <body>
 	<h1>Porchlight Home</h1>
 		<p><b>${agg.status}</b> — engine v${agg.version}</p>
-${recorder}${awaiting}		<table>
+${recorder}${storage}${awaiting}		<table>
 		<tr><th>Service</th><th>State</th><th>Detail</th></tr>
 ${rows}
 	</table>

@@ -58,6 +58,60 @@ export function pruneRolling(opts) {
 }
 
 /**
+ * Event-tier pruning (two-class law, PRD 10): event footage lives in
+ * <root>/events — a separate retention class with its own window, never
+ * the rolling buffer. Rules refine the class floor within it: a rule's
+ * keepDays is the minimum the matching footage stays (the max matching
+ * rule wins). Protected manual segments (<root>/manual) are NEVER touched
+ * by any sweep — they outlive everything but manual deletion (ac-3); the
+ * disk watchdog only ever prunes rolling days for the same reason.
+ * @param {{
+ *   root: string, eventRetentionDays: number, nowMs: number,
+ *   retentionRules?: Array<{cameraId?: string, eventClass?: string, zoneId?: string, keepDays: number}>,
+ *   fs?: typeof fsDefault,
+ *   onEvent?: (e: {type: string, dates: string[]}) => void,
+ * }} opts
+ * @returns {{removed: string[]}}
+ */
+export function pruneEventTier(opts) {
+	const { root, eventRetentionDays, nowMs, retentionRules = [], fs = fsDefault, onEvent } = opts;
+	const eventsRoot = path.join(root, "events");
+	/** @type {string[]} */
+	const removed = [];
+	for (const d of listDateDirs(eventsRoot, { fs })) {
+		if (d.dayStartMs > nowMs) continue;
+		const dateDir = path.join(eventsRoot, d.dateKey);
+		for (const hour of fs.readdirSync(dateDir)) {
+			const hourDir = path.join(dateDir, hour);
+			if (!/^\d{2}$/.test(hour) || !fs.statSync(hourDir).isDirectory()) continue;
+			for (const camera of fs.readdirSync(hourDir)) {
+				const cameraDir = path.join(hourDir, camera);
+				if (!fs.statSync(cameraDir).isDirectory()) continue;
+				const floorDays = Math.max(
+					eventRetentionDays,
+					...retentionRules
+						.filter((rule) => !rule.cameraId || rule.cameraId === camera)
+						.map((rule) => rule.keepDays),
+				);
+				if (d.dayStartMs <= nowMs - floorDays * DAY_MS) {
+					fs.rmSync(cameraDir, { recursive: true, force: true });
+					if (!removed.includes(d.dateKey)) removed.push(d.dateKey);
+				}
+			}
+			// Best-effort empty-dir cleanup so the tree reads honestly.
+			try {
+				if (fs.readdirSync(hourDir).length === 0) fs.rmdirSync(hourDir);
+			} catch { /* raced with a writer — next pass cleans it */ }
+		}
+		try {
+			if (fs.readdirSync(dateDir).length === 0) fs.rmdirSync(dateDir);
+		} catch { /* same */ }
+	}
+	if (removed.length && onEvent) onEvent({ type: "retention.events.pruned", dates: removed });
+	return { removed };
+}
+
+/**
  * Disk-usage watchdog: while used fraction exceeds highWaterFraction, prune
  * the oldest kept day directory. Alerts once when it engages.
  * @param {{
