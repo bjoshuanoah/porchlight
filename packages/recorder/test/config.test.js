@@ -24,7 +24,11 @@ test("validateConfig resolves the safe defaults", () => {
 });
 
 test("validateConfig rejects bad cameras and unsafe names", () => {
-	assert.throws(() => validateConfig({ storageRoot: "/tmp", cameras: [] }), /non-empty array/);
+	// PORCH-134 ac-1: an empty fleet is legal — the fresh deployment Mac boots
+	// headless with zero cameras configured; missing/non-array still fail.
+	assert.throws(() => validateConfig({ storageRoot: "/tmp" }), /cameras: required array/);
+	assert.throws(() => validateConfig({ storageRoot: "/tmp", cameras: "nope" }), /cameras: required array/);
+	assert.doesNotThrow(() => validateConfig({ storageRoot: "/tmp", cameras: [] }));
 	assert.throws(() => validateConfig({ storageRoot: "/tmp", cameras: [{ name: "../etc", source: { url: "x" } }] }), /invalid camera name/);
 	assert.throws(() => validateConfig({ storageRoot: "/tmp", cameras: [{ name: "a", source: { url: "x" } }, { name: "a", source: { url: "y" } }] }), /duplicate camera name/);
 	assert.throws(() => validateConfig({ storageRoot: "/tmp", cameras: [{ name: "a", source: {} }] }), /needs url or synthetic/);

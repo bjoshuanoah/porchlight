@@ -20,7 +20,7 @@
 /**
  * @typedef {Object} RecorderConfig
  * @property {string} storageRoot Absolute path; the segment store root.
- * @property {CameraConfig[]} cameras At least one.
+ * @property {CameraConfig[]} cameras May be empty (fresh deployment boots idle; PORCH-134).
  * @property {number} [segmentSeconds] Default 600.
  * @property {number} [retentionDays] Rolling buffer window (default 7).
  * @property {string} [coldRoot] Optional cold-archive root (moves instead of deleting).
