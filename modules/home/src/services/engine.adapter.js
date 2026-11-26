@@ -19,7 +19,16 @@ import mqtt from "mqtt";
 import { CAMERA_GAPS } from "./camera.service.js";
 import { fail } from "./errors.js";
 
-const DETECTIONS_PATTERN = "porchlight/engine/detections/+/+";
+/**
+ * PORCH-142: the topic contract's prefix of record — one copy. Every
+ * producer and subscriber of the engine's DetectionObject bus builds the
+ * family from this constant (the recorder publishes, the home hub
+ * subscribes `${ENGINE_DETECTIONS_PREFIX}/+/+`, and the recognition plane's
+ * trained-class emission re-rides the SAME family).
+ */
+export const ENGINE_DETECTIONS_PREFIX = "porchlight/engine/detections";
+
+const DETECTIONS_PATTERN = `${ENGINE_DETECTIONS_PREFIX}/+/+`;
 
 export function createHttpEngineAdapter({ baseUrl, fetchImpl = globalThis.fetch } = {}) {
   if (!baseUrl || typeof fetchImpl !== "function") {

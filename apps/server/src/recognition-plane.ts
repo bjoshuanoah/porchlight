@@ -6,6 +6,7 @@ import {
   createRecognitionPipeline,
   createRecognitionService,
   createRegistryService,
+  createWatchlistService,
   VisionProviderRegistry,
 } from "@porchlight/recognition";
 import type { VisionProvider } from "@porchlight/recognition";
@@ -53,6 +54,20 @@ export interface RecognitionPlaneOptions {
   providerName?: string;
   /** The engine-camera → { homeId } join the hub wires to the home module. */
   homeForCamera?: ((engineCameraId: string) => Promise<{ homeId: string; cameraId: string } | null>) | null;
+  /** The built-in tracked classes of record (@porchlight/overwatch TRACKED_CLASSES). */
+  trackedClasses?: string[];
+  /**
+   * PORCH-142: the trained-watchlist emission publisher (the hub's MQTT
+   * seam of record — the same detections family the home module's bus
+   * consumer subscribes). Absent = classification still runs and lands as
+   * a detection row, but nothing is published.
+   */
+  publishDetection?: ((detection: { camera: string; trackId: string; cls: string; conf: number; t?: number; provider: string }) => Promise<void>) | null;
+  /**
+   * PORCH-142: fired best-effort after every watchlist mutation with the
+   * fresh tracked-trained labels — the hub's extendTrackedVocabulary seam.
+   */
+  onVocabularyChanged?: (trackedTrainedLabels: string[]) => void | Promise<void>;
   log?: ((line: string) => void) | null;
 }
 
@@ -67,6 +82,12 @@ export interface RecognitionPlane {
    * record bites here before any run (upstream enforcement, ac-4/ac-6).
    */
   ingestEngineDetection: (detection: EngineDetection | null) => Promise<void>;
+  /**
+   * PORCH-142: the fresh tracked-trained vocabulary of record (every home).
+   * The hub calls this at boot and the plane re-calls it through
+   * onVocabularyChanged after every watchlist mutation.
+   */
+  refreshWatchlistVocabulary: () => Promise<string[]>;
 }
 
 /**
@@ -117,6 +138,36 @@ export function createRecognitionPlaneRouter(options: RecognitionPlaneOptions): 
   }
   const pipeline = createRecognitionPipeline({ registry: visionRegistry });
   const recognition = createRecognitionService({ registry, pipeline, providerName: options.providerName ?? "local" });
+  /**
+   * PORCH-142: the watchlists service of record (trainable object classes).
+   * NOT gated by the per-household recognition switch — the biometric
+   * opt-in law governs faces/plates only; watchlists train on the raw
+   * pixel crops the household itself teaches and never leave the hub. The
+   * provider ref rides the same registered factory (absent factory =
+   * training refuses closed with plain language).
+   */
+  const watchlists = createWatchlistService({
+    store: options.store,
+    audit,
+    trackedClasses: options.trackedClasses ?? [],
+    providerRef: options.visionProviderFactory
+      ? async () => visionRegistry.create(options.providerName ?? "local")
+      : null,
+    providerName: options.providerName ?? "local",
+  });
+
+  /**
+   * PORCH-142: the mutation hook Agent A's route plane fires best-effort
+   * after create/retrain/corrections/delete — the hub re-extends the
+   * entity layer's tracked vocabulary from the fresh tracked-trained
+   * labels of record.
+   */
+  const hooks = {
+    onWatchlistMutated: async () => {
+      const labels = await watchlists.trackedTrainedLabels();
+      await options.onVocabularyChanged?.(labels);
+    },
+  };
 
   const { homeModule } = options;
   const homeService = homeModule?.homeService ?? null;
@@ -151,7 +202,7 @@ export function createRecognitionPlaneRouter(options: RecognitionPlaneOptions): 
   };
 
   const handler = createRecognitionHandler({
-    services: { registry, recognition },
+    services: { registry, recognition, watchlists, hooks },
     authorize,
     log: options.log ?? null,
   });
@@ -207,7 +258,43 @@ export function createRecognitionPlaneRouter(options: RecognitionPlaneOptions): 
         `[recognition] run skipped (${logged.code ?? "E_UNEXPECTED"}): ${logged.message ?? String(error)}`,
       );
     }
+    /**
+     * PORCH-142: classify-on-ingest against the home's trained classes.
+     * NOT gated by the biometric recognition switch (watchlists train on
+     * the household's own taught crops — the opt-in law governs faces and
+     * plates only). The descriptor stays on the hub; only the plain
+     * classification fact is emitted, deduped by the service's event
+     * window, and NEVER fatal to the ingest pipe.
+     */
+    if (descriptor) {
+      try {
+        const classification = await watchlists.classify({
+          homeId: resolved.homeId,
+          descriptor,
+          cameraId: resolved.cameraId,
+          trackId: typeof detection.trackId === "string" && detection.trackId !== "" ? detection.trackId : undefined,
+          t: typeof detection.t === "number" && Number.isFinite(detection.t) ? detection.t : undefined,
+        });
+        if (classification?.shouldEmit) {
+          await options.publishDetection?.({
+            camera: String(detection.camera),
+            trackId: typeof detection.trackId === "string" && detection.trackId !== "" ? detection.trackId : "untracked",
+            cls: classification.label,
+            conf: classification.confidence,
+            t: typeof detection.t === "number" && Number.isFinite(detection.t) ? detection.t : undefined,
+            provider: "watchlist",
+          });
+        }
+      } catch (error) {
+        const logged = error as { code?: string; message?: string };
+        // Classification refusal (no trained classes) and any unexpected
+        // failure both land in the log; the pipe keeps moving.
+        (options.log ?? console.error)?.(
+          `[recognition] watchlist classify skipped (${logged.code ?? "E_UNEXPECTED"}): ${logged.message ?? String(error)}`,
+        );
+      }
+    }
   }
 
-  return { router: plane, ingestEngineDetection };
+  return { router: plane, ingestEngineDetection, refreshWatchlistVocabulary: () => watchlists.trackedTrainedLabels() };
 }

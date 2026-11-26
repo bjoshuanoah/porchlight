@@ -9,6 +9,7 @@ import AddOutlined from "@mui/icons-material/AddOutlined";
 import PersonOutline from "@mui/icons-material/PersonOutline";
 import VideocamOutlined from "@mui/icons-material/VideocamOutlined";
 import FaceOutlined from "@mui/icons-material/FaceOutlined";
+import LabelOutlined from "@mui/icons-material/LabelOutlined";
 import { themeFor, tokenStyles, lightTokens, darkTokens } from "./theme.js";
 import { identityOf } from "./feed-filter.js";
 import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
@@ -55,6 +56,10 @@ import { createOverwatchActions } from "./overwatch-actions.js";
 // recognition switch of record, and the by-reference annotation joins.
 import { People } from "./people.jsx";
 import { createPeopleActions } from "./people-actions.js";
+// PORCH-142: the Watchlists surface (trainable object classes + alert
+// subscription) rides the same three-file discipline next to People & Things.
+import { Watchlists } from "./watchlists.jsx";
+import { createWatchlistActions } from "./watchlists-actions.js";
 import { Lockup } from "./brand.jsx";
 // PORCH-095: the boot surface (first paint, before route resolution) and
 // the app-ready bus — readiness ends the boot, never a timer.
@@ -102,9 +107,9 @@ const standaloneBoot = isStandaloneLaunch({
   standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
 });
 const localIdentities = [...new Set(initialConnections.map((item) => item.identity?.id).filter(Boolean))];
-const primary = ["/home", "/timeline", "/groups", "/compose", "/settings", "/overwatch", "/people"];
-const labels = ["Home", "Timeline", "Groups", "Compose", "Settings", "Overwatch", "People & Things"];
-const icons = [<HomeOutlined />, <PhotoLibraryOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />, <VideocamOutlined />, <FaceOutlined />];
+const primary = ["/home", "/timeline", "/groups", "/compose", "/settings", "/overwatch", "/people", "/watchlists"];
+const labels = ["Home", "Timeline", "Groups", "Compose", "Settings", "Overwatch", "People & Things", "Watchlists"];
+const icons = [<HomeOutlined />, <PhotoLibraryOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />, <VideocamOutlined />, <FaceOutlined />, <LabelOutlined />];
 
 /** A photo post's media ids — the same id-extraction the share surfaces use. */
 function mediaRefIds(post) {
@@ -1842,6 +1847,9 @@ function App() {
     // PORCH-141: the People & Things registry's actions (owner-only REST
     // plane; the routes carry plain contract bodies, no signing envelope).
     ...createPeopleActions({ active, navigate }),
+    // PORCH-142: the Watchlists trained-class actions (owner-only REST
+    // plane; the routes carry plain contract bodies, no signing envelope).
+    ...createWatchlistActions({ active, navigate }),
     // PORCH-081 ac-4: the catch-up note's resolve — one member-initiated
     // refresh when the replay window was exceeded, never a poll cycle.
     refreshFeeds: () => reload(),
@@ -1981,6 +1989,10 @@ function App() {
   // PORCH-141: the People & Things registry surface (owner-only mutations
   // hub-side; the registry reads and renders for every authorized member).
   else if (route === "/people") page = <People {...props} />;
+  // PORCH-142: the Watchlists surface (owner-only mutations hub-side, like
+  // People & Things; the trained classes and detections render for every
+  // authorized member).
+  else if (route === "/watchlists") page = <Watchlists {...props} />;
   else if (!connections.length) page = <Join {...props} />;
   else page = <Timeline {...props} />;
   // PORCH-051: which install surface this device earns — capability checks

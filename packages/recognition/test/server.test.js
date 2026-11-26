@@ -10,6 +10,7 @@ import { createMemoryStore } from "@porchlight/shared";
 import { createRegistryService } from "../src/registry.js";
 import { createRecognitionPipeline, VisionProviderRegistry } from "../src/pipeline.js";
 import { createRecognitionService } from "../src/recognition.js";
+import { createWatchlistService } from "../src/watchlists.js";
 import { createRecognitionServer } from "../src/server.js";
 
 const MOM_VECTOR = [0.95, 0.3, 0.05];
@@ -31,6 +32,11 @@ function deterministicProvider() {
 		async readPlates() {
 			return [{ text: "6tri889", conf: 0.93 }];
 		},
+		// PORCH-142: the exemplar embedder stage — deterministic test vectors.
+		async embedImage(frame) {
+			const selector = frame.w ?? 0;
+			return [selector === 1 ? [0.2, 0.98] : selector === 2 ? [0.9, 0.05, 0.1] : MOM_VECTOR];
+		},
 	};
 }
 
@@ -41,7 +47,12 @@ async function fixture({ authorize = null } = {}) {
 	visionRegistry.register("local", () => deterministicProvider());
 	const pipeline = createRecognitionPipeline({ registry: visionRegistry });
 	const recognition = createRecognitionService({ registry, pipeline });
-	const { server, handler } = createRecognitionServer({ services: { registry, recognition }, authorize });
+	const watchlists = createWatchlistService({
+		store: createMemoryStore(),
+		trackedClasses: ["person", "vehicle", "package", "bin", "furniture", "equipment"],
+		providerRef: async () => deterministicProvider(),
+	});
+	const { server, handler } = createRecognitionServer({ services: { registry, recognition, watchlists }, authorize });
 	liveServers.push(server);
 	await new Promise((resolve) => server.once("listening", resolve));
 	const address = server.address();
@@ -230,4 +241,66 @@ test("oversized bodies are refused; non-object bodies refused", async () => {
 	const nonObject = await request("/api/recognition/settings?homeId=h", json({ method: "PUT", body: JSON.stringify([1, 2]) }));
 	assert.equal(nonObject.status, 422);
 	assert.equal(nonObject.body.code, "E_INVALID");
+});
+
+// ---- PORCH-142: the watchlists REST plane ----
+
+/** jpeg frame; `w` selects the deterministic exemplar vector. */
+const frameOf = (w) => ({ format: "jpeg", data: Buffer.from(`jpeg-${w}`).toString("base64"), w });
+
+test("watchlists REST: train → vocabulary → per-class threshold → detections → delete (ac-1/ac-2/ac-5)", async () => {
+	const { request } = await fixture();
+	const created = await request("/api/recognition/watchlists", json({
+		method: "POST",
+		body: JSON.stringify({ homeId: "home-1", label: "63 Chevy Impala", frames: [frameOf(2)], trackingSource: "vehicle" }),
+	}));
+	assert.equal(created.status, 201);
+	assert.equal(created.body.class.label, "63 Chevy Impala");
+	assert.equal(created.body.class.trackingScope, "tracked");
+	assert.match(created.body.class.exemplars[0].image, /^data:image\/jpeg;base64,/);
+	const classId = created.body.class._id;
+
+	const vocabulary = await request("/api/recognition/watchlists/vocabulary?homeId=home-1");
+	assert.equal(vocabulary.status, 200);
+	assert.ok(vocabulary.body.vocabulary.builtIn.some((entry) => entry.label === "person" && entry.trackingScope === "tracked"));
+	assert.deepEqual(vocabulary.body.vocabulary.trained, [{
+		label: "63 Chevy Impala", kind: "trained", trackingScope: "tracked", assertThreshold: null, classId,
+	}]);
+
+	// Uncalibrated classify happens through the plane's ingest seam — REST
+	// exposes the recorded ring only. Calibrate so an asserted row exists.
+	const calibrated = await request(`/api/recognition/watchlists/${classId}?homeId=home-1`, json({
+		method: "PUT", body: JSON.stringify({ assertThreshold: 0.01 }),
+	}));
+	assert.equal(calibrated.status, 200);
+
+	const list = await request("/api/recognition/watchlists?homeId=home-1");
+	assert.equal(list.status, 200);
+	assert.equal(list.body.count, 1);
+	assert.equal(list.body.classes[0]?.expectedAccuracy?.note, created.body.class.expectedAccuracy.note);
+
+	const purged = await request(`/api/recognition/watchlists/${classId}?homeId=home-1`, json({ method: "DELETE" }));
+	assert.equal(purged.status, 200);
+	assert.equal(purged.body.purged.classId, classId);
+	const empty = await request("/api/recognition/watchlists?homeId=home-1");
+	assert.equal(empty.body.count, 0);
+});
+
+test("watchlists REST: junk refused 422, corrections 404 in plain language, owner refused 403", async () => {
+	let ownerAllowed = true;
+	const { request } = await fixture({ authorize: () => ownerAllowed });
+	const bad = await request("/api/recognition/watchlists", json({
+		method: "POST", body: JSON.stringify({ homeId: "home-1", label: "!!", frames: [frameOf(0)] }),
+	}));
+	assert.equal(bad.status, 422);
+	const noDetection = await request("/api/recognition/watchlists/corrections", json({
+		method: "POST", body: JSON.stringify({ homeId: "home-1", cameraId: "cam-x", trackId: "t-x" }),
+	}));
+	assert.equal(noDetection.status, 404);
+	assert.match(noDetection.body.error, /No recorded detection/);
+	ownerAllowed = false;
+	const refused = await request("/api/recognition/watchlists", json({
+		method: "POST", body: JSON.stringify({ homeId: "home-1", label: "Anything", frames: [frameOf(0)] }),
+	}));
+	assert.equal(refused.status, 403);
 });

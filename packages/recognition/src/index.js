@@ -38,3 +38,24 @@ export { createAuditLog } from "./audit.js";
 
 // The orchestrator (enrollment, gallery match, recognition runs).
 export { createRecognitionService, createUpstreamRecognitionGate } from "./recognition.js";
+
+// PORCH-142: the household-trained few-shot classes — the exemplar-pool
+// classifier, the shared uncertainty law with per-class thresholds, the
+// derived tracking-scope vocabulary, and the correction loop.
+export {
+	WATCHLIST_ID_PREFIX,
+	WATCHLIST_DETECTION_ID_PREFIX,
+	EXEMPLARS_CAP,
+	DETECTION_RING_CAP,
+	EMISSION_COOLDOWN_SEC,
+	assertClassLabel,
+	assertWatchlistBody,
+} from "./types.js";
+export { WATCHLIST_AUDIT_TYPES } from "./audit-types.js";
+export {
+	ACCURACY_NOTE,
+	WATCHLIST_COLLECTIONS,
+	evaluateReplay,
+	leaveOneOut,
+	createWatchlistService,
+} from "./watchlists.js";

@@ -13,7 +13,9 @@ import type { RecognitionHomeModule, VisionProviderLike } from "./recognition-pl
 import type { FrontDoorAccountService, FrontDoorDeviceService } from "./routes/frontdoor.routes.js";
 import { assembleIdentityModule, treatAvatar } from "@porchlight/identity";
 import { assembleSocialModule } from "@porchlight/social";
-import { assembleHomeModule, createHttpEngineAdapter, createMqttEngineConsumer } from "@porchlight/home";
+import { assembleHomeModule, createHttpEngineAdapter, createMqttEngineConsumer, ENGINE_DETECTIONS_PREFIX } from "@porchlight/home";
+import { TRACKED_CLASSES, extendTrackedVocabulary } from "@porchlight/overwatch";
+import mqtt from "mqtt";
 import { loadConfig, saveConfig } from "@porchlight/shared";
 import { HealthService } from "./services/health.service.js";
 import { UpdateService, npmInstaller, npmRegistry } from "./services/update.service.js";
@@ -95,6 +97,28 @@ export interface ServerOptions {
    * REST hub: the degrade path IS the REST reads).
    */
   eventPlane?: unknown;
+}
+
+/**
+ * PORCH-142: the trained-class emission publisher (the plane's
+ * publishDetection seam). A trained watchlist class asserting at the
+ * camera re-rides the SAME DetectedObject family the engine's own
+ * detections use (`${ENGINE_DETECTIONS_PREFIX}/+/+`, the recorder's
+ * `<camera>/<cls>` shape), so the home module's event pipeline and the
+ * recognition plane consume identical facts. QoS 0 fire-and-forget: a bus
+ * outage degrades to the plane's detection rows, never the ingest pipe —
+ * publish failures log and resolve.
+ */
+function createEngineDetectionPublisher(busUrl: string, log: ((line: string) => void) | null) {
+  const sink = log ?? ((line: string) => console.error(line));
+  const client = mqtt.connect(busUrl, { clientId: "porchlight-recognition-publish", reconnectPeriod: 5000, clean: true });
+  client.on("error", (error) => sink(`[engine-publish] connection error: ${error.message}`));
+  return async (detection: { camera: string; trackId: string; cls: string; conf: number; t?: number; provider: string }): Promise<void> => {
+    const topic = `${ENGINE_DETECTIONS_PREFIX}/${detection.camera}/${detection.cls}`;
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    client.publish(topic, JSON.stringify(detection), { qos: 0 }, (error) => (error ? reject(error) : resolve()));
+    return promise;
+  };
 }
 
 const DOWN_PROBES: { mongo: Probe; redis: Probe } = {
@@ -493,6 +517,25 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
     // per-household recognition switch of record is opt-in INSIDE this
     // plane — serving the surfaces is not running recognition.
     if (options.config.mode.recognitionServingEnabled) {
+      // PORCH-142: the trained-class emission publisher rides the engine
+      // bus when the bus of record exists; absent, classification still
+      // runs and lands as detection rows — nothing publishes. Tracked
+      // classes of record stay @porchlight/overwatch's static set.
+      const publishDetection = engineConfig.busUrl
+        ? createEngineDetectionPublisher(engineConfig.busUrl, options.log ?? null)
+        : null;
+      // PORCH-142: the trained vocabulary of record re-extends the entity
+      // layer's tracked set — once at boot, then after every watchlist
+      // mutation (the plane's onVocabularyChanged hook). Never fatal.
+      const refreshTrackedVocabulary = async () => {
+        try {
+          extendTrackedVocabulary(await recognitionPlane.refreshWatchlistVocabulary());
+        } catch (error) {
+          (options.log ?? ((line: string) => console.error(line)))?.(
+            `[recognition] tracked vocabulary refresh skipped: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      };
       const recognitionPlane = createRecognitionPlaneRouter({
         root: options.homeRoot ?? options.bootstrap.configDir,
         store: options.store,
@@ -500,11 +543,15 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
         homeModule: homeModule as unknown as RecognitionHomeModule,
         visionProviderFactory: options.recognition?.visionProviderFactory ?? null,
         providerName: options.recognition?.providerName,
+        trackedClasses: [...TRACKED_CLASSES],
+        publishDetection,
+        onVocabularyChanged: refreshTrackedVocabulary,
         // The home module's read-only engine-camera → home resolution seam.
         homeForCamera: (engineCameraId: string) => homeModule.cameraService.homeForEngineCamera(engineCameraId),
         log: options.log ?? null,
       });
       router.use("/recognition", recognitionPlane.router);
+      void refreshTrackedVocabulary();
       // The engine bus subscription of record for recognition runs — the
       // SAME detections the home module's event ingest consumes. Only
       // recognition-bearing evidence (bus `reid`, locally read `plateText`)

@@ -526,10 +526,11 @@ test("wiring ac: the route registers exactly where the other screens do", () => 
   assert.match(mainSource, /\.\.\.createOverwatchActions\(\{ active, navigate \}\)/);
   // The nav affordance rides the same primary/labels/icons trio every family
   // tab uses (the header and the mobile bottom navigation both derive);
-  // PORCH-141 places People & Things directly after this entry.
-  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people"\]/);
-  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things"\]/);
-  assert.match(mainSource, /<VideocamOutlined \/>, <FaceOutlined \/>/);
+  // PORCH-141 places People & Things directly after this entry; PORCH-142
+  // appends Watchlists after People & Things.
+  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists"\]/);
+  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists"\]/);
+  assert.match(mainSource, /<FaceOutlined \/>, <LabelOutlined \/>/);
 });
 
 test("wiring ac: the wire file carries the full contract of routes", () => {

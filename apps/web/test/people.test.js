@@ -568,10 +568,11 @@ test("wiring ac: the tab registers exactly where the other screens do", () => {
   assert.match(mainSource, /import \{ createPeopleActions \} from "\.\/people-actions\.js";/);
   assert.match(mainSource, /\.\.\.createPeopleActions\(\{ active, navigate \}\)/);
   // The nav affordance rides the same primary/labels/icons trio every family
-  // tab uses, placed AFTER the overwatch entry.
-  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people"\]/);
-  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things"\]/);
-  assert.match(mainSource, /<VideocamOutlined \/>, <FaceOutlined \/>/);
+  // tab uses, placed AFTER the overwatch entry and the People & Things entry
+  // (PORCH-142 appends Watchlists at index 7, after People & Things).
+  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists"\]/);
+  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists"\]/);
+  assert.match(mainSource, /<FaceOutlined \/>, <LabelOutlined \/>/);
 });
 
 test("wiring ac-1: the two decorations ride the pure people-model joins", () => {

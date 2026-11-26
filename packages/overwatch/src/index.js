@@ -46,6 +46,8 @@ export {
 // (EntityLifecycleState / EntityStateLabel are JSDoc typedefs on types.js —
 // type-only, no runtime values to re-export.)
 export { filterTracked, isTrackedClass, isFollowableClass } from "./scope-law.js";
+// PORCH-142: the trained tracked-vocabulary extension seam.
+export { extendTrackedVocabulary, resetTrackedVocabulary } from "./scope-law.js";
 export { liveState, statesOf } from "./entity-state.js";
 export { createTrackedObjectsService } from "./tracked.js";
 export { createFollowService } from "./follow.js";
