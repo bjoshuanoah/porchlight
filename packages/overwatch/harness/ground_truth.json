@@ -1,0 +1,278 @@
+{
+ "sessions": [
+  {
+   "id": "beard-man",
+   "sightings": [
+    "beard-man-left-p4",
+    "beard-man-left-p5",
+    "beard-man-left-p6",
+    "beard-man-right-p1"
+   ]
+  },
+  {
+   "id": "cross-a",
+   "sightings": [
+    "cross-a-left-p3",
+    "cross-a-right-p1"
+   ]
+  },
+  {
+   "id": "cross-b",
+   "sightings": [
+    "cross-b-left-p14",
+    "cross-b-left-p15",
+    "cross-b-right-p6",
+    "cross-b-right-p7"
+   ]
+  },
+  {
+   "id": "stay-a",
+   "sightings": [
+    "stay-a-left-p2",
+    "stay-a-left-p4",
+    "stay-a-left-p8",
+    "stay-a-right-p1",
+    "stay-a-right-p4"
+   ]
+  },
+  {
+   "id": "cross-c",
+   "sightings": [
+    "cross-c-left-p26",
+    "cross-c-left-p28",
+    "cross-c-left-p32",
+    "cross-c-right-p15"
+   ]
+  },
+  {
+   "id": "cross-d",
+   "sightings": [
+    "cross-d-left-p6",
+    "cross-d-right-p5"
+   ]
+  },
+  {
+   "id": "cross-e",
+   "sightings": [
+    "cross-e-left-p17",
+    "cross-e-right-p14"
+   ]
+  },
+  {
+   "id": "pacing",
+   "sightings": [
+    "pacing-left-p16",
+    "pacing-left-p18",
+    "pacing-left-p19",
+    "pacing-right-p10",
+    "pacing-right-p8",
+    "pacing-right-p9"
+   ]
+  }
+ ],
+ "sightings": [
+  {
+   "id": "beard-man-left-p4",
+   "session": "beard-man",
+   "camera": "home_-_front_-_left",
+   "t0": 1795634396.375,
+   "t1": 1795634400.75
+  },
+  {
+   "id": "beard-man-left-p5",
+   "session": "beard-man",
+   "camera": "home_-_front_-_left",
+   "t0": 1795634407.0,
+   "t1": 1795634410.75
+  },
+  {
+   "id": "beard-man-left-p6",
+   "session": "beard-man",
+   "camera": "home_-_front_-_left",
+   "t0": 1795634412.875,
+   "t1": 1795634413.625
+  },
+  {
+   "id": "beard-man-right-p1",
+   "session": "beard-man",
+   "camera": "home_-_front_-_right",
+   "t0": 1795634392.625,
+   "t1": 1795634406.875
+  },
+  {
+   "id": "cross-a-left-p3",
+   "session": "cross-a",
+   "camera": "home_-_front_-_left",
+   "t0": 1795641512.25,
+   "t1": 1795641519.625
+  },
+  {
+   "id": "cross-a-right-p1",
+   "session": "cross-a",
+   "camera": "home_-_front_-_right",
+   "t0": 1795641518.0,
+   "t1": 1795641529.125
+  },
+  {
+   "id": "cross-b-left-p14",
+   "session": "cross-b",
+   "camera": "home_-_front_-_left",
+   "t0": 1795643156.75,
+   "t1": 1795643160.875
+  },
+  {
+   "id": "cross-b-left-p15",
+   "session": "cross-b",
+   "camera": "home_-_front_-_left",
+   "t0": 1795643170.625,
+   "t1": 1795643189.75
+  },
+  {
+   "id": "cross-b-right-p6",
+   "session": "cross-b",
+   "camera": "home_-_front_-_right",
+   "t0": 1795643150.5,
+   "t1": 1795643153.5
+  },
+  {
+   "id": "cross-b-right-p7",
+   "session": "cross-b",
+   "camera": "home_-_front_-_right",
+   "t0": 1795643162.5,
+   "t1": 1795643170.625
+  },
+  {
+   "id": "stay-a-left-p2",
+   "session": "stay-a",
+   "camera": "home_-_front_-_left",
+   "t0": 1795645748.0,
+   "t1": 1795645767.875
+  },
+  {
+   "id": "stay-a-left-p4",
+   "session": "stay-a",
+   "camera": "home_-_front_-_left",
+   "t0": 1795645768.375,
+   "t1": 1795645862.875
+  },
+  {
+   "id": "stay-a-left-p8",
+   "session": "stay-a",
+   "camera": "home_-_front_-_left",
+   "t0": 1795645797.75,
+   "t1": 1795645862.875
+  },
+  {
+   "id": "stay-a-right-p1",
+   "session": "stay-a",
+   "camera": "home_-_front_-_right",
+   "t0": 1795645767.875,
+   "t1": 1795645775.375
+  },
+  {
+   "id": "stay-a-right-p4",
+   "session": "stay-a",
+   "camera": "home_-_front_-_right",
+   "t0": 1795645789.0,
+   "t1": 1795645859.625
+  },
+  {
+   "id": "cross-c-left-p26",
+   "session": "cross-c",
+   "camera": "home_-_front_-_left",
+   "t0": 1795647045.375,
+   "t1": 1795647045.75
+  },
+  {
+   "id": "cross-c-left-p28",
+   "session": "cross-c",
+   "camera": "home_-_front_-_left",
+   "t0": 1795647046.625,
+   "t1": 1795647051.75
+  },
+  {
+   "id": "cross-c-left-p32",
+   "session": "cross-c",
+   "camera": "home_-_front_-_left",
+   "t0": 1795647059.0,
+   "t1": 1795647064.0
+  },
+  {
+   "id": "cross-c-right-p15",
+   "session": "cross-c",
+   "camera": "home_-_front_-_right",
+   "t0": 1795647051.375,
+   "t1": 1795647065.0
+  },
+  {
+   "id": "cross-d-left-p6",
+   "session": "cross-d",
+   "camera": "home_-_front_-_left",
+   "t0": 1795541167.625,
+   "t1": 1795541170.75
+  },
+  {
+   "id": "cross-d-right-p5",
+   "session": "cross-d",
+   "camera": "home_-_front_-_right",
+   "t0": 1795541173.25,
+   "t1": 1795541183.625
+  },
+  {
+   "id": "cross-e-left-p17",
+   "session": "cross-e",
+   "camera": "home_-_front_-_left",
+   "t0": 1795541583.625,
+   "t1": 1795541590.0
+  },
+  {
+   "id": "cross-e-right-p14",
+   "session": "cross-e",
+   "camera": "home_-_front_-_right",
+   "t0": 1795541589.0,
+   "t1": 1795541597.0
+  },
+  {
+   "id": "pacing-left-p16",
+   "session": "pacing",
+   "camera": "home_-_front_-_left",
+   "t0": 1795645990.875,
+   "t1": 1795645991.75
+  },
+  {
+   "id": "pacing-left-p18",
+   "session": "pacing",
+   "camera": "home_-_front_-_left",
+   "t0": 1795646030.5,
+   "t1": 1795646035.5
+  },
+  {
+   "id": "pacing-left-p19",
+   "session": "pacing",
+   "camera": "home_-_front_-_left",
+   "t0": 1795646040.5,
+   "t1": 1795646042.0
+  },
+  {
+   "id": "pacing-right-p8",
+   "session": "pacing",
+   "camera": "home_-_front_-_right",
+   "t0": 1795646001.0,
+   "t1": 1795646001.375
+  },
+  {
+   "id": "pacing-right-p9",
+   "session": "pacing",
+   "camera": "home_-_front_-_right",
+   "t0": 1795646025.75,
+   "t1": 1795646026.875
+  },
+  {
+   "id": "pacing-right-p10",
+   "session": "pacing",
+   "camera": "home_-_front_-_right",
+   "t0": 1795646045.875,
+   "t1": 1795646049.5
+  }
+ ]
+}

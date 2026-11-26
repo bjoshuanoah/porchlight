@@ -1,0 +1,19 @@
+{
+  "comment": "PORCH-126 spike deployment input for the porchlight front pair: home_-_front_-_left and home_-_front_-_right (Reolink dual-lens, overlapping front-yard coverage). Adjacency and priors are deployment-authored (coverage-zone surface pending PORCH-140).",
+  "adjacency": [
+    ["home_-_front_-_left", "home_-_front_-_right"]
+  ],
+  "overlapSide": {
+    "home_-_front_-_left|home_-_front_-_right": {
+      "home_-_front_-_left": "any",
+      "home_-_front_-_right": "any"
+    }
+  },
+  "travelTime": {
+    "home_-_front_-_left|home_-_front_-_right": { "min": 0, "max": 10 }
+  },
+  "joinThreshold": 0.5,
+  "trackIdleSec": 15,
+  "appearanceOverrideFloor": 0.5,
+  "appearanceVetoFloor": 0.35
+}
