@@ -263,7 +263,7 @@ test("front door: member identity birth, admission, device link, session restore
   // PORCH-048: the re-credential also restores the per-network device key
   // enrollment, so a signed WRITE from the re-bound device verifies — the
   // read-only failure mode (E_DEVICE_NOT_ENROLLED on every write) is gone.
-  const reboundPayload = { type: "text", body: "hello from the re-bound device", networkId: (sophieAdmit.body.membership as Json).networkId };
+  const reboundPayload = { type: "text", text: "hello from the re-bound device", networkId: (sophieAdmit.body.membership as Json).networkId };
   const reboundWrite = await call(port, "/api/social/posts", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${(restoredSessions[0] as Json).accessToken as string}` },

@@ -102,8 +102,8 @@ test("ac-1: album memberships write as derived-artifact-class records keyed to o
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
   const created = await fx.posts.create({
     accessToken: susan.token,
-    payload: { type: "photo", mediaRefs: ["med_orig_a"], caption: "Lakeside morning" },
-    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_a"], caption: "Lakeside morning" }),
+    payload: { type: "photo", mediaRefs: ["med_orig_a"], text: "Lakeside morning" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_a"], text: "Lakeside morning" }),
   });
 
   const added = await fx.albums.addItem({
@@ -170,13 +170,13 @@ test("ac-1: a member's deletion cascade removes their album memberships, never o
   const june = await admitted(fx, { networkId: FAMILY, did: JUNE, device: fx.juneDev });
   const susanPost = await fx.posts.create({
     accessToken: susan.token,
-    payload: { type: "photo", mediaRefs: ["med_orig_a"], caption: "Susan's photo" },
-    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_a"], caption: "Susan's photo" }),
+    payload: { type: "photo", mediaRefs: ["med_orig_a"], text: "Susan's photo" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_a"], text: "Susan's photo" }),
   });
   const junePost = await fx.posts.create({
     accessToken: june.token,
-    payload: { type: "photo", mediaRefs: ["med_orig_b"], caption: "June's photo" },
-    signature: june.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_b"], caption: "June's photo" }),
+    payload: { type: "photo", mediaRefs: ["med_orig_b"], text: "June's photo" },
+    signature: june.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_b"], text: "June's photo" }),
   });
   const add = (member, post) =>
     fx.albums.addItem({
@@ -219,8 +219,8 @@ test("ac-1: whole-album delete cascades only its own membership rows, transactio
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
   const post = await fx.posts.create({
     accessToken: susan.token,
-    payload: { type: "photo", mediaRefs: ["med_orig_a"], caption: "Original stays" },
-    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_a"], caption: "Original stays" }),
+    payload: { type: "photo", mediaRefs: ["med_orig_a"], text: "Original stays" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_orig_a"], text: "Original stays" }),
   });
   const peopleTag = {
     _id: "dd_tag_1",
@@ -269,19 +269,19 @@ test("ac-1: whole-album delete cascades only its own membership rows, transactio
 
 /* ------------------------- ac-2: plain-text search ----------------------- */
 
-test("ac-2: plain-text search resolves album names, captions, and manual people tags with origin containment", async () => {
+test("ac-2: plain-text search resolves album names, post text, and manual people tags with origin containment", async () => {
   const fx = albumFixture();
   const susan = await admitted(fx, { networkId: FAMILY, did: SUSAN, device: fx.dev });
   const carol = await admitted(fx, { networkId: OTHER, did: CAROL, device: fx.otherDev });
   const beachPost = await fx.posts.create({
     accessToken: susan.token,
-    payload: { type: "photo", mediaRefs: ["med_beach"], caption: "Beach picnic at sunset" },
-    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_beach"], caption: "Beach picnic at sunset" }),
+    payload: { type: "photo", mediaRefs: ["med_beach"], text: "Beach picnic at sunset" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_beach"], text: "Beach picnic at sunset" }),
   });
   const lakePost = await fx.posts.create({
     accessToken: susan.token,
-    payload: { type: "photo", mediaRefs: ["med_lake"], caption: "Lakeside morning" },
-    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_lake"], caption: "Lakeside morning" }),
+    payload: { type: "photo", mediaRefs: ["med_lake"], text: "Lakeside morning" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: ["med_lake"], text: "Lakeside morning" }),
   });
   // Album membership rows come from the albums surface (PORCH-013).
   await fx.albums.addItem({
@@ -311,7 +311,7 @@ test("ac-2: plain-text search resolves album names, captions, and manual people 
   assert.deepEqual((await search(susan.token, "aunt")).posts.map((p) => p._id), [beachPost.post._id]);
 
   // Origin containment: a foreign-origin member token never sees the
-  // family's captions, album names, or tags.
+  // family's post text, album names, or tags.
   const foreignCaption = await search(carol.token, "beach");
   assert.deepEqual(foreignCaption.posts, []);
   const foreignAlbum = await search(carol.token, "Summer 2026");
@@ -337,8 +337,8 @@ test("ac-3: albums serve renditions by default; original retrieval is the explic
 
   const post = await fx.posts.create({
     accessToken: susan.token,
-    payload: { type: "photo", mediaRefs: [committed.mediaId], caption: "Album shot" },
-    signature: susan.dev.signPayload({ type: "photo", mediaRefs: [committed.mediaId], caption: "Album shot" }),
+    payload: { type: "photo", mediaRefs: [committed.mediaId], text: "Album shot" },
+    signature: susan.dev.signPayload({ type: "photo", mediaRefs: [committed.mediaId], text: "Album shot" }),
   });
   const album = "Lake Album";
   await fx.albums.addItem({

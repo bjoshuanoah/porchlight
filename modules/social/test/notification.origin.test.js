@@ -23,7 +23,7 @@ async function notificationFixture() {
   const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
   const otherToken = (await fx.admit({ networkId: OTHER, did: MEG, device: megDev })).accessToken;
   const juneOtherToken = (await fx.admit({ networkId: OTHER, did: JUNE, device: juneDev })).accessToken;
-  const postPayload = { type: "text", body: "curated-caption-sunrise-archival" };
+  const postPayload = { type: "text", text: "curated-caption-sunrise-archival" };
   const post = (await fx.posts.create({ accessToken: familyToken, payload: postPayload, signature: dev.signPayload(postPayload) })).post;
   return { ...fx, dev, juneDev, megDev, familyToken, juneToken, otherToken, juneOtherToken, post };
 }

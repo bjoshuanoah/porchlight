@@ -40,7 +40,7 @@ function ogHub(): Promise<{ base: string; cleanup: () => Promise<void> }> {
     });
     await store.collection("posts").insertOne({
       _id: "post_og1", originNetworkId: "net_og", authorId: "did:porchlight:susan", type: "text",
-      body: "SECRET-PICNIC-BODY-WORDS picnic at five", visibility: "members-only",
+      text: "SECRET-PICNIC-BODY-WORDS picnic at five", visibility: "members-only",
       mediaRefs: [], createdAt: "2026-10-15T09:00:00.000Z", lastActivityAt: null, previewId: null, displayHint: null,
     });
     const config = mutableConfig();

@@ -161,7 +161,7 @@ test("vote display, deployed-hub stage 2: upCount and the viewer's own vote, eve
       });
     };
 
-    const postPayload = { type: "text", body: "the vote post", caption: "the vote post" };
+    const postPayload = { type: "text", text: "the vote post" };
     const post = (await runStep("post created (signed)", (async () => {
       const payload = postPayload;
       const res = await fetch(`${base}/api/social/posts`, {

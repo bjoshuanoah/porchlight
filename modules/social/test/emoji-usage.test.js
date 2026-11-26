@@ -18,7 +18,7 @@ async function contentFixture() {
   const juneDev = device("dev_j");
   const susanToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
   const juneToken = (await fx.admit({ networkId: FAMILY, did: JUNE, device: juneDev })).accessToken;
-  const payload = { type: "text", body: "root post" };
+  const payload = { type: "text", text: "root post" };
   const post = (await fx.posts.create({ accessToken: susanToken, payload, signature: dev.signPayload(payload) })).post;
   const commentPayload = { postId: post._id, body: "root comment" };
   const comment = (await fx.interactions.comment({ accessToken: juneToken, payload: commentPayload, signature: juneDev.signPayload(commentPayload) })).comment;

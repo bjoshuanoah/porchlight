@@ -65,7 +65,7 @@ const persistentRule = (hex) => new RegExp(`root svg\\{color:${hex};`);
 const hoverRule = (hex) => new RegExp(`:hover svg\\{color:${hex};`);
 
 const basePost = (extra = {}) => ({
-  _id: "p1", type: "text", body: "The lake was flat all day.",
+  _id: "p1", type: "text", text: "The lake was flat all day.",
   authorId: "did:porch:sister", origin: HOME, originNetworkId: "net-home",
   ...extra,
 });

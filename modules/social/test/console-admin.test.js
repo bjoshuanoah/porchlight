@@ -165,7 +165,7 @@ test("ac-3: removal revokes membership and device enrollments, kills sessions an
   const hub = await serve(fx.mod);
   try {
     // The member authored content before removal.
-    const payload = { type: "text", body: "Grandma's birthday" };
+    const payload = { type: "text", text: "Grandma's birthday" };
     const post = (await fx.mod.postService.create({ accessToken: fx.member.accessToken, payload, signature: fx.memberDev.signPayload(payload) })).post;
 
     // A live realtime channel for the member, closed at the revoke.
@@ -229,9 +229,9 @@ test("ac-4: permanent deletion confirms by typed name and cascades originals, de
   const hub = await serve(fx.mod);
   try {
     // The member authors a post and a comment on the owner's post.
-    const payload = { type: "text", body: "a post with a media ref" };
+    const payload = { type: "text", text: "a post with a media ref" };
     const post = (await fx.mod.postService.create({ accessToken: fx.member.accessToken, payload, signature: fx.memberDev.signPayload(payload) })).post;
-    const ownerPayload = { type: "text", body: "the owner's own post" };
+    const ownerPayload = { type: "text", text: "the owner's own post" };
     const ownerPost = (await fx.mod.postService.create({ accessToken: fx.owner.accessToken, payload: ownerPayload, signature: fx.ownerDev.signPayload(ownerPayload) })).post;
     const commentPayload = { postId: ownerPost._id, body: "a member comment" };
     const comment = (await fx.mod.interactionService.comment({ accessToken: fx.member.accessToken, payload: commentPayload, signature: fx.memberDev.signPayload(commentPayload) })).comment;

@@ -17,7 +17,8 @@ export const POST_MESSAGES = {
   E_EDIT_NOT_AUTHOR: "Only the post's author can edit it — ownership never confers edit authority.",
   E_EDIT_MEDIA_IMMUTABLE: "Media is never edited — swap, add, or remove media by deleting this post and posting it again.",
   E_EDIT_TYPE_IMMUTABLE: "A post's type never changes — delete this post and post the new one.",
-  E_EDIT_EMPTY: "An edit needs new text or a new caption.",
+  E_EDIT_EMPTY: "An edit needs new text.",
+  E_EDIT_LEGACY_TEXT_KEY: "Posts carry one text field now — send the post's text as `text`; caption keys no longer exist.",
   E_COMMENT_NOT_FOUND: "That comment doesn't exist in this network.",
 };
 
@@ -162,7 +163,7 @@ export class PostService {
    * For cross-posts (ac-2) the payload carries `crossPostRef`: the source
    * post id reaches the new post only as an optional client-side display
    * hint. The source document is untouched, the new post is fully
-   * independent (own caption, own mediaRefs, own interactions), and no
+   * independent (own text, own mediaRefs, own interactions), and no
    * dedupe machinery exists.
    */
   async create({ accessToken, payload, signature } = {}) {
@@ -262,7 +263,7 @@ export class PostService {
         // pipeline resolves each recipient's per-group preference at send
         // time (the persisted settings row, never cached).
         groupId: post.groupId,
-        excerpt: post.caption ?? post.body ?? null,
+        excerpt: post.text ?? null,
       });
     }
     return { post: (await this.memberViews([post], networkId, session.did))[0], did: session.did };
@@ -554,8 +555,9 @@ export class PostService {
   }
 
   /**
-   * Edit a post (PORCH-093 ac-4): the author edits their own post's text
-   * and caption. The two-role law is one-directional: ownership NEVER
+   * Edit a post (PORCH-093 ac-4): the author edits their own post's one
+   * text field (the post-text consolidation, PORCH-157: no separate
+   * caption survives). The two-role law is one-directional: ownership NEVER
    * confers edit authority — any other member (the network owner included)
    * is refused loudly. Media is never edited: a write attempting a
    * mediaRefs change (or a type change) is refused with the
@@ -563,9 +565,12 @@ export class PostService {
    * field is written, no revision history exists, and the served document
    * stays byte-indistinguishable from the same content authored once.
    *
-   * The PUT-class partial accepts `body` (text posts) and `caption`; the
+   * The PUT-class partial accepts `text` (the ONE post text field, the
+   * post-text consolidation PORCH-157) plus the location target; the
    * event (post.updated) carries the same decorated view as post.created,
-   * so connected clients re-render the edited fields in place.
+   * so connected clients re-render the edited fields in place. A write
+   * still carrying the retired `caption`/`body` keys is refused loudly:
+   * the edit write never accepts a separate caption.
    *
    * @param {{ accessToken: string, postId: string, payload: object, signature: string }} args
    */
@@ -590,8 +595,10 @@ export class PostService {
     if (payload.type !== undefined && payload.type !== post.type) {
       throw typedError("E_EDIT_TYPE_IMMUTABLE", POST_MESSAGES.E_EDIT_TYPE_IMMUTABLE);
     }
-    const hasBody = "body" in payload;
-    const hasCaption = "caption" in payload;
+    if ("caption" in payload || "body" in payload) {
+      throw typedError("E_EDIT_LEGACY_TEXT_KEY", POST_MESSAGES.E_EDIT_LEGACY_TEXT_KEY);
+    }
+    const hasText = "text" in payload;
     // The location ruling (Brian, Oct 16, 2026; PORCH-094): the edit write
     // carries the post's location target too — the general timeline (null)
     // or a group the author belongs to, in BOTH directions. The membership
@@ -599,18 +606,15 @@ export class PostService {
     // outside the author's membership is refused exactly like a targeted
     // creation (the author can never move a post where they cannot see).
     const hasGroup = "groupId" in payload;
-    if (!hasBody && !hasCaption && !hasGroup) {
+    if (!hasText && !hasGroup) {
       throw typedError("E_EDIT_EMPTY", POST_MESSAGES.E_EDIT_EMPTY);
     }
     const set = {};
-    if (hasBody) {
-      if (typeof payload.body !== "string" || payload.body.trim().length === 0) {
+    if (hasText) {
+      if (typeof payload.text !== "string" || payload.text.trim().length === 0) {
         throw typedError("E_EDIT_EMPTY", POST_MESSAGES.E_EDIT_EMPTY);
       }
-      set.body = payload.body;
-    }
-    if (hasCaption) {
-      set.caption = typeof payload.caption === "string" && payload.caption.trim().length > 0 ? payload.caption : null;
+      set.text = payload.text;
     }
     if (hasGroup) {
       if (payload.groupId !== null && typeof payload.groupId !== "string") {
@@ -625,8 +629,7 @@ export class PostService {
       kind: "post-edit",
       postId: post._id,
       networkId: post.originNetworkId,
-      ...(hasBody ? { body: set.body } : {}),
-      ...(hasCaption ? { caption: set.caption } : {}),
+      ...(hasText ? { text: set.text } : {}),
       ...(hasGroup ? { groupId: set.groupId } : {}),
     };
     await this.verifyWrite({ networkId: session.networkId, did: session.did, deviceId: session.deviceId, payload: verifyPayload, signature });
@@ -892,9 +895,17 @@ export class PostService {
     if (!POST_TYPES.includes(type)) {
       throw typedError("E_TYPE_REQUIRED", POST_MESSAGES.E_TYPE_REQUIRED);
     }
-    const body = payload.body ?? null;
+    // The post-text consolidation (PORCH-157): the post's text rides ONE
+    // field on every shape — no caption-bearing key is emitted, and a
+    // create write still carrying the retired `caption`/`body` keys is
+    // refused loudly (a stale composer's text must never be silently
+    // dropped; the composer rides the same consolidation release).
+    if ("caption" in payload || "body" in payload) {
+      throw typedError("E_LEGACY_TEXT_KEY", POST_MESSAGES.E_EDIT_LEGACY_TEXT_KEY);
+    }
+    const text = typeof payload.text === "string" ? payload.text : null;
     const mediaRefs = Array.isArray(payload.mediaRefs) ? payload.mediaRefs.filter((ref) => typeof ref === "string" && ref.length > 0) : [];
-    if (type === "text" && (typeof body !== "string" || body.trim().length === 0)) {
+    if (type === "text" && (typeof text !== "string" || text.trim().length === 0)) {
       throw typedError("E_BODY_REQUIRED", POST_MESSAGES.E_BODY_REQUIRED);
     }
     if (MEDIA_TYPES.includes(type) && mediaRefs.length === 0) {
@@ -930,8 +941,7 @@ export class PostService {
         deviceSignature: signature,
         mediaRefs,
         previewId: preview?._id ?? null,
-        caption: typeof payload.caption === "string" ? payload.caption : null,
-        body: type === "text" ? body : null,
+        text,
         visibility: "members-only",
         displayHint,
         interactionCounters: { ...ZERO_COUNTERS },
@@ -991,8 +1001,9 @@ export function postView(post) {
     groupId: post.groupId,
     mediaRefs: post.mediaRefs,
     previewId: post.previewId ?? null,
-    caption: post.caption,
-    body: post.body,
+    // The one text field per post (PORCH-157): a single served value; the
+    // caption/body view keys retired with the consolidation.
+    text: post.text ?? null,
     visibility: post.visibility,
     displayHint: post.displayHint,
     createdAt: post.createdAt,

@@ -116,7 +116,7 @@ test("reply read order, deployed-hub stage 2: the conversation routes serve the 
       body: JSON.stringify({ payload, signature: signNonce(ownerPrivJwk, JSON.stringify(Object.fromEntries(Object.keys(payload).sort().map((key) => [key, payload[key]])))) }),
     });
 
-    const postPayload = { type: "text", body: "the ruled order post" };
+    const postPayload = { type: "text", text: "the ruled order post" };
     const post = (await runStep("post created (signed)", (async () => {
       const res = await fetch(`${base}/api/social/posts`, signed("/posts", postPayload));
       const body = await res.json();

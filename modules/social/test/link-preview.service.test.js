@@ -74,7 +74,7 @@ test("ac-1: a YouTube post resolves to the embed class deterministically, never 
   assert.equal(JSON.stringify(resolution.preview).includes("autoplay"), false);
 
   // The post attaches the reference and the timeline view carries it.
-  const payload = { type: "text", body: "Look https://www.youtube.com/watch?v=bRk9XKQ9q0s", previewId: resolution.preview.id };
+  const payload = { type: "text", text: "Look https://www.youtube.com/watch?v=bRk9XKQ9q0s", previewId: resolution.preview.id };
   const post = (await fx.postService.create({ accessToken, payload, signature: fx.dev.signPayload(payload) })).post;
   const { posts } = await fx.feedService.timeline({ accessToken });
   const view = posts.find((row) => row._id === post._id);
@@ -146,7 +146,7 @@ test("ac-2: a generic og:image page resolves to the compact card with hub-ingest
   assert.equal(resolution.preview.title, "Grandma's Lasagna");
   assert.equal(resolution.preview.siteName, "Bell's Kitchen");
 
-  const payload = { type: "text", body: `Look ${page}`, previewId: resolution.preview.id };
+  const payload = { type: "text", text: `Look ${page}`, previewId: resolution.preview.id };
   const post = (await fx.postService.create({ accessToken, payload, signature: fx.dev.signPayload(payload) })).post;
   const { posts } = await fx.feedService.timeline({ accessToken });
   const view = posts.find((row) => row._id === post._id);
@@ -226,11 +226,11 @@ test("ac-3: bounded fetch — private, hostile, unfetchable, oversized, wrong-ty
   assert.deepEqual(await resolve(fx.linkPreviewService, accessToken, fx.dev, "https://loops.example/one"), { kind: "plain" });
 
   // Submit is never blocked: every degraded URL still composes fine.
-  const payload = { type: "text", body: "Read http://down.example/404 — will be back", previewId: null };
+  const payload = { type: "text", text: "Read http://down.example/404 — will be back", previewId: null };
   const post = (await fx.postService.create({ accessToken, payload, signature: fx.dev.signPayload(payload) })).post;
   assert.equal(post.previewId, null);
   // A stale or foreign preview reference also degrades, never throws.
-  const stalePayload = { type: "text", body: "gone", previewId: "lnk_never_existed" };
+  const stalePayload = { type: "text", text: "gone", previewId: "lnk_never_existed" };
   const stalePost = (await fx.postService.create({ accessToken, payload: stalePayload, signature: fx.dev.signPayload(stalePayload) })).post;
   assert.equal(stalePost.previewId, null);
 });
@@ -246,8 +246,8 @@ test("ac-2 deletion cascade: a post delete carries its preview records, og:image
   fx.fetchRoutes.set("https://garden.example/og.jpg", { contentType: "image/png", body: await samplePng() });
   const first = await resolve(fx.linkPreviewService, accessToken, fx.dev, page);
   const second = await resolve(fx.linkPreviewService, accessToken, fx.dev, page);
-  const p1Payload = { type: "text", body: `one ${page}`, previewId: first.preview.id };
-  const p2Payload = { type: "text", body: `two ${page}`, previewId: second.preview.id };
+  const p1Payload = { type: "text", text: `one ${page}`, previewId: first.preview.id };
+  const p2Payload = { type: "text", text: `two ${page}`, previewId: second.preview.id };
   const postOne = (await fx.postService.create({ accessToken, payload: p1Payload, signature: fx.dev.signPayload(p1Payload) })).post;
   const postTwo = (await fx.postService.create({ accessToken, payload: p2Payload, signature: fx.dev.signPayload(p2Payload) })).post;
   

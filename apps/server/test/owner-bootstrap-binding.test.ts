@@ -181,7 +181,7 @@ test("ac-1/ac-3: fresh bootstrap binds the owner to the network they created", a
     // Owner write verification works too: the presenting device is enrolled
     // (copied from the identity-plane registration), so an owner-authored
     // moment verifies like any member write.
-    const payload = { type: "text", body: "First moment at home." };
+    const payload = { type: "text", text: "First moment at home." };
     const createdPost = await call(port, "/api/social/posts", {
       method: "POST",
       headers: bearerAuth(accessToken),

@@ -161,7 +161,7 @@ test("self-vote at publish + un-vote clear ride, deployed-hub stage 2", { skip: 
 
     // The creation path's self-vote: zero client action — the composer's
     // one signed write lands the post AND the author's up-vote.
-    const postPayload = { type: "text", body: "the raised hand", caption: "the raised hand" };
+    const postPayload = { type: "text", text: "the raised hand" };
     const post = (await runStep("post created with its author self-vote (signed creation write)", (async () => {
       const res = await fetch(`${base}/api/social/posts`, {
         method: "POST",

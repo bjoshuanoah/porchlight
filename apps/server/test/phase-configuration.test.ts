@@ -248,8 +248,8 @@ async function bootMember(hub: BootedHub, displayName: string, deviceId: string)
 }
 
 /** Signed post creation over the real HTTP surface; returns the member post view. */
-async function signedPost(port: number, auth: Auth, pair: DevicePair, body: string): Promise<Json> {
-  const payload = { type: "text", body };
+async function signedPost(port: number, auth: Auth, pair: DevicePair, text: string): Promise<Json> {
+  const payload = { type: "text", text };
   const created = await call(port, "/api/social/posts", {
     method: "POST",
     headers: auth,
@@ -403,8 +403,8 @@ test("phase configuration: hosted mode grants no content reach — the console c
   const member = await bootMember(hub, "Susan", "dev_susan");
 
   // Member-authored content exists on the hosted box.
-  const caption = "PROBE-caption-never-for-owner-surfaces-7731";
-  const post = await signedPost(port, member.auth, member.pair, caption);
+  const probeText = "PROBE-text-never-for-owner-surfaces-7731";
+  const post = await signedPost(port, member.auth, member.pair, probeText);
 
   // The perimeter is unchanged by the mode: content reads still demand a
   // network-scoped membership token — operating the box grants no reach.
@@ -412,7 +412,7 @@ test("phase configuration: hosted mode grants no content reach — the console c
   assert.equal((await call(port, "/api/social/console/limits")).status, 401);
 
   // Every console surface the operator can open carries quantities, events,
-  // and metadata only — the member caption never appears in any of them.
+  // and metadata only — the member post text never appears in any of them.
   for (const path of [
     "/api/social/console/limits",
     "/api/social/console/audit",
@@ -423,7 +423,7 @@ test("phase configuration: hosted mode grants no content reach — the console c
   ]) {
     const res = await call(port, path, { headers: hub.owner.auth });
     assert.equal(res.status, 200, `${path} answered ${res.status}`);
-    assert.equal(JSON.stringify(res.body).includes(caption), false, `${path} leaked member content`);
+    assert.equal(JSON.stringify(res.body).includes(probeText), false, `${path} leaked member content`);
   }
 });
 
@@ -440,7 +440,7 @@ test("phase configuration: AI-native seams are mode-invariant — signed writes 
     const forged = await call(port, "/api/social/posts", {
       method: "POST",
       headers: member.auth,
-      body: JSON.stringify({ payload: { type: "text", body: "forged" }, signature: signPayload(member.pair, { type: "text", body: "OTHER" }) }),
+      body: JSON.stringify({ payload: { type: "text", text: "forged" }, signature: signPayload(member.pair, { type: "text", text: "OTHER" }) }),
     });
     assert.equal(forged.status, 403);
     assert.equal(forged.body.code, "E_SIGNATURE_INVALID");

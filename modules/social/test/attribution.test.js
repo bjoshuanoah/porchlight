@@ -75,7 +75,7 @@ function feedOver(fx) {
 test("ac-1: feed, post detail, and reply threads carry the author's real name", async () => {
   const fx = await attributedFixture();
   const { feed } = { feed: feedOver(fx) };
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "picnic sunday" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "picnic sunday" });
 
   const timeline = (await feed.timeline({ accessToken: fx.susanToken })).posts;
   assert.equal(timeline.find((row) => row._id === post._id).authorName, "June River");
@@ -98,7 +98,7 @@ test("ac-1: feed, post detail, and reply threads carry the author's real name", 
 test("ac-1: the timeline carries no counter, ratio, or vote-privacy leak beyond the name", async () => {
   const fx = await attributedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "hello" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "hello" });
   const row = (await feed.timeline({ accessToken: fx.susanToken })).posts.find((item) => item._id === post._id);
   assert.equal(row.authorName, "June River");
   for (const key of ["interactionCounters", "deviceSignature", "upVolume", "voteRatio"]) {
@@ -109,7 +109,7 @@ test("ac-1: the timeline carries no counter, ratio, or vote-privacy leak beyond 
 test("ac-2: attribution is symmetric, including self-attribution on one's own post", async () => {
   const fx = await attributedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "from june" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "from june" });
 
   for (const viewerToken of [fx.susanToken, fx.juneToken]) {
     const row = (await feed.timeline({ accessToken: viewerToken })).posts.find((item) => item._id === post._id);
@@ -127,7 +127,7 @@ test("ac-2: attribution is symmetric, including self-attribution on one's own po
 test("ac-3: attribution resolves at read time — a name change shows on the next read, nothing frozen on the document", async () => {
   const fx = await attributedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "same post, new name" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "same post, new name" });
 
   const before = (await feed.timeline({ accessToken: fx.susanToken })).posts.find((row) => row._id === post._id);
   assert.equal(before.authorName, "June River");
@@ -147,7 +147,7 @@ test("ac-4: names resolve against the origin network's membership only", async (
   const juneDev = device("dev_j");
   const familyToken = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: susanDev })).accessToken;
   const otherToken = (await fx.admit({ networkId: OTHER, did: JUNE, device: juneDev })).accessToken;
-  const otherPost = await mkPost(fx, otherToken, juneDev, { type: "text", body: "posted at the other network" });
+  const otherPost = await mkPost(fx, otherToken, juneDev, { type: "text", text: "posted at the other network" });
 
   // Susan's token scopes exactly one origin; the other network's author
   // is unresolvable there — nameless fallback, never a cross-origin name.
@@ -168,7 +168,7 @@ test("ac-4: names resolve against the origin network's membership only", async (
 test("ac-4: revoked membership loses attribution; reactions and votes render exactly as before", async () => {
   const fx = await attributedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "before revocation" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "before revocation" });
 
   const reactionPayload = { postId: post._id, emoji: "🌻" };
   const reaction = (await fx.interactions.react({
@@ -224,7 +224,7 @@ test("ac-4: revoked membership loses attribution; reactions and votes render exa
 test("attribution rides every decorated view: search, ranked, albums, and the base content list", async () => {
   const fx = await attributedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "lake day", caption: "the lake" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "lake day" });
 
   const searched = (await feed.search({ accessToken: fx.susanToken, query: "lake" })).posts;
   assert.equal(searched.find((row) => row._id === post._id).authorName, "June River");
@@ -249,7 +249,7 @@ test("an assembly without the identity name resolver still serves views with nam
   const dev = device("dev_s");
   const token = (await fx.admit({ networkId: FAMILY, did: SUSAN, device: dev })).accessToken;
   const feed = feedOver(fx);
-  const post = await mkPost(fx, token, dev, { type: "text", body: "unnamed hub" });
+  const post = await mkPost(fx, token, dev, { type: "text", text: "unnamed hub" });
   const row = (await feed.timeline({ accessToken: token })).posts.find((item) => item._id === post._id);
   assert.equal(row.authorName, null);
   // The nameless fallback holds on every fed plane: no name, no face.
@@ -263,7 +263,7 @@ test("an assembly without the identity name resolver still serves views with nam
 
 test("PORCH-070: post views and comment/reply views carry the author's avatar beside the name", async () => {
   const fx = await attributedFixture();
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "faces beside names" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "faces beside names" });
 
   const detail = (await fx.posts.get({ accessToken: fx.susanToken, postId: post._id })).post;
   assert.equal(detail.authorName, "June River");
@@ -301,7 +301,7 @@ test("PORCH-070: post views and comment/reply views carry the author's avatar be
 test("PORCH-070: name-only surfaces stay name-only — feed reply previews, albums, and mention candidates", async () => {
   const fx = await attributedFixture();
   const feed = feedOver(fx);
-  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", body: "lake day", caption: "the lake" });
+  const post = await mkPost(fx, fx.juneToken, fx.juneDev, { type: "text", text: "lake day" });
   const commentPayload = { postId: post._id, body: "we'll bring the drinks" };
   await fx.interactions.comment({
     accessToken: fx.susanToken,

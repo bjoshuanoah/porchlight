@@ -247,8 +247,8 @@ test("ac-2: a private-group post never renders for a non-member on any surface",
   try {
     const group = await fx.groups.create({ networkId: FAMILY, name: "Picnic", members: [CASS], createdBy: CASS });
     await fx.collections.groups.updateOne({ _id: group._id }, { $set: { members: [CASS] } });
-    const secret = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "hidden from pip", caption: "secret picnic", groupId: group._id });
-    const plain = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "plain post" });
+    const secret = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "hidden from pip", groupId: group._id });
+    const plain = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "plain post" });
 
     // A group member sees both posts on the main feed, and the private
     // post's group timeline (the standing group-post rule keeps).
@@ -258,7 +258,7 @@ test("ac-2: a private-group post never renders for a non-member on any surface",
     assert.deepEqual(groupTimeline.map((post) => post._id), [secret._id]);
 
     // A non-member sees only the plain post everywhere: main feed, ranked,
-    // search (matching the private post's caption), and the legacy list read.
+    // search, and the legacy list read.
     const feed = (await fx.mod.feedService.timeline({ accessToken: fx.tokens.pip })).posts.map((post) => post._id);
     assert.deepEqual(feed, [plain._id]);
     const ranked = (await fx.mod.feedService.ranked({ accessToken: fx.tokens.pip })).posts.map((post) => post._id);
@@ -303,7 +303,7 @@ test("ac-3: a public group is discoverable and viewable by the whole network; it
   try {
     const group = await fx.groups.create({ networkId: FAMILY, name: "Harbor", members: [CASS], createdBy: CASS, visibility: "public" });
     const groupId = group._id;
-    const harbor = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "dock party", groupId });
+    const harbor = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "dock party", groupId });
 
     // Every member sees the group on the index (the join affordance reads
     // these rows) and opens detail + timeline — the view ruling.
@@ -340,7 +340,7 @@ test("ac-3: a public group is discoverable and viewable by the whole network; it
     // ruling for non-members — posting rights into a public group stay
     // governed by the shipped membership gate, which refuses the non-member
     // with plain language and zero documents.
-    const payload = { type: "text", body: "nope", groupId };
+    const payload = { type: "text", text: "nope", groupId };
     await assert.rejects(
       () => fx.mod.postService.create({ accessToken: fx.tokens.pip, payload, signature: fx.devs.pip.signPayload(payload) }),
       (error) => error.code === "E_GROUP_NOT_MEMBER",
@@ -363,7 +363,7 @@ test("lifecycle: self-serve join, removal with its atomic block, and the rejoin 
       body: JSON.stringify({ name: "Harbor", visibility: "public" }),
     });
     const groupId = (await created.json()).group._id;
-    const harbor = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "dock party", groupId });
+    const harbor = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "dock party", groupId });
 
     // Pip joins with no approval flow; delivery turns on immediately.
     const join = await fetch(`${base}/groups/${groupId}/join`, {
@@ -628,9 +628,9 @@ test("ac-4: group posts ride the main feed with their group chip", async () => {
     await fetch(`${base}/groups/${groupId}/members`, { method: "POST", headers: cassAuth, body: JSON.stringify({ did: DEVON }) });
     // Two creates can land in the same millisecond; backdate the group post
     // so the reverse-chron assert below is deterministic.
-    const picnic = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", body: "picnic logistics", groupId });
+    const picnic = await mkPost(fx, fx.tokens.devon, fx.devs.devon, { type: "text", text: "picnic logistics", groupId });
     await fx.collections.posts.updateOne({ _id: picnic._id }, { $set: { createdAt: new Date(Date.now() - 10_000).toISOString() } });
-    const plain = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", body: "regular post" });
+    const plain = await mkPost(fx, fx.tokens.cass, fx.devs.cass, { type: "text", text: "regular post" });
 
     // Base timeline over HTTP: both posts render, newest first; the group
     // post carries its group chip (`groupName`), the plain post carries none.

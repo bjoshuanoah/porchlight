@@ -28,8 +28,8 @@
  * and the create payload shape all live in ./compose-sheet.js (pure,
  * unit-tested); this component renders from those decisions. The mixed
  * create rides PORCH-143's shipped POST /api/social/posts contract (one
- * write, ordered mediaRefs, the draft's text rides the caption under
- * media) — no new server surface.
+ * write, ordered mediaRefs; the draft's text rides the one `text` field on
+ * every shape — the PORCH-157 consolidation) — no new server surface.
  *
  * The desktop composer (≥900px) is the same unified composer in the
  * existing centered modal presentation (Brian, 11/26/2026: the unified

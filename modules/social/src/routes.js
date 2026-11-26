@@ -63,9 +63,10 @@ export function createSocialRouter(controllers) {
   // resolves this signed clear write — the member's own vote row leaves.
   router.delete("/posts/:postId/votes", content.unvote);
   router.delete("/posts/:postId", content.deletePost);
-  // Lifecycle edits (PORCH-093): the author's silent text/caption edit on
-  // the post and the author's text edit on a comment; media changes are
-  // refused with the delete-and-repost direction.
+  // Lifecycle edits (PORCH-093): the author's silent text edit on the post
+  // (one text field per the PORCH-157 consolidation) and the author's text
+  // edit on a comment; media changes are refused with the
+  // delete-and-repost direction.
   router.put("/posts/:postId", content.editPost);
   router.put("/posts/:postId/comments/:commentId", content.editComment);
   // Lifecycle comment delete (PORCH-093 ac-1): author or network owner;

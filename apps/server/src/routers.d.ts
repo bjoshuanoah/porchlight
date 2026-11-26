@@ -200,7 +200,7 @@ declare module "@porchlight/social" {
     get(options?: { accessToken?: string | null; postId?: string }): Promise<{ post: Record<string, unknown> }>;
     list(options?: { accessToken?: string | null }): Promise<{ posts: Array<Record<string, unknown>> }>;
     deletePost(options?: { accessToken?: string | null; postId?: string; signature?: string }): Promise<{ deleted: boolean; postId: string; tombstoneId: string }>;
-    /** PORCH-093 ac-4: the author's silent text/caption edit. */
+    /** PORCH-093 ac-4: the author's silent one-text-field edit (PORCH-157). */
     editPost(options?: { accessToken?: string | null; postId?: string; payload?: object; signature?: string }): Promise<{ post: Record<string, unknown> }>;
     memberContentSweep(options?: { accessToken?: string | null; signature?: string }): Promise<{ sweptPosts: number }>;
     cascadePost(post: Record<string, unknown>, options?: { actorDid?: string | null; deletedByRole?: "author" | "owner" | "group-manager" }): Promise<{ deleted: boolean; postId: string; tombstoneId: string }>;

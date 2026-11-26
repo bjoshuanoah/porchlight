@@ -163,7 +163,7 @@ test("ac-2: membership writes verify against the enrolled device key at the orig
     signature: device.sign(`porchlight-join:${invite.token}`).toString("base64url"),
   });
 
-  const payload = { type: "text", body: "hello family" };
+  const payload = { type: "text", text: "hello family" };
   const signature = device.sign(canonical(payload)).toString("base64url");
   const result = await membership.verifyMemberWrite({
     networkId: "net_1",
@@ -174,7 +174,7 @@ test("ac-2: membership writes verify against the enrolled device key at the orig
   });
   assert.equal(result.verified, true);
 
-  const wrongPayload = { type: "text", body: "tampered" };
+  const wrongPayload = { type: "text", text: "tampered" };
   await assert.rejects(
     () =>
       membership.verifyMemberWrite({
@@ -646,7 +646,7 @@ test("PORCH-048: a member device re-bound by device link or pairing re-credentia
   // The written payload verifies under the same verifyMemberWrite contract
   // as every origin write (post, comment, reaction, vote), signed by the
   // re-bound device's own key.
-  const payload = { type: "text", body: "hello from the re-bound device", networkId: "net_1" };
+  const payload = { type: "text", text: "hello from the re-bound device", networkId: "net_1" };
   const write = await membership.verifyMemberWrite({
     networkId: "net_1",
     did: "did:porchlight:susan",
@@ -672,7 +672,7 @@ test("PORCH-048: a revoked device registration loses enrollment — restore enro
   assert.equal((await db.collection("device_keys").find({ deviceId: "dev_phone" })).length, 0, "no resurrection of revoked keys");
 
   // No key, no write — the same typed error the admitting-device path uses.
-  const payload = { type: "text", body: "should not verify", networkId: "net_1" };
+  const payload = { type: "text", text: "should not verify", networkId: "net_1" };
   await assert.rejects(
     () =>
       membership.verifyMemberWrite({

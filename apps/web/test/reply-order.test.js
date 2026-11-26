@@ -215,7 +215,7 @@ test("PORCH-086 regression: the timeline card renders — the draft map is a pla
   assert.doesNotMatch(social, /useState\(\(\) => new Map\(\)\)[^\n]*\.current/,
     "no hook takes .current off the useState pair anywhere");
   const { PostCard } = await surfaces();
-  const cardPost = { _id: "p1", origin: "https://hub", type: "text", body: "the ruled order post",
+  const cardPost = { _id: "p1", origin: "https://hub", type: "text", text: "the ruled order post",
     authorDid: "dA", authorName: "Ari", createdAt: ts(1), replySlice: [], replyTotal: 0 };
   const html = renderToString(React.createElement(PostCard, { post: cardPost, data, actions: {}, navigate: null, onHide: null }));
   assert.ok(html.includes("the ruled order post"), "the rendered card carries the post body");

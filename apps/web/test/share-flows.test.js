@@ -71,7 +71,7 @@ test("ac-4: an image set opens photo compose with every shared photo staged and 
   const staged = classifyStagedShare({ text: "From the park", files: [png, jpg] });
   assert.equal(staged.type, "photo");
   assert.deepEqual(staged.files, [png, jpg]);
-  assert.equal(staged.caption, "From the park");
+  assert.equal(staged.text, "From the park");
   assert.equal(staged.notice, null);
 });
 
@@ -85,10 +85,10 @@ test("ac-4: a video share opens video compose; an audio share opens audio compos
 });
 
 test("ac-4: a text share opens text compose with the shared text in the area", () => {
-  assert.equal(classifyStagedShare({ text: "Look at this", url: "https://example.com/x" }).body, "Look at this");
+  assert.equal(classifyStagedShare({ text: "Look at this", url: "https://example.com/x" }).text, "Look at this");
   // A bare URL (no text) or a lone title stages as text too.
-  assert.equal(classifyStagedShare({ url: "https://example.com/x" }).body, "https://example.com/x");
-  assert.equal(classifyStagedShare({ title: "Trip" }).body, "Trip");
+  assert.equal(classifyStagedShare({ url: "https://example.com/x" }).text, "https://example.com/x");
+  assert.equal(classifyStagedShare({ title: "Trip" }).text, "Trip");
 });
 
 test("ac-4: a mixed share stages what can be staged and names what was left out", () => {

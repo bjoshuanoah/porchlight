@@ -66,8 +66,9 @@ export function attachmentKind(file) {
 
 /**
  * Staged-share mapping (PORCH-105, unified surface): the one staged
- * payload opens the ONE sheet draft. Shared text rides the draft's text
- * either way (a photo share's caption text is the staged post text), the
+ * payload opens the ONE sheet draft. The shared text rides the draft's
+ * text either way (a photo share's shared text is the staged post text),
+ * the
  * photos/videos stage as attachments regardless of the staged type, and
  * audio stages nothing — audio capture is out of the unified compose
  * surfaces this round (the 11/25 amendment: no recording affordance, no
@@ -76,7 +77,7 @@ export function attachmentKind(file) {
  * `staged.dropped` → the caller renders `staged.notice`.
  */
 export function stagedShareDraft(staged = {}) {
-  const text = String(staged.caption ?? "") || String(staged.body ?? "");
+  const text = String(staged.text ?? "");
   const files = Array.isArray(staged.files) ? staged.files : [];
   const attachments = [];
   for (const file of files) {
@@ -135,13 +136,14 @@ export function destinationUnavailableCopy(label) {
 }
 
 /**
- * The create payload (PORCH-143's ordered mediaRefs contract). Text and
- * media publish as ONE post, never two writes: with media, the draft's
- * text rides the caption and the stored type is the first attachment's
- * kind (type=mixed is the server's read projection; the document keeps
- * the ordered id list). Without media, the text rides the body as a
- * text post. mediaRefs arrive in staged attachment order (position =
- * array order); an empty list with text is the text shape.
+ * The create payload (PORCH-143's ordered mediaRefs contract, amended Nov
+ * 26 2026 by the post-text consolidation PORCH-157). Text and
+ * media publish as ONE post, never two writes: with media or without, the
+ * draft's text rides the single `text` field on every shape — no
+ * caption-bearing key exists on the wire (type=mixed is the server's read
+ * projection; the document keeps the ordered id list). mediaRefs arrive in
+ * staged attachment order (position = array order); an empty list with
+ * text is the text shape.
  */
 export function publishPayload({ text = "", attachments = [], mediaRefs = [], groupId = "", previewId = null } = {}) {
   const bodyText = typeof text === "string" ? text.trim() : "";
@@ -151,16 +153,14 @@ export function publishPayload({ text = "", attachments = [], mediaRefs = [], gr
   return hasMedia
     ? {
         type: kindOf(0),
-        body: null,
-        caption: bodyText ? bodyText : null,
+        text: bodyText ? bodyText : null,
         mediaRefs: media,
         groupId: groupId || null,
         previewId: null,
       }
     : {
         type: "text",
-        body: bodyText,
-        caption: null,
+        text: bodyText,
         mediaRefs: [],
         groupId: groupId || null,
         previewId: previewId ?? null,

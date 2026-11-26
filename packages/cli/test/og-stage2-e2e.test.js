@@ -117,7 +117,7 @@ test("OG unfurl surface, deployed-hub stage 2: every route the shared links ride
 
     // The owner posts a real post through the real write path (device-signed).
     const post = await runStep("owner posts a real post (device-signed write)", (async () => {
-      const payload = { type: "text", body: "Sunday dinner at the lake, everyone bring a chair", caption: null, mediaRefs: [] };
+      const payload = { type: "text", text: "Sunday dinner at the lake, everyone bring a chair", mediaRefs: [] };
       const res = await fetch(`${base}/api/social/posts`, {
         method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${ownerToken}` },
         body: JSON.stringify({ payload, signature: signNonce(ownerPair.privateKey.export({ format: "jwk" }), canonicalJson(payload)) }),

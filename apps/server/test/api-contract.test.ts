@@ -191,7 +191,7 @@ test("content engine: membership-gated signed post creation ends to end (contrac
   const membershipToken = (admit.body as Json).accessToken as string;
 
   // A post write carries the signed payload + the membership Bearer token.
-  const payload = { type: "text", body: "hello family" };
+  const payload = { type: "text", text: "hello family" };
   const signature = sign(null, Buffer.from(canonicalJson(payload), "utf8"), device.privateKey).toString("base64url");
   const created = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
     method: "POST",
@@ -201,7 +201,7 @@ test("content engine: membership-gated signed post creation ends to end (contrac
   assert.equal(created.status, 200);
   const createdBody = (await created.json()) as { post: Json; did: string };
   assert.equal(createdBody.post.type, "text");
-  assert.equal(createdBody.post.body, "hello family");
+  assert.equal(createdBody.post.text, "hello family");
   assert.equal("interactionCounters" in createdBody.post, false); // rank inputs never leave
   assert.equal(createdBody.did, did);
 
@@ -376,7 +376,7 @@ test("notifications: content-free transport, origin-only mention autocomplete (c
   const june = await admit(port, juneIdentityToken, junePair, juneCode);
 
   // Owner posts; June comments mentioning the owner — the mention trigger.
-  const postPayload = { type: "text", body: "family-photo-caption-original" };
+  const postPayload = { type: "text", text: "family-photo-caption-original" };
   const created = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
     method: "POST",
     headers: bearerAuth(ownerToken),
@@ -484,7 +484,7 @@ test("emoji usage: account-level frequently-used order serves the member's own r
   const juneCode = (((juneInvite.body as Json).invite ?? (juneInvite.body as Json)) as Json).token as string;
   const june = await admit(port, juneIdentityToken, junePair, juneCode);
 
-  const postPayload = { type: "text", body: "emoji usage route contract post" };
+  const postPayload = { type: "text", text: "emoji usage route contract post" };
   const created = await fetch(`http://127.0.0.1:${port}/api/social/posts`, {
     method: "POST",
     headers: bearerAuth(owner.accessToken),
@@ -623,8 +623,8 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
     createdAt: new Date().toISOString(),
     status: "committed",
   });
-  const captioned = await createPost({ type: "photo", mediaRefs: ["med_1"], caption: "Picnic at the Lake" });
-  await createPost({ type: "text", body: "plain text post" });
+  const captioned = await createPost({ type: "photo", mediaRefs: ["med_1"], text: "Picnic at the Lake" });
+  await createPost({ type: "text", text: "plain text post" });
 
   // Group container: group timeline is the origin-filtered groupId query.
   // The console screens are owner-only; Susan admits as the founder, so her
@@ -636,7 +636,7 @@ test("feed assembly: timeline, group view, ranked order, and search end to end (
   });
   assert.equal(group.status, 201);
   const groupId = (group.body as FeedGroupBody).group._id;
-  const picnic = await createPost({ type: "text", body: "picnic logistics", groupId });
+  const picnic = await createPost({ type: "text", text: "picnic logistics", groupId });
   const groupTimeline = await fetch(`http://127.0.0.1:${port}/api/social/timeline/groups/${groupId}`, { headers: auth });
   assert.equal(groupTimeline.status, 200);
   const groupBody = (await groupTimeline.json()) as FeedGroupTimelineBody;

@@ -204,7 +204,7 @@ test("mixed photo/video posts, deployed-hub stage 2: the mixed create route fami
     const photoId = await runStep("real photo upload through the resumable route (read-back verified)", uploadMedia(base, ownerToken, ownerPrivJwk, await samplePhotoBytes(), "image/jpeg"));
     const videoId = await runStep("real video upload through the resumable route", uploadMedia(base, ownerToken, ownerPrivJwk, await sampleVideoBytes(), "video/mp4"));
 
-    const mixedPayload = { type: "photo", mediaRefs: [photoId, videoId], caption: "the lake day" };
+    const mixedPayload = { type: "photo", mediaRefs: [photoId, videoId], text: "the lake day" };
     const mixedPost = await runStep("mixed post created (signed, ordered photo→video)", (async () => {
       const res = await fetch(`${base}/api/social/posts`, writeHeaders(ownerPrivJwk, ownerToken, mixedPayload));
       const body = await res.json();
@@ -217,7 +217,7 @@ test("mixed photo/video posts, deployed-hub stage 2: the mixed create route fami
       assert.equal(res.status, 200);
       const timeline = (await res.json()).posts;
       const card = timeline.find((row) => row._id === mixedPost._id);
-      assert.ok(card, JSON.stringify(timeline.map((row) => row.caption)));
+      assert.ok(card, JSON.stringify(timeline.map((row) => row.text)));
       assert.equal(card.type, "mixed");
       assert.deepEqual(card.mediaRefs, [photoId, videoId]);
       assert.equal(card.mediaMeta[videoId].kind, "video");
@@ -256,14 +256,14 @@ test("mixed photo/video posts, deployed-hub stage 2: the mixed create route fami
     })());
 
     await runStep("atomicity: an uncommitted reference creates nothing (422, E_MEDIA_UNCOMMITTED)", (async () => {
-      const payload = { type: "photo", mediaRefs: [photoId, "med_never_uploaded"], caption: "half staged" };
+      const payload = { type: "photo", mediaRefs: [photoId, "med_never_uploaded"], text: "half staged" };
       const res = await fetch(`${base}/api/social/posts`, writeHeaders(ownerPrivJwk, ownerToken, payload));
       assert.equal(res.status, 422, `expected 422, got ${res.status}`);
       const body = await res.json();
       assert.equal(body.code, "E_MEDIA_UNCOMMITTED");
       assert.equal(body.error, "Nothing was created: one of the attached files never finished uploading. Re-attach the missing file and try again.");
       const timeline = (await (await fetch(`${base}/api/social/timeline`, { headers: { authorization: `Bearer ${ownerToken}` } })).json()).posts;
-      assert.equal(timeline.some((row) => row.caption === "half staged"), false, "no read surface serves the half-state");
+      assert.equal(timeline.some((row) => row.text === "half staged"), false, "no read surface serves the half-state");
     })());
 
     await runStep("quota class: an item over the owner storage ceiling is refused at its upload admission", (async () => {
@@ -285,11 +285,11 @@ test("mixed photo/video posts, deployed-hub stage 2: the mixed create route fami
     })());
 
     await runStep("legacy: a single-shaped photo post keeps type photo through the same projection", (async () => {
-      const legacyPayload = { type: "photo", mediaRefs: [photoId], caption: "plain photo" };
+      const legacyPayload = { type: "photo", mediaRefs: [photoId], text: "plain photo" };
       const res = await fetch(`${base}/api/social/posts`, writeHeaders(ownerPrivJwk, ownerToken, legacyPayload));
       assert.ok([200, 201].includes(res.status), JSON.stringify(await res.json()));
       const timeline = (await (await fetch(`${base}/api/social/timeline`, { headers: { authorization: `Bearer ${ownerToken}` } })).json()).posts;
-      const card = timeline.find((row) => row.caption === "plain photo");
+      const card = timeline.find((row) => row.text === "plain photo");
       assert.equal(card.type, "photo");
       assert.equal(card.mediaMeta[photoId].kind, "photo");
     })());

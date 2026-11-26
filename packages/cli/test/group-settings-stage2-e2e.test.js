@@ -309,7 +309,7 @@ test("group settings server, deployed-hub stage 2: the route family the settings
     // Checklist: owner post removal with the origin cascade.
     await runStep("DELETE /groups/:groupId/posts/:postId (managing member, device-signed)", (async () => {
       // A group post via the real write path.
-      const payload = { type: "text", body: "the picnic table by the lake", caption: null, mediaRefs: [], groupId };
+      const payload = { type: "text", text: "the picnic table by the lake", mediaRefs: [], groupId };
       const created = await (async () => {
         const res = await fetch(`${base}/api/social/posts`, {
           method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${memberToken}` },

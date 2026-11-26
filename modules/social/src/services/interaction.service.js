@@ -502,7 +502,7 @@ export class InteractionService {
     const pushTarget =
       subjectType === "comment"
         ? { targetDids: [comment.authorDid], excerpt: comment.body }
-        : { targetDids: [session.post.authorId ?? ""], excerpt: session.post.caption ?? session.post.body ?? null };
+        : { targetDids: [session.post.authorId ?? ""], excerpt: session.post.text ?? null };
     await this.push?.notify({
       networkId,
       type: "reaction",

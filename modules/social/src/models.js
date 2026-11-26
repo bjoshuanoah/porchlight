@@ -40,9 +40,16 @@ export const socialModels = {
        *  list projects type=mixed at read time only — no data migration, the
        *  document stays the ordered id list. */
       mediaRefs: { type: "array", items: { type: "string" } },
-      caption: { type: ["string", "null"] },
-      /** Text body for type=text posts. */
-      body: { type: ["string", "null"] },
+      /**
+       * The ONE text field per post (PORCH-157, post-text consolidation,
+       * Brian Nov 26 2026: "get rid of caption; the post text is the post
+       * text"). Every post shape — text-only, text-under-media, mixed —
+       * carries and serves the same value; the caption/body dual-field pair
+       * retired through the migration runner's step 001. The code name of
+       * record is `text` (the name the field-mapping landing chose; matches
+       * apps/server migration v1, $set text / $unset caption,body).
+       */
+      text: { type: ["string", "null"] },
       /** Members-only in V1 (visibility ruling). */
       visibility: { type: "string", enum: ["members-only"] },
       /** Client-side display hint ONLY; no domain logic reads it. */
@@ -192,7 +199,7 @@ export const socialModels = {
   },
   /**
    * Notification (PORCH-006, @mentions/nested replies). Content-free by
-   * contract: ids and type only — never a comment body or post caption.
+   * contract: ids and type only — never a comment body or post text.
    * Transport lives in client delivery; members poll their own inbox.
    */
   notification: {

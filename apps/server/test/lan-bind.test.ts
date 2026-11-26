@@ -76,7 +76,7 @@ test("LAN bind: token enforcement on the LAN-bound listener — zero trust at th
   const tokenlessWrite = await fetch(`${base}/api/social/posts`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ payload: { type: "text", body: "x" } }),
+    body: JSON.stringify({ payload: { type: "text", text: "x" } }),
   });
   assert.equal(tokenlessWrite.status, 401);
 

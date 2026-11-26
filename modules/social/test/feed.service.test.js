@@ -73,8 +73,8 @@ test("ac-1: base timeline is newest-first and latest activity bumps order posts"
   const { susan, june } = await admitAll(fx);
   const { feed } = withFeed(fx);
 
-  const first = await mkPost(fx, susan, fx.dev, { type: "text", body: "older post" });
-  const second = await mkPost(fx, june, fx.juneDev, { type: "text", body: "newer post" });
+  const first = await mkPost(fx, susan, fx.dev, { type: "text", text: "older post" });
+  const second = await mkPost(fx, june, fx.juneDev, { type: "text", text: "newer post" });
   // Two creates can land in the same millisecond; backdate the older post
   // so the reverse-chron asserts below are deterministic.
   await fx.collections.posts.updateOne({ _id: first._id }, { $set: { createdAt: new Date(Date.now() - 10_000).toISOString() } });
@@ -99,7 +99,7 @@ test("ac-1: base timeline is newest-first and latest activity bumps order posts"
 
   // Origin containment: the timeline reads ONLY the token's origin network.
   const otherToken = (await fx.admit({ networkId: OTHER, did: SUSAN, device: fx.dev })).accessToken;
-  const otherPost = await mkPost(fx, otherToken, fx.dev, { type: "text", body: "other origin" });
+  const otherPost = await mkPost(fx, otherToken, fx.dev, { type: "text", text: "other origin" });
   const otherTimeline = (await feed.timeline({ accessToken: otherToken })).posts;
   assert.deepEqual(otherTimeline.map((post) => post._id), [otherPost._id]);
   // ...and the family timeline never mixes origins.
@@ -112,8 +112,8 @@ test("ac-1: group timeline is the origin-filtered groupId query with no rank wei
   const { feed } = withFeed(fx);
 
   const group = await fx.groups.create({ networkId: FAMILY, name: "Picnic", members: [SUSAN, JUNE] });
-  const main = await mkPost(fx, susan, fx.dev, { type: "text", body: "main post" });
-  const picnic = await mkPost(fx, june, fx.juneDev, { type: "text", body: "picnic post", groupId: group._id });
+  const main = await mkPost(fx, susan, fx.dev, { type: "text", text: "main post" });
+  const picnic = await mkPost(fx, june, fx.juneDev, { type: "text", text: "picnic post", groupId: group._id });
 
   const groupView = await feed.groupTimeline({ accessToken: susan, groupId: group._id });
   assert.equal(groupView.group.name, "Picnic");
@@ -256,7 +256,7 @@ test("ac-3: vote records and aggregates never reach a client", async () => {
   const { susan, june, meg } = await admitAll(fx);
   const { feed } = withFeed(fx);
 
-  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "vote me", caption: "captioned" });
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", text: "vote me" });
   const votes = [
     [susan, fx.dev, "up"],
     [june, fx.juneDev, "up"],
@@ -329,8 +329,8 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
     reactions: recording("reactions", fx.collections.reactions),
   });
 
-  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "hideable" });
-  const second = await mkPost(fx, susan, fx.dev, { type: "text", body: "another" });
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", text: "hideable" });
+  const second = await mkPost(fx, susan, fx.dev, { type: "text", text: "another" });
   opened.length = 0;
   await spyFeed.timeline({ accessToken: susan });
   await spyFeed.ranked({ accessToken: susan });
@@ -352,26 +352,26 @@ test("ac-4: hidden lists are client-local — the server stores no hidden state"
   assert.equal((await spyFeed.timeline({ accessToken: susan })).posts.length, 2);
 });
 
-test("ac-5: plain-text search spans captions, people tags, and album names within the origin", async () => {
+test("ac-5: plain-text search spans post text, people tags, and album names within the origin", async () => {
   const fx = feedFixture();
   const { susan, june } = await admitAll(fx);
   const { feed } = withFeed(fx);
 
-  const captioned = await mkPost(fx, susan, fx.dev, { type: "photo", mediaRefs: ["med_1"], caption: "Picnic at the Lake" });
-  const tagged = await mkPost(fx, june, fx.juneDev, { type: "photo", mediaRefs: ["med_2"], caption: "sunday" });
-  const albumPost = await mkPost(fx, susan, fx.dev, { type: "photo", mediaRefs: ["med_3"], caption: "unrelated" });
+  const captioned = await mkPost(fx, susan, fx.dev, { type: "photo", mediaRefs: ["med_1"], text: "Picnic at the Lake" });
+  const tagged = await mkPost(fx, june, fx.juneDev, { type: "photo", mediaRefs: ["med_2"], text: "sunday" });
+  const albumPost = await mkPost(fx, susan, fx.dev, { type: "photo", mediaRefs: ["med_3"], text: "unrelated" });
   await fx.collections.derivedData.insertOne({
     _id: "ddt_tag_1", networkId: FAMILY, postId: tagged._id, class: "tag", value: "Aunt June", createdAt: new Date().toISOString(),
   });
   await fx.collections.derivedData.insertOne({
     _id: "ddt_album_1", networkId: FAMILY, postId: albumPost._id, class: "album_membership", value: "Summer 2026 Album", createdAt: new Date().toISOString(),
   });
-  // Origin-scoped: a caption outside the token's network never matches.
+  // Origin-scoped: a post text outside the token's network never matches.
   const otherToken = (await fx.admit({ networkId: OTHER, did: SUSAN, device: fx.dev })).accessToken;
-  const otherPost = await mkPost(fx, otherToken, fx.dev, { type: "photo", mediaRefs: ["med_9"], caption: "other-origin picnic" });
+  const otherPost = await mkPost(fx, otherToken, fx.dev, { type: "photo", mediaRefs: ["med_9"], text: "other-origin picnic" });
 
-  const byCaption = await feed.search({ accessToken: susan, query: "picnic at the" });
-  assert.deepEqual(byCaption.posts.map((post) => post._id), [captioned._id]);
+  const byText = await feed.search({ accessToken: susan, query: "picnic at the" });
+  assert.deepEqual(byText.posts.map((post) => post._id), [captioned._id]);
 
   const byTag = await feed.search({ accessToken: susan, query: "june" });
   assert.deepEqual(byTag.posts.map((post) => post._id), [tagged._id]);
@@ -398,7 +398,7 @@ test("ac-2/ac-3: a group post delivers to members' feeds only; joining a public 
   // A public group: Susan holds it (the creator) and adds June; Meg does not.
   const group = await fx.groups.create({ networkId: FAMILY, name: "Harbor", createdBy: SUSAN, visibility: "public" });
   await fx.groups.addMembers({ groupId: group._id, networkId: FAMILY, actorDid: SUSAN, dids: [JUNE] });
-  const dock = await mkPost(fx, june, fx.juneDev, { type: "text", body: "dock party", groupId: group._id });
+  const dock = await mkPost(fx, june, fx.juneDev, { type: "text", text: "dock party", groupId: group._id });
 
   // The member's own feed and ranked path carry the group post.
   const susanFeed = (await feed.timeline({ accessToken: susan })).posts;
@@ -444,7 +444,7 @@ test("ac-5: a post view carries four latest roots, root total, and descendant co
     reactions: fx.collections.reactions,
   });
 
-  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "conversation starter" });
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", text: "conversation starter" });
   const createdAt = (index) => new Date(Date.parse("2026-10-14T10:00:00Z") + index * 1000).toISOString();
   for (let index = 0; index < 52; index += 1) {
     await fx.collections.comments.insertOne({
@@ -498,7 +498,7 @@ test("ac-5: a post with four or fewer roots carries them all — nothing is with
   const { susan } = await admitAll(fx);
   const { feed } = withFeed(fx);
 
-  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "small talk" });
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", text: "small talk" });
   await fx.collections.comments.insertOne({ _id: "cmt_one", postId: post._id, networkId: FAMILY, authorDid: JUNE, parentId: null, body: "first", mentions: [], createdAt: "2026-10-14T10:00:00Z" });
 
   const [view] = (await feed.timeline({ accessToken: susan })).posts;
@@ -512,7 +512,7 @@ test("ac-5/ac-4: reaction rows ride the view as authored; containment excludes f
   const { susan } = await admitAll(fx);
   const { feed } = withFeed(fx);
 
-  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "reactable" });
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", text: "reactable" });
   await fx.collections.reactions.insertOne({ _id: "rct_1", postId: post._id, networkId: FAMILY, memberDid: JUNE, emoji: "🌻", createdAt: "2026-10-14T10:00:00Z" });
   // Foreign-network rows (and a foreign reply) never decorate this origin.
   await fx.collections.reactions.insertOne({ _id: "rct_2", postId: post._id, networkId: OTHER, memberDid: JUNE, emoji: "🐍", createdAt: "2026-10-14T10:01:00Z" });
@@ -551,7 +551,7 @@ test("PORCH-091 ac-1: card reaction rows attribute reactors in the origin's serv
   const { susan, june, meg } = await admitAll(fx);
   const { feed } = withFeed(fx);
 
-  const post = await mkPost(fx, susan, fx.dev, { type: "text", body: "chip board" });
+  const post = await mkPost(fx, susan, fx.dev, { type: "text", text: "chip board" });
   // Chip joins ride the existing signed reaction add, in origin order.
   const sunPayload = { postId: post._id, emoji: "🌻" };
   const juneRow = (await fx.interactions.react({ accessToken: june, payload: sunPayload, signature: fx.juneDev.signPayload(sunPayload) })).reaction;

@@ -65,8 +65,7 @@ function ogFixture({ networkName = "Oakmont", hubUrl = "https://porch.love" } = 
   // never carry any of it (ac-5).
   fx.collections.posts.insertOne({
     _id: "post_og1", originNetworkId: "net_og", authorId: "did:porchlight:susan",
-    type: "text", body: "SECRET-PICNIC-BODY-WORDS picnic at five",
-    caption: "SECRET-CAPTION-WORDS", visibility: "members-only", mediaRefs: [],
+    type: "text", text: "SECRET-PICNIC-BODY-WORDS picnic at five", visibility: "members-only", mediaRefs: [],
     createdAt: "2026-10-15T09:00:00.000Z", lastActivityAt: null, previewId: null, displayHint: null,
   });
   const lines = [];
@@ -190,7 +189,7 @@ test("ac-4: the tag set carries the og:title frame, the og:image route, and the 
   assert.equal(relativeTags.image, "/api/social/og/post/post_og1");
 });
 
-test("ac-5: the unfurl surface is content-free — no post body, caption, or member identity appears", async () => {
+test("ac-5: the unfurl surface is content-free — no post text or member identity appears", async () => {
   const fx = ogFixture();
   const { bytes } = await fx.og.image({ kind: "post", id: "post_og1" });
   const tagJson = (await fx.og.tags({ kind: "post", id: "post_og1", origin: "https://live-tunnel.example" }));
