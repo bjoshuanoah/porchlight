@@ -29,11 +29,18 @@
  * unit-tested); this component renders from those decisions. The mixed
  * create rides PORCH-143's shipped POST /api/social/posts contract (one
  * write, ordered mediaRefs, the draft's text rides the caption under
- * media) — no new server surface. The desktop modal (≥900px) is untouched
- * here: its unified-form build rides its own carrier task.
+ * media) — no new server surface.
+ *
+ * The desktop composer (≥900px) is the same unified composer in the
+ * existing centered modal presentation (Brian, 11/26/2026: the unified
+ * composer is not mobile-only — only the bottom-sheet presentation is):
+ * same empty-state media row, one multiline field, collapse law, carousel
+ * staging, eligibility law, publish lock, and destination control; no
+ * drag handle, nothing flush to the bottom edge, no safe-area
+ * choreography, no keyboard state machine.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { Alert, Box, Button, Chip, IconButton, InputBase, Menu, MenuItem, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Chip, Dialog, IconButton, InputBase, Menu, MenuItem, Stack, Typography } from "@mui/material";
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -41,6 +48,7 @@ import PhotoOutlinedIcon from "@mui/icons-material/PhotoOutlined";
 import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
 import VideocamOutlinedIcon from "@mui/icons-material/VideocamOutlined";
 import { photoFirst, carouselIndex } from "./photo-first.js";
+import { cssVars } from "./theme.js";
 import { composableGroups, composePresetLocationId, groupRows } from "./groups.js";
 import { firstUrlIn } from "./link-preview.js";
 import { identityOf } from "./feed-filter.js";
@@ -126,7 +134,27 @@ function ComposePreview({ attachment, onDuration, removeLabel, onRemove }) {
   </Box>;
 }
 
+/** The mobile bottom sheet: the flush-to-bottom unified composer below 900px. */
 export function ComposeSheet({ open, onClose, data = {}, actions = {}, target = null, staged = null }) {
+  const keyboard = useKeyboardSheet(open);
+  return <Composer open={open} onClose={onClose} data={data} actions={actions} target={target} staged={staged} presentation="mobile" keyboard={keyboard} />;
+}
+
+/**
+ * The desktop composer (≥900px): the SAME unified composer in the existing
+ * centered modal presentation (Section 18 "Desktop modal: build contract",
+ * Brian's unified-treatment ruling + the 11/26/2026 direction) — never a
+ * bottom sheet: no drag handle, nothing flush to the bottom edge, no
+ * safe-area choreography, and no keyboard state machine (the collapse law
+ * resolves on focus + draft alone: compact while focused or drafted, tiles
+ * return exactly on unfocused AND draft-empty).
+ */
+export function Compose({ open, onClose, data = {}, actions = {}, target = null, staged = null }) {
+  return <Composer open={open} onClose={onClose} data={data} actions={actions} target={target} staged={staged} presentation="desktop" />;
+}
+
+/** One composer: every state, law, and write shared; presentation differs. */
+function Composer({ open, onClose, data = {}, actions = {}, target = null, staged = null, presentation = "mobile", keyboard = null }) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [groupId, setGroupId] = useState("");
@@ -144,14 +172,13 @@ export function ComposeSheet({ open, onClose, data = {}, actions = {}, target = 
   const trackRef = useRef(null);
   const lastResolvedRef = useRef(null);
   const operation = useOperation();
-  const keyboard = useKeyboardSheet(open);
 
   // The destination option law (PORCH-068 ac-4): the author's groups in the
   // open network only — never another network, never a non-member group.
   const groups = composableGroups(groupRows(data.groups, data.network?.id), data.identity?.id);
   const label = destinationLabel(groups, groupId);
   const eligible = postEligible({ text, attachments });
-  const mode = sheetMode({ focused, keyboardOpen: keyboard.raised, text, attachments });
+  const mode = sheetMode({ focused, keyboardOpen: keyboard?.raised ?? false, text, attachments });
   const publishing = operation.busy;
 
   const addFiles = (kind) => (files) => {
@@ -290,25 +317,14 @@ export function ComposeSheet({ open, onClose, data = {}, actions = {}, target = 
   const carousel = attachments.length > 1;
   const previewText = (preview && previewAttached) || previewLoading;
 
-  return <Box
-    data-testid="compose-sheet"
-    role="dialog"
-    aria-modal="true"
-    aria-label="New post"
-    sx={{
-      position: "fixed", left: 0, right: 0, bottom: keyboard.raised ? `${keyboard.bottom}px` : 0, zIndex: 1200,
-      bgcolor: "porchlight.warm", borderTopLeftRadius: SHEET_RADIUS, borderTopRightRadius: SHEET_RADIUS,
-      boxShadow: "var(--porch-shadow-sheet)", display: "flex", flexDirection: "column",
-      transition: (theme) => theme.transitions.create("bottom", { duration: 180, easing: theme.transitions.easing.easeInOut }),
-    }}>
-    {/* Drag handle */}
-    <Box sx={{ pt: 1, display: "flex", justifyContent: "center" }}>
+  const body = <>
+    {presentation !== "desktop" && <Box sx={{ pt: 1, display: "flex", justifyContent: "center" }}>
       <Box sx={{ width: 40, height: 4, borderRadius: 2, bgcolor: "porchlight.borderStrong" }} />
-    </Box>
+    </Box>}
     {/* Header: "New post" left, circular close right (Icon 20px, 44px
         target, accessible name "Close"). */}
     <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: SHEET_PAD, pt: 0.5 }}>
-      <Typography component="h2" sx={{ fontWeight: 650, fontSize: "1.0625rem", lineHeight: "27px", color: "text.primary" }}>New post</Typography>
+      <Typography component="h2" id="compose-modal-title" sx={{ fontWeight: 650, fontSize: "1.0625rem", lineHeight: "27px", color: "text.primary" }}>New post</Typography>
       <IconButton
         aria-label="Close"
         data-testid="sheet-close"
@@ -417,7 +433,7 @@ export function ComposeSheet({ open, onClose, data = {}, actions = {}, target = 
           (typing or attached) holds Add photo / Add video at the left of
           the destination control. Flush above the safe area with the
           keyboard closed; above the keyboard when risen. */}
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: SHEET_PAD, py: 1, pb: "calc(8px + env(safe-area-inset-bottom))" }}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: SHEET_PAD, py: 1, pb: presentation === "desktop" ? 1 : "calc(8px + env(safe-area-inset-bottom))" }}>
         <Stack direction="row" alignItems="center" spacing={0.5}>
           {mode !== "empty" && <>
             <IconButton aria-label="Add photo" data-testid="sheet-add-photo" onClick={() => openPicker(photoInputRef)}>
@@ -477,6 +493,43 @@ export function ComposeSheet({ open, onClose, data = {}, actions = {}, target = 
         one tap from the matching tile or compact control. */}
     <input hidden ref={photoInputRef} type="file" accept="image/*" multiple onChange={(event) => { addFiles("photo")(event.target.files); event.target.value = ""; }} />
     <input hidden ref={videoInputRef} type="file" accept="video/*" onChange={(event) => { addFiles("video")(event.target.files); event.target.value = ""; }} />
+  </>;
+
+  if (presentation === "desktop") {
+    // The modal presentation: 720px class, max height calc(100vh − 80px),
+    // 18px radius (the MuiDialog style override), warm surface fill per
+    // display mode, backdrop scrim + ≤4px blur from the token set. The
+    // publish lock holds the open surface: while a write is in flight the
+    // backdrop, Escape, and the Close control dismiss nothing.
+    return <Dialog
+      open
+      onClose={publishing ? undefined : () => onClose?.()}
+      aria-labelledby="compose-modal-title"
+      slotProps={{
+        paper: {
+          "data-testid": "compose-modal",
+          sx: { width: "100%", maxWidth: 720, bgcolor: "porchlight.warm", maxHeight: "calc(100vh - 80px)", overflowY: "auto" },
+        },
+        backdrop: {
+          sx: { backgroundColor: cssVars.composeBackdrop, backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" },
+        },
+      }}>
+      {body}
+    </Dialog>;
+  }
+
+  return <Box
+    data-testid="compose-sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-label="New post"
+    sx={{
+      position: "fixed", left: 0, right: 0, bottom: keyboard?.raised ? `${keyboard.bottom}px` : 0, zIndex: 1200,
+      bgcolor: "porchlight.warm", borderTopLeftRadius: SHEET_RADIUS, borderTopRightRadius: SHEET_RADIUS,
+      boxShadow: "var(--porch-shadow-sheet)", display: "flex", flexDirection: "column",
+      transition: (theme) => theme.transitions.create("bottom", { duration: 180, easing: theme.transitions.easing.easeInOut }),
+    }}>
+    {body}
   </Box>;
 }
 
