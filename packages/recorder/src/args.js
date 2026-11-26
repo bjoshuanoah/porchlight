@@ -1,13 +1,17 @@
 // args.js — ffmpeg argv construction for the per-camera segment recorders
-// (PORCH-127). Pure module: the unit layer of every recorder decision.
+// (PORCH-127; hardware decisions moved to the HAL in PORCH-132). Pure module:
+// the unit layer of every recorder decision.
 //
 // Binding constraints from the task directive:
-//   - native ffmpeg with `-hwaccel videotoolbox` (hardware decode; the encoder
-//     for synthetic soak cameras is h264/hevc_videotoolbox),
+//   - hardware decode/encode choices come from the HAL backend (@porchlight/hal):
+//     `videotoolbox` hwaccel and `h264_videotoolbox`/nv12 on macOS — the argv
+//     builder itself stays platform-free and runs unmodified on any backend,
 //   - fMP4 segments written with movflags +frag_keyframe+empty_moov
 //     (proven shaping pattern), date/hour/camera path layout,
 //   - PCM ingest (8 kHz-class vendor adapters) transcoded to AAC/16 kHz at
 //     ingest for browser MSE compatibility.
+
+import { createHal } from "@porchlight/hal";
 
 /** Default fMP4 flags: fragmented on keyframes, empty moov, MSE-safe. */
 export const SEGMENT_MOVFLAGS = "+frag_keyframe+empty_moov+default_base_moof";
@@ -36,11 +40,16 @@ export function resolveAudioMode(camera) {
  * The output template uses strftime so every segment lands at
  * <root>/<YYYY-MM-DD>/<HH>/<camera>/<HHMMSS>.part (UTC — the daemon spawns
  * ffmpeg with TZ=UTC).
+ *
+ * Hardware decisions are the HAL's: decode argv and encode defaults come from
+ * the backend instance (`hal`, defaulting to the running host) so the same
+ * argv builder runs unmodified against any HAL implementation.
  * @param {import("./types.js").CameraConfig} camera
  * @param {{segmentSeconds: number}} cfg
+ * @param {ReturnType<typeof import("@porchlight/hal").resolveHal>} [hal]
  * @returns {string[]}
  */
-export function buildFfmpegArgs(camera, cfg) {
+export function buildFfmpegArgs(camera, cfg, hal = createHal()) {
 	const argv = ["-hide_banner", "-loglevel", "warning", "-nostdin"];
 	const out = [
 		"-avoid_negative_ts", "make_zero",
@@ -53,10 +62,11 @@ export function buildFfmpegArgs(camera, cfg) {
 	];
 	if (camera.source?.synthetic) {
 		// Soak-only origin: a lavfi test signal exercising the full recorder
-		// pipeline, encoded through VideoToolbox so the run is Apple-Silicon
-		// native end to end. Its PCM audio rides the same AAC/16 kHz
-		// transcode branch a vendor adapter's PCM ingest takes.
+		// pipeline, encoded through the HAL's hardware encoder so the run is
+		// Apple-Silicon native end to end on macOS. Its PCM audio rides the
+		// same AAC/16 kHz transcode branch a vendor adapter's PCM ingest takes.
 		const s = camera.source.synthetic;
+		const enc = hal.videoEncode();
 		const fps = s.fps ?? 12;
 		argv.push(
 			"-re", "-f", "lavfi", "-i", `testsrc2=size=${s.size ?? "1280x720"}:rate=${fps}`,
@@ -74,8 +84,8 @@ export function buildFfmpegArgs(camera, cfg) {
 			throw new Error(`camera ${camera.name}: synthetic PCM source cannot use audioMode "copy"`);
 		}
 		argv.push(
-			"-c:v", s.encoder ?? "h264_videotoolbox",
-			"-pix_fmt", "nv12",
+			"-c:v", s.encoder ?? enc.name,
+			"-pix_fmt", s.pixFmt ?? enc.pixFmt,
 			"-b:v", s.bitrate ?? "500k",
 			"-g", String(fps * 2),
 			// PCM lavfi ingest → the MSE transcode branch.
@@ -85,10 +95,10 @@ export function buildFfmpegArgs(camera, cfg) {
 		);
 	} else if (typeof camera.source?.url === "string") {
 		const url = camera.source.url;
-		// VideoToolbox hardware decode is a platform capability of this
-		// recorder (binding directive); with -c:v copy the flag is inert but
+		// Hardware decode is the host's platform capability, decided by the
+		// HAL (VideoToolbox on macOS); with -c:v copy the flag is inert but
 		// present on every real-camera ingest command.
-		argv.push("-hwaccel", "videotoolbox");
+		argv.push(...hal.videoDecodeArgs());
 		if (url.startsWith("rtsp://") || url.startsWith("rtsps://")) {
 			argv.push("-rtsp_transport", "tcp");
 		}
@@ -126,7 +136,8 @@ export function partPathTemplate(cameraName) {
  * hour/date rolling needs no template surgery.
  * @param {import("./types.js").CameraConfig} camera
  * @param {{segmentSeconds: number}} cfg
+ * @param {ReturnType<typeof import("@porchlight/hal").resolveHal>} [hal]
  */
-export function buildFfmpegCommand(camera, cfg) {
-	return { file: "ffmpeg", args: buildFfmpegArgs(camera, cfg) };
+export function buildFfmpegCommand(camera, cfg, hal = createHal()) {
+	return { file: "ffmpeg", args: buildFfmpegArgs(camera, cfg, hal) };
 }

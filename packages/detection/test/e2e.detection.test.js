@@ -18,6 +18,7 @@ import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
 import fsDefault from "node:fs";
 import os from "node:os";
+import { resolveHal } from "@porchlight/hal";
 import path from "node:path";
 
 import { CoreMLProvider } from "../src/provider.coreml.js";
@@ -64,7 +65,7 @@ function syntheticFrame(/** @type {number} */ phase, /** @type {string} */ camer
 
 T("e2e: real Swift Vision helper — swiftc compile + framed protocol + valid normalized response", async () => {
 	const out = path.join(fsDefault.mkdtempSync(path.join(os.tmpdir(), "porch-detect-")), "vision-helper");
-	await execFile("swiftc", ["-O", path.resolve(import.meta.dirname, "../swift/VisionHelper.swift"), "-o", out]);
+	await execFile("swiftc", ["-O", resolveHal().visionHelper().sourcePath, "-o", out]);
 	const provider = await new VisionProvider({ bin: out, timeoutMs: 30000 }).start();
 	const frame = syntheticFrame(0, "e2e-cam");
 	const dets = await provider.detect(frame);

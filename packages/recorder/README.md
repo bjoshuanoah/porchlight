@@ -1,9 +1,10 @@
 # @porchlight/recorder — segment recorders + endurance soak (PORCH-127)
 
 Per-camera **Recorder daemons** (Node child-process managers over native
-ffmpeg with `-hwaccel videotoolbox`), fMP4 segment writing, atomic
-finalize-on-crash, gap audit tooling, rolling retention, headless launchd
-autostart, and the 7-day deployment soak harness. Engine initiative:
+ffmpeg with hardware decode sourced from the platform HAL
+(`@porchlight/hal` — `-hwaccel videotoolbox` on macOS), fMP4 segment writing,
+atomic finalize-on-crash, gap audit tooling, rolling retention, headless
+launchd autostart, and the 7-day deployment soak harness. Engine initiative:
 Porchlight Home — Engine (recording, detection, inference). Camera count is
 a deployment input; nothing here builds to a specific fleet.
 
@@ -20,9 +21,10 @@ coverage model the gap audit uses.
 
 ## Recorder daemon (one per camera)
 
-- ffmpeg holds **one long-lived ingest per camera** (`-hwaccel videotoolbox`,
-  RTSP over TCP). Consumers (detection, live grid, transcription) ride the
-  stream manager — they never open camera connections.
+- ffmpeg holds **one long-lived ingest per camera** (hardware decode argv
+  from the HAL — `-hwaccel videotoolbox` on macOS, RTSP over TCP). Consumers
+  (detection, live grid, transcription) ride the stream manager — they never
+  open camera connections.
 - fMP4 segments: `-f segment` with `movflags=+frag_keyframe+empty_moov+default_base_moof`
   (proven shaping pattern; MSE-safe).
 - **Finalize-on-crash**: segments are written as `<HHMMSS>.part`; once the

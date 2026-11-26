@@ -48,12 +48,16 @@ re-point without core changes.
 
 - **CoreML EP** (`src/provider.coreml.js`): `onnxruntime-node` with the
   CoreML Execution Provider — ONNX models (e.g. a YOLO export) run natively
-  on Apple Silicon GPU/ANE. If the CoreML EP cannot build, the session falls
-  back to CPU and says so (`status().cpuFallback`, log line).
-- **Vision helper** (`src/provider.vision.js` + `swift/VisionHelper.swift`):
-  Apple Vision primitives (person/animal) via a compiled Swift subprocess
-  speaking a framed stdin/stdout protocol (see `swift/README.md`). Compile
-  once: `swiftc -O swift/VisionHelper.swift -o vision-helper`.
+  on Apple Silicon GPU/ANE. The default execution-provider order comes from
+  the platform HAL (`@porchlight/hal`). If the accelerated EPs cannot build,
+  the session falls back to CPU and says so (`status().cpuFallback`, log
+  line).
+- **Vision helper** (`src/provider.vision.js`): Apple Vision primitives
+  (person/animal) via a compiled Swift subprocess owned by the platform HAL
+  (`packages/hal/swift/VisionHelper.swift` — all OS-framework code lives in
+  the HAL) and speaking a framed stdin/stdout protocol (see
+  `packages/hal/swift/README.md`). Compile once:
+  `swiftc -O packages/hal/swift/VisionHelper.swift -o vision-helper`.
 
 ## CPU harness
 

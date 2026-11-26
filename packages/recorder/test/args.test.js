@@ -3,14 +3,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { AUDIO_TRANSCODE, SEGMENT_MOVFLAGS, buildFfmpegArgs, resolveAudioMode } from "../src/args.js";
+import { AUDIO_TRANSCODE, SEGMENT_MOVFLAGS, buildFfmpegArgs, buildFfmpegCommand, resolveAudioMode } from "../src/args.js";
+import { LinuxBackend, resolveHal } from "@porchlight/hal";
 
 const CFG = { segmentSeconds: 600 };
 
 test("real RTSP camera: videotoolbox ingest, copy video, AAC/16k transcode, fMP4 segment tail", () => {
+	// The darwin backend is injected explicitly: the macOS hardware argv is a
+	// deterministic contract here, independent of the host CI runs on. The
+	// host-resolved default is covered by the gated darwin test below.
 	const argv = buildFfmpegArgs(
 		{ name: "front_left", source: { url: "rtsp://cam/l" } },
 		CFG,
+		resolveHal({ platform: "darwin" }),
 	);
 	assert.ok(argv.includes("-hwaccel") && argv[argv.indexOf("-hwaccel") + 1] === "videotoolbox");
 	assert.ok(argv.includes("-rtsp_transport") && argv[argv.indexOf("-rtsp_transport") + 1] === "tcp");
@@ -78,4 +83,47 @@ test("synthetic source refuses audioMode copy (PCM has nothing safe to copy)", (
 
 test("camera without a usable source throws", () => {
 	assert.throws(() => buildFfmpegArgs({ name: "x", source: {} }, CFG), /needs source/);
+});
+
+// PORCH-132: hardware decisions come from the HAL. The builder must run
+// unmodified against the Linux HAL first-cut (test double) — same service
+// code, zero darwin-only tokens in the argv.
+
+test("portability: identical builder against the Linux HAL double — no videotoolbox anywhere", () => {
+	const hal = resolveHal({ platform: "linux" });
+	assert.ok(hal instanceof LinuxBackend);
+	const urlArgv = buildFfmpegArgs({ name: "front_left", source: { url: "rtsp://cam/l" } }, CFG, hal);
+	assert.ok(!urlArgv.includes("videotoolbox"));
+	assert.ok(!urlArgv.includes("-hwaccel")); // first-cut linux: software decode
+	assert.deepEqual(
+		urlArgv.slice(urlArgv.indexOf("-c:v"), urlArgv.indexOf("-c:v") + 2),
+		["-c:v", "copy"],
+	);
+	const synthArgv = buildFfmpegArgs(
+		{ name: "soak-1", source: { synthetic: { size: "640x360", fps: 12 } } },
+		CFG,
+		hal,
+	);
+	assert.deepEqual(
+		synthArgv.slice(synthArgv.indexOf("-c:v"), synthArgv.indexOf("-c:v") + 2),
+		["-c:v", "libx264"],
+	);
+	assert.deepEqual(
+		synthArgv.slice(synthArgv.indexOf("-pix_fmt"), synthArgv.indexOf("-pix_fmt") + 2),
+		["-pix_fmt", "yuv420p"],
+	);
+});
+
+test("portability: builder without an injected hal resolves this host's backend (darwin: videotoolbox)", () => {
+	if (process.platform !== "darwin") return;
+	const argv = buildFfmpegArgs({ name: "front_left", source: { url: "rtsp://cam/l" } }, CFG);
+	assert.ok(argv.includes("-hwaccel") && argv[argv.indexOf("-hwaccel") + 1] === "videotoolbox");
+});
+
+test("portability: buildFfmpegCommand threads the hal backend through", () => {
+	const linux = buildFfmpegCommand({ name: "c", source: { url: "rtsp://c" } }, CFG, resolveHal({ platform: "linux" }));
+	assert.equal(linux.file, "ffmpeg");
+	assert.ok(!linux.args.includes("videotoolbox"));
+	const darwin = buildFfmpegCommand({ name: "c", source: { url: "rtsp://c" } }, CFG, resolveHal({ platform: "darwin" }));
+	assert.ok(darwin.args.includes("videotoolbox"));
 });

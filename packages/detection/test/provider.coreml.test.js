@@ -65,7 +65,7 @@ const rgbFrame = (overrides = {}) => ({
 
 test("init builds the session with the CoreML EP first; detect decodes normalized output", async () => {
 	const fake = fakeOrt();
-	const provider = await new CoreMLProvider({ modelPath: "/models/yolo11n.onnx", classNames: ["person"], log: console.log }).init(fake);
+	const provider = await new CoreMLProvider({ modelPath: "/models/yolo11n.onnx", classNames: ["person"], executionProviders: ["coreml", "cpu"], log: console.log }).init(fake);
 	assert.equal(fake.createdWith[0][0], "coreml");
 	assert.equal(provider.status().engine, "coreml");
 	assert.equal(provider.status().cpuFallback, false);
@@ -83,12 +83,13 @@ test("CoreML EP failure falls back to CPU with an explicit never-silent log line
 	const provider = await new CoreMLProvider({
 		modelPath: "/models/yolo11n.onnx",
 		classNames: ["person"],
+		executionProviders: ["coreml", "cpu"],
 		log: (...a) => lines.push(a.join(" ")),
 	}).init(fakeOrt({ failCoreml: true }));
 	assert.equal(provider.cpuFallback, true);
 	assert.equal(provider.status().engine, "cpu");
 	assert.equal(provider.status().cpuFallback, true);
-	assert.ok(lines.some((l) => l.includes("CoreML EP unavailable") && l.includes("not on GPU/ANE")), "explicit CPU fallback line present");
+	assert.ok(lines.some((l) => l.includes("EPs unavailable") && l.includes("not on GPU/ANE")), "explicit CPU fallback line present");
 });
 
 test("detect rejects jpeg frames (pixels must arrive decoded) and before init", async () => {
@@ -116,4 +117,12 @@ test("decode consistency: the provider path and raw decodeYolo agree", async () 
 	});
 	const providerWithoutT = viaProvider.map(({ t: _t, ...rest }) => rest);
 	assert.deepEqual(providerWithoutT, viaDecode);
+});
+
+// PORCH-132: the default execution-provider order is the host HAL's decision,
+// never a hardcoded service list — this is the ac-1 portability seam.
+test("default execution providers come from the platform HAL, not the service", async () => {
+	const { resolveHal } = await import("@porchlight/hal");
+	const provider = new CoreMLProvider({ modelPath: "/m.onnx", classNames: ["person"] });
+	assert.deepEqual(provider.executionProviders, resolveHal().inferenceExecutionProviders());
 });

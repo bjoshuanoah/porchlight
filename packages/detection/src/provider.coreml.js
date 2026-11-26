@@ -1,10 +1,14 @@
-// provider.coreml.js — the CoreML EP onnxruntime InferenceProvider (PORCH-128).
+// provider.coreml.js — the CoreML EP onnxruntime InferenceProvider (PORCH-128;
+// EP ordering sourced from the platform HAL since PORCH-132).
 //
 // onnxruntime-node with the CoreML Execution Provider: custom ONNX models
 // (e.g. YOLO) run natively on Apple Silicon (GPU/ANE) from the Node daemon.
-// Never-silent law: if the CoreML EP cannot be built, the session falls back
-// to CPU and the degradation is explicit in status()/on() — never silent.
+// The default execution-provider list comes from `@porchlight/hal` (the host's
+// hardware decision) — never hardcoded in a service. Never-silent law: if the
+// accelerated EPs cannot be built, the session falls back to CPU and the
+// degradation is explicit in status()/on() — never silent.
 
+import { resolveHal } from "@porchlight/hal";
 import { assertFrame } from "./types.js";
 import { decodeYolo, letterbox, toModelInput } from "./nms.js";
 
@@ -37,7 +41,7 @@ export class CoreMLProvider {
 		this.inputSize = opts.inputSize ?? 640;
 		this.confThreshold = opts.confThreshold ?? 0.45;
 		this.iouThreshold = opts.iouThreshold ?? 0.45;
-		this.executionProviders = opts.executionProviders ?? ["coreml", "cpu"];
+		this.executionProviders = opts.executionProviders ?? resolveHal().inferenceExecutionProviders();
 		this.log = opts.log ?? (() => {});
 		/** @type {unknown} */ this.session = null;
 		this.cpuFallback = false;
@@ -60,11 +64,15 @@ export class CoreMLProvider {
 		try {
 			session = await ort.InferenceSession.create(this.modelPath, { executionProviders: eps });
 		} catch (err) {
-			if (!eps.includes("coreml")) throw err;
-			eps = eps.filter((e) => e !== "coreml");
-			// Never-silent law: the degradation is stated, not swallowed.
+			// Never-silent law: the degradation is stated, not swallowed. The
+			// accelerated rung (any EP the HAL placed before "cpu") drops first;
+			// "cpu" is the terminal rung that always exists. An EP list without
+			// a cpu rung fails loudly — no silent substitution is invented here.
+			const accelerated = eps.filter((e) => e !== "cpu");
+			if (accelerated.length === 0) throw err;
+			eps = eps.filter((e) => !accelerated.includes(e));
 			this.cpuFallback = true;
-			this.log(`[${this.name}] CoreML EP unavailable (${err instanceof Error ? err.message : String(err)}); falling back to execution providers [${eps.join(", ")}]. Detection still runs, but not on GPU/ANE.`);
+			this.log(`[${this.name}] ${accelerated.join("/")} EPs unavailable (${err instanceof Error ? err.message : String(err)}); falling back to execution providers [${eps.join(", ")}]. Detection still runs, but not on GPU/ANE.`);
 			session = await ort.InferenceSession.create(this.modelPath, { executionProviders: eps });
 		}
 		this.session = session;
