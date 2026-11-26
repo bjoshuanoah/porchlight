@@ -9,8 +9,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   COMMAND_STATES, COMMAND_FAILED_FALLBACK, automationTriggerLabel, commandReasonOf,
-  commandStatusOf, controlValueOf, deviceView, groupDevicesByArea, nextCommandState,
-  readActiveHomeId, renderedControlValue, writeActiveHomeId,
+  commandStatusOf, controlValueOf, deviceView, grantStatusLabel, groupDevicesByArea,
+  isVisitorAccess, nextCommandState, readActiveHomeId, renderedControlValue,
+  summarizeScopes, writeActiveHomeId,
 } from "../src/home-model.js";
 import { readLocal, writeLocal } from "../src/store.js";
 
@@ -164,4 +165,72 @@ test("ac-5: the active home id persists per hub origin through a storage-like", 
   assert.equal(readActiveHomeId(hubA, "http://home.example"), "home-2");
   assert.equal(readActiveHomeId(null, "http://home.example"), null);
   assert.equal(readActiveHomeId(hubA, ""), null);
+});
+
+test("ac-6: scope summaries read as name — plain verb lines, with truthful fallbacks", () => {
+  const devices = [{ _id: "dev-1", name: "Porch light" }, { _id: "dev-2", name: "Kettle" }];
+  const areas = [{ _id: "area-1", name: "Driveway" }];
+  const scenes = [{ _id: "scene-1", name: "Movie night" }];
+
+  // View only, view+control, control-only, name resolution per resource type.
+  assert.deepEqual(summarizeScopes(
+    [
+      { resourceType: "device", resourceRef: "dev-1", verbs: ["view"] },
+      { resourceType: "scene", resourceRef: "scene-1", verbs: ["view", "control"] },
+      { resourceType: "area", resourceRef: "area-1", verbs: ["view", "control"] },
+      { resourceType: "device", resourceRef: "dev-2", verbs: ["control"] },
+    ],
+    devices, areas, scenes,
+  ), [
+    "Porch light — see",
+    "Movie night — see and control",
+    "Driveway — see and control",
+    "Kettle — control",
+  ]);
+
+  // A scope naming something the home no longer has renders its kind, never a
+  // guess; empty and junk inputs render as nothing.
+  assert.deepEqual(
+    summarizeScopes([{ resourceType: "device", resourceRef: "gone", verbs: ["view"] }], devices, areas, scenes),
+    ["A device — see"],
+  );
+  assert.deepEqual(summarizeScopes([], devices, areas, scenes), []);
+  assert.deepEqual(summarizeScopes(undefined), []);
+  // Junk rows are dropped, never rendered; a row that names nothing real and
+  // carries no verbs renders as its bare kind line.
+  assert.deepEqual(summarizeScopes([null, { resourceType: "vehicle" }]), ["A resource"]);
+});
+
+test("ac-7: grant status labels mirror the server's own order — revoked, then expired, then live", () => {
+  const now = "2026-11-26T12:00:00.000Z";
+  const live = { expiresAt: "2026-11-26T12:00:00.001Z", revokedAt: null };
+  const expiredByMoment = { expiresAt: "2026-11-26T12:00:00.000Z", revokedAt: null };
+  const expired = { expiresAt: "2026-11-25T00:00:00.000Z", revokedAt: null };
+  const revoked = { expiresAt: "2026-11-27T00:00:00.000Z", revokedAt: "2026-11-26T10:00:00.000Z" };
+  // Revocation beats a future checkout; the checkout moment itself (<= now) has passed.
+  assert.equal(grantStatusLabel(live, now), "Live");
+  assert.equal(grantStatusLabel(expiredByMoment, now), "Expired");
+  assert.equal(grantStatusLabel(expired, now), "Expired");
+  assert.equal(grantStatusLabel(revoked, now), "Revoked");
+  // A revoked grant stays revoked whatever the clock does next.
+  assert.equal(grantStatusLabel(revoked, "2026-11-26T20:00:00.000Z"), "Revoked");
+
+  // No now means now — a live card reads live now and expired a second later
+  // without a caller-supplied clock drifting the answer.
+  const justNow = { expiresAt: new Date().toISOString(), revokedAt: null };
+  assert.equal(grantStatusLabel(justNow), "Expired");
+
+  // Junk can never invent a state.
+  assert.equal(grantStatusLabel(null), "Unknown");
+  assert.equal(grantStatusLabel(undefined), "Unknown");
+});
+
+test("ac-8: the visitor flag answers for the two visit classes only", () => {
+  assert.equal(isVisitorAccess({ accessClass: "individual-grant", role: null, scopes: [] }), true);
+  assert.equal(isVisitorAccess({ accessClass: "family-grant", role: null, scopes: [] }), true);
+  assert.equal(isVisitorAccess({ accessClass: "owner-membership", role: "owner", scopes: null }), false);
+  assert.equal(isVisitorAccess({ accessClass: "owner-membership", role: "member", scopes: null }), false);
+  assert.equal(isVisitorAccess(null), false);
+  assert.equal(isVisitorAccess(undefined), false);
+  assert.equal(isVisitorAccess({}), false);
 });
