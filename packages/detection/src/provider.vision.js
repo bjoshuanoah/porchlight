@@ -1,11 +1,12 @@
 // provider.vision.js — Apple Vision framework provider via a Swift subprocess
-// (PORCH-128).
+// (PORCH-128; helper owned by the platform HAL since PORCH-132).
 //
-// The helper (packages/detection/swift/VisionHelper.swift) runs Apple Vision
-// primitives (person/animal detection, pose availability) natively on macOS
-// and talks the framed stdin/stdout protocol documented in swift/README.md.
-// Frames are written one at a time; a helper crash respawns with capped
-// backoff.
+// The helper (packages/hal/swift/VisionHelper.swift — the HAL owns all
+// OS-framework code, source resolved via @porchlight/hal's `visionHelper()`)
+// runs Apple Vision primitives (person/animal detection, pose availability)
+// natively on macOS and talks the framed stdin/stdout protocol documented in
+// packages/hal/swift/README.md. Frames are written one at a time; a helper
+// crash respawns with capped backoff.
 
 import { spawn } from "node:child_process";
 import { assertFrame } from "./types.js";
@@ -28,7 +29,7 @@ export class VisionProvider {
 	 */
 	constructor(opts) {
 		if (!opts.bin || typeof opts.bin !== "string") {
-			throw new TypeError("VisionProvider: bin is required (compiled swift/VisionHelper.swift)");
+			throw new TypeError("VisionProvider: bin is required (compiled @porchlight/hal swift/VisionHelper.swift)");
 		}
 		this.name = opts.name ?? "vision";
 		this.bin = opts.bin;

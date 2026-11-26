@@ -1,0 +1,26 @@
+{
+	"name": "@porchlight/hal",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight platform HAL — the thin native integration layer (PORCH-132): one portable backend contract every engine service consumes; macOS implementation (VideoToolbox decode/encode, CoreML inference, Swift Vision helper) plus the first-cut Linux backend. OS frameworks are imported here and nowhere else.",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"scripts": {
+		"test": "node --test 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'hal ships plain JS (no build)'"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/hal"
+	}
+}
