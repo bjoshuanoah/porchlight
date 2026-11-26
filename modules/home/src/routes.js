@@ -49,6 +49,14 @@ export function createHomeRouter(controllers) {
   router.get("/homes/:homeId/automations", automation.listAutomations);
   router.put("/automations/:automationId", automation.updateAutomation);
 
+  // Grants (PORCH-138): the owner grants an existing identity or a family
+  // from the Access surface; the parent distributes within a family grant's
+  // envelope; the owner revokes — all audit-landing writes.
+  router.post("/homes/:homeId/grants", home.createGrant);
+  router.get("/homes/:homeId/grants", home.listGrants);
+  router.post("/grants/:grantId/revoke", home.revokeGrant);
+  router.post("/grants/:grantId/distributions", home.distributeGrant);
+
   return router;
 }
 

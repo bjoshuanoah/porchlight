@@ -78,6 +78,16 @@ export function createIdentityRouter(controllers) {
   router.post("/device-link/consume", (req, res) => void controllers.device.consumeDeviceLink(req, res));
   router.post("/devices/revoke", (req, res) => void controllers.device.revokeRegistration(req, res));
 
+  // Families (PORCH-138): the family organizer of record — identity-plane
+  // family structure the access model's family grants consume. Session-bound
+  // like every other identity write: a member acts through their own did.
+  router.post("/families", (req, res) => void controllers.family.create(req, res));
+  router.get("/families", (req, res) => void controllers.family.list(req, res));
+  router.post("/families/:familyId/members", (req, res) => void controllers.family.addMember(req, res));
+  router.post("/families/:familyId/members/remove", (req, res) => void controllers.family.removeMember(req, res));
+  router.post("/families/:familyId/parents", (req, res) => void controllers.family.addParent(req, res));
+  router.post("/families/:familyId/parents/remove", (req, res) => void controllers.family.removeParent(req, res));
+
   // Cross-hub verification (OIDC shape): code path with nonce + PKCE —
   // session-bound to the did (a member authorizes only their own identity)
   router.post("/oidc/authorize", (req, res) => void controllers.oidc.authorize(req, res));

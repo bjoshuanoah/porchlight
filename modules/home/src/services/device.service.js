@@ -1,6 +1,11 @@
 import { requireSignedSession, requireSession } from "../util/writes.js";
 import { DeviceAdapterManager } from "./adapter.registry.js";
 import { fail } from "./errors.js";
+import { ACCESS_OWNER_ONLY, coversDevice } from "./scopes.js";
+
+function isMembership(access) {
+  return !access || access.accessClass === "owner-membership";
+}
 
 /**
  * Device service (PORCH-137 TS 1: the command path and state truth).
@@ -38,7 +43,10 @@ export class DeviceService {
    * Signed member write. The capability list drives the control surface.
    */
   async register({ accessToken, homeId, payload, signature } = {}) {
-    const { did } = await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
+    if (!isMembership(authorized.access)) {
+      return fail("E_NOT_PERMITTED", ACCESS_OWNER_ONLY);
+    }
     await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.verifySession,
@@ -60,7 +68,7 @@ export class DeviceService {
       lastCommandAt: null,
       lastCommandResult: null,
       unreachable: null,
-      createdBy: did,
+      createdBy: authorized.did,
       createdAt: this.now(),
     };
     await this.devices.insertOne(device);
@@ -71,7 +79,10 @@ export class DeviceService {
   async update({ accessToken, deviceId, payload, signature } = {}) {
     const device = await this.devices.findOne({ _id: deviceId });
     if (!device) return fail("E_DEVICE_NOT_FOUND", "That device isn't part of this home anymore.");
-    await this.homes.authorize({ accessToken, homeId: device.homeId });
+    const authorizedUpdate = await this.homes.authorize({ accessToken, homeId: device.homeId });
+    if (!isMembership(authorizedUpdate.access)) {
+      return fail("E_NOT_PERMITTED", ACCESS_OWNER_ONLY);
+    }
     await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.verifySession,
@@ -106,7 +117,14 @@ export class DeviceService {
     try {
       const deviceDoc = await this.#deviceOfMember(homeId, deviceId);
       const scopedHomeId = deviceDoc.homeId;
-      await this.homes.authorizeMember({ did, homeId: scopedHomeId });
+      const authorized = await this.homes.authorizeMember({ did, homeId: scopedHomeId });
+      // Hub-side grant enforcement on the command path: a visit grantee's
+      // command must be covered by a control scope (device or its area), so
+      // revocation or expiry denies the very next command from an open
+      // session (PORCH-138 ac-1/ac-5).
+      if (!isMembership(authorized.access) && !coversDevice(authorized.access.scopes, deviceDoc, "control")) {
+        return fail("E_NOT_PERMITTED", "That control isn't part of the access you were granted for this home.");
+      }
       const command = payload?.command;
       if (!command) return fail("E_COMMAND_UNKNOWN", "Tell Porchlight which command to send — lights read on/off, for example.");
       return await this.#dispatch({
@@ -142,8 +160,11 @@ export class DeviceService {
    * reason — never a broken surface.
    */
   async readState({ accessToken, homeId, deviceId } = {}) {
-    await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
     const device = await this.#deviceOfMember(homeId, deviceId);
+    if (!isMembership(authorized.access) && !coversDevice(authorized.access.scopes, device, "view")) {
+      return fail("E_NOT_PERMITTED", "That control isn't part of the access you were granted for this home.");
+    }
     try {
       const { state, at } = await this.adapters.readState(device);
       const updated = await this.#confirmState(device, state, { at, source: "read-back" });
@@ -199,17 +220,24 @@ export class DeviceService {
   /**
    * GET /homes/:homeId/devices — the home's device list (the family app
    * groups by area client-side; one collection serves rooms + outdoor).
+   * A visit grant sees exactly the devices its view scopes cover — nothing
+   * else renders (PORCH-138 ac-1).
    */
   async list({ accessToken, homeId } = {}) {
-    await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
     const rows = await this.devices.find({ homeId });
-    return { devices: rows.sort(byName).map((device) => this.view(device)) };
+    const scopes = authorized.access?.scopes ?? null;
+    const visible = scopes ? rows.filter((device) => coversDevice(scopes, device, "view")) : rows;
+    return { devices: visible.sort(byName).map((device) => this.view(device)) };
   }
 
   /** One device of a home the caller belongs to. */
   async get({ accessToken, homeId, deviceId } = {}) {
-    await this.homes.authorize({ accessToken, homeId });
+    const authorized = await this.homes.authorize({ accessToken, homeId });
     const device = await this.#deviceOfMember(homeId, deviceId);
+    if (!isMembership(authorized.access) && !coversDevice(authorized.access.scopes, device, "view")) {
+      return fail("E_NOT_PERMITTED", "That control isn't part of the access you were granted for this home.");
+    }
     return { device: this.view(device) };
   }
 

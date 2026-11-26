@@ -7,13 +7,14 @@ import { delegate } from "./transport.js";
  * operations live here (routes stay thin, services own the models).
  */
 export class HomeController {
-  constructor({ homes, areas, audit, deviceService, sceneService, automationService }) {
+  constructor({ homes, areas, audit, deviceService, sceneService, automationService, grants }) {
     this.homes = homes;
     this.areas = areas;
     this.audit = audit;
     this.deviceService = deviceService ?? null;
     this.sceneService = sceneService ?? null;
     this.automationService = automationService ?? null;
+    this.grants = grants ?? null;
   }
 
   bearer(req) {
@@ -70,7 +71,7 @@ export class HomeController {
   };
 
   async surfaces({ req, homeId }) {
-    const { did, home, role } = await this.homes.authorize({ accessToken: this.bearer(req), homeId });
+    const { did, home, role, access } = await this.homes.authorize({ accessToken: this.bearer(req), homeId });
     const [areaList, deviceList, sceneList, automationList] = await Promise.all([
       this.areas.list({ accessToken: this.bearer(req), homeId }),
       this.deviceService?.list({ accessToken: this.bearer(req), homeId }) ?? { devices: [] },
@@ -79,6 +80,13 @@ export class HomeController {
     ]);
     return {
       home: { ...this.homes.homeView(home, role), viewerDid: did },
+      // The resolved access of record: the visitor surfaces read this to
+      // present exactly the granted controls (and no management surfaces).
+      access: {
+        accessClass: access.accessClass,
+        role: access.role ?? null,
+        scopes: access.scopes ?? null,
+      },
       areas: areaList.areas,
       devices: deviceList.devices,
       scenes: sceneList.scenes,
@@ -87,9 +95,40 @@ export class HomeController {
   }
 
   async authoredAudit({ req, homeId, limit, offset }) {
-    await this.homes.authorize({ accessToken: this.bearer(req), homeId });
+    const authorized = await this.homes.authorize({ accessToken: this.bearer(req), homeId });
+    // The property audit trail is a member surface — it names every actor
+    // of the home, a thing a visit grant never rides (grants carry granted
+    // controls only).
+    if (authorized.access?.accessClass !== "owner-membership") {
+      const error = new Error("The activity trail belongs to this home's members — a visit grant carries only its granted controls.");
+      error.code = "E_NOT_PERMITTED";
+      throw error;
+    }
     return this.audit.list({ homeId, limit, offset });
   }
+
+  /** POST /homes/:homeId/grants — the owner grants (signed write). */
+  createGrant = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return delegate(res, () => this.grants.create({ accessToken: this.bearer(req), homeId: req.params?.homeId, payload, signature }));
+  };
+
+  /** GET /homes/:homeId/grants — the owner's Access surface of record. */
+  listGrants = async (req, res) => {
+    return delegate(res, () => this.grants.list({ accessToken: this.bearer(req), homeId: req.params?.homeId }));
+  };
+
+  /** POST /grants/:grantId/revoke — the owner ends the visit. */
+  revokeGrant = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return delegate(res, () => this.grants.revoke({ accessToken: this.bearer(req), grantId: req.params?.grantId, payload, signature }));
+  };
+
+  /** POST /grants/:grantId/distributions — the acting parent distributes. */
+  distributeGrant = async (req, res) => {
+    const { payload, signature } = req.body ?? {};
+    return delegate(res, () => this.grants.distribute({ accessToken: this.bearer(req), grantId: req.params?.grantId, payload, signature }));
+  };
 }
 
 export default HomeController;

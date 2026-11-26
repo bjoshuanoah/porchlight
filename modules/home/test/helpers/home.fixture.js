@@ -15,6 +15,12 @@ export function homeFixture({ commandTimeoutMs = 10_000, dark = null, now } = {}
   const deviceKeys = new Map(); // `${did}:${deviceId}` -> publicKeyJwk
 
   const adapters = new DeviceAdapterManager({ commandTimeoutMs });
+  // PORCH-138: an in-hub identity plane stand-in — every minted identity
+  // resolves (grants ride existing identities, never new ones), no family
+  // exists until the test adds one (identity-plane behavior exercised
+  // through exactly the callbacks the hub wiring uses).
+  const identityRows = new Map(); // did -> { did, displayName }
+  const familyRows = new Map(); // familyId -> family document
   const testAdapter = {
     name: "test",
     state: { on: false },
@@ -49,6 +55,13 @@ export function homeFixture({ commandTimeoutMs = 10_000, dark = null, now } = {}
       : null),
     adapters,
     dark: dark === undefined ? null : dark,
+    identityFacts: {
+      resolveIdentity: (did) => Promise.resolve(identityRows.get(String(did ?? "")) ?? null),
+      familyById: (familyId) => Promise.resolve(familyRows.get(String(familyId ?? "")) ?? null),
+      familiesForMember: (did) => Promise.resolve(
+        [...familyRows.values()].filter((family) => (family.memberIdentityRefs ?? []).includes(did)),
+      ),
+    },
     now: clock,
   });
 
@@ -58,6 +71,16 @@ export function homeFixture({ commandTimeoutMs = 10_000, dark = null, now } = {}
     adapter: testAdapter,
     adapterManager: adapters,
     now: clock,
+    /** Register a grantee's EXISTING identity (grants ride existing identities). */
+    registerIdentityRow: (did, displayName = did.slice("did:porch:".length)) => {
+      identityRows.set(did, { did, displayName });
+    },
+    /** Insert an identity-plane family document (the family organizer's rows). */
+    addFamily: (family) => {
+      familyRows.set(family._id, family);
+      return family;
+    },
+    listFamilyRows: () => [...familyRows.values()],
     /** Rebind the module clock (services hold `clock`, not a copied value). */
     setClock: (fn) => {
       clockFn = fn;

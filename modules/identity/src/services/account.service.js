@@ -357,6 +357,22 @@ export class AccountService {
   }
 
   /**
+   * Cross-module identity resolve for the home module's grant flow
+   * (PORCH-138): grants ride an EXISTING Porchlight identity, so the grant
+   * write checks the grantee resolves — and never mints one. Read-only
+   * display shape; consumed through the server-wired boundary callback.
+   */
+  async resolveByDid(did) {
+    if (typeof did !== "string" || !did) return null;
+    const row = await this.identities.findOne({ did });
+    if (!row) return null;
+    const composed = [row.firstName, row.lastName]
+      .filter((part) => typeof part === "string" && part.length > 0)
+      .join(" ");
+    return { did: row.did, displayName: row.displayName ?? (composed || did) };
+  }
+
+  /**
    * The member's own account read (PORCH-070 GET /accounts/me): the
    * session-bound self view of the account record. Carries the avatar's
    * per-rung stamps (the "avatar blob" the profile reads already ride) and

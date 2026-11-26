@@ -17,14 +17,21 @@ export class HomeService {
    * @param {((did: string, deviceId: string) => Promise<{ publicKeyJwk: object } | null>) | null} deps.registeredDeviceKey
    * @param {() => string | null} [deps.orgId] - hub installation org of record.
    * @param {() => string} [deps.now]
+   * @param {({ did: string, homeId?: string | null }) => Promise<object | null>} [deps.grantResolver]
+   *   The grant-side half of access resolution (PORCH-138), set by the
+   *   module assembly after the GrantService exists (the resolver needs this
+   *   service for its own writes). Membership wins: the resolver is consulted
+   *   ONLY when no home membership matches, so exactly one of the three V1
+   *   access classes applies. Absent → membership-only (PORCH-137 posture).
    */
-  constructor(homes, homeMembers, { verifySession, registeredDeviceKey, orgId = null, now = defaultNow } = {}) {
+  constructor(homes, homeMembers, { verifySession, registeredDeviceKey, orgId = null, now = defaultNow, grantResolver = null } = {}) {
     this.homes = homes;
     this.homeMembers = homeMembers;
     this.verifySession = verifySession;
     this.registeredDeviceKey = registeredDeviceKey;
     this.orgId = orgId ?? (() => null);
     this.now = now;
+    this.grantResolver = grantResolver;
   }
 
   /**
@@ -58,16 +65,31 @@ export class HomeService {
     return { home: this.homeView(home, "owner") };
   }
 
-  /** GET /homes — the caller's homes, owner/member role included. */
+  /**
+   * GET /homes — the caller's homes, owner/member role included. Visiting
+   * identities (live grants) see exactly the granted homes appended after
+   * their memberships — a visitor opens Porchlight normally and switches to
+   * the granted home (PORCH-138 ac-1); no granted home is shown without a
+   * live grant, and membership-only callers ride the resolution exactly as
+   * before.
+   */
   async list({ accessToken } = {}) {
     const { did } = await requireSession({ accessToken, verifySession: this.verifySession });
     const rows = await this.homeMembers.find({ did });
     const homes = [];
     for (const row of rows.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
       const home = await this.homes.findOne({ _id: row.homeId });
-      if (home) homes.push(this.homeView(home, row.role));
+      if (home) homes.push({ home: this.homeView(home, row.role), access: ownershipAccess(row.role) });
     }
-    return { homes };
+    if (this.grantResolver) {
+      const grants = await this.grantResolver({ did });
+      for (const granted of grants ?? []) {
+        if (rows.some((row) => row.homeId === granted.homeId)) continue;
+        const home = await this.homes.findOne({ _id: granted.homeId });
+        if (home) homes.push({ home: this.homeView(home, null), access: grantAccess(granted) });
+      }
+    }
+    return { homes: homes.map((row) => ({ ...row.home, access: row.access })) };
   }
 
   /**
@@ -103,11 +125,23 @@ export class HomeService {
     if (!homeId) return fail("E_VALIDATION", "Choose the home you are reaching first.");
     const membership = await this.homeMembers.findOne({ homeId, did });
     if (!membership) {
-      return fail("E_NOT_PERMITTED", "You are not a member of that home, so Porchlight won't show you its surfaces.");
+      const granted = this.grantResolver
+        ? await this.grantResolver({ did, homeId })
+        : null;
+      if (!granted) {
+        return fail("E_NOT_PERMITTED", "You don't hold access to that home — Porchlight shows members and live visit grants only.");
+      }
+      const home = await this.homes.findOne({ _id: homeId });
+      if (!home) return failHomeNotFound(homeId);
+      // A live grant (individual or family-distributed): every consumer of
+      // this seam scopes its reads and writes through granted.scopes.
+      return { did, home, role: null, access: grantAccess(granted) };
     }
     const home = await this.homes.findOne({ _id: homeId });
     if (!home) return failHomeNotFound(homeId);
-    return { did, home, role: membership.role };
+    // Membership is the first access class of record and the resolution
+    // winner — grants are never consulted for a member (no parallel path).
+    return { did, home, role: membership.role, access: ownershipAccess(membership.role) };
   }
 
   /** View projection: no signatures ride served payloads. */
@@ -149,6 +183,23 @@ export function failHomeNotFound(homeId) {
   error.code = "E_HOME_NOT_FOUND";
   error.homeId = homeId ?? null;
   throw error;
+}
+
+/**
+ * The access block every authorizeMember answer carries (PORCH-138 TS 1):
+ * the resolved class of record plus the scopes a grantees' consumer must
+ * enforce. Null scopes = membership = the home's full member surface.
+ */
+export function ownershipAccess(role) {
+  return { accessClass: "owner-membership", role, scopes: null };
+}
+
+export function grantAccess(granted) {
+  return {
+    accessClass: granted.accessClass,
+    role: null,
+    scopes: granted.scopes ?? [],
+  };
 }
 
 function fail(code, message) {

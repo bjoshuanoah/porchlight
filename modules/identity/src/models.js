@@ -200,6 +200,31 @@ export const authCodeModel = {
   },
 };
 
+/**
+ * families — the identity-plane family (PORCH-138, family governance ruling,
+ * Brian Nov 25 2026). Parents are the governing authority of their members'
+ * access in both domains (home + agent/profile); this model carries the
+ * social graph the access model consumes. Home and agent modules resolve
+ * family facts through identity services via server-wired callbacks, never
+ * a model import across modules.
+ */
+export const familyModel = {
+  type: "object",
+  required: ["_id", "name", "parentIdentityRefs", "memberIdentityRefs", "createdBy", "createdAt"],
+  properties: {
+    _id: { type: "string" },
+    /** Any family-chosen label. */
+    name: { type: "string" },
+    /** The governing parents (governing DIDs) — at least one, never emptied. */
+    parentIdentityRefs: { type: "array", items: { type: "string" } },
+    /** The governed members (member DIDs) — disjoint from the parents. */
+    memberIdentityRefs: { type: "array", items: { type: "string" } },
+    /** The parent who created the family (a designated parent automatically). */
+    createdBy: { type: "string" },
+    createdAt: { type: "string" },
+  },
+};
+
 const identityModels = {
   identityModel,
   didDocumentModel,
@@ -210,6 +235,7 @@ const identityModels = {
   deviceLinkModel,
   issuerKeyModel,
   authCodeModel,
+  familyModel,
 };
 
 export default identityModels;

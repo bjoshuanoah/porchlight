@@ -246,3 +246,60 @@ export function writeActiveHomeId(storage, origin, homeId) {
   if (typeof homeId !== "string" || !homeId) return;
   writeLocal(storage, origin, ACTIVE_HOME_FIELD, homeId);
 }
+
+// ---------------------------------------------------------------------------
+// Access grants (PORCH-138)
+// ---------------------------------------------------------------------------
+
+// A scope that no longer names anything of the home renders as its kind —
+// never a guessed name, never dropped.
+const RESOURCE_FALLBACK = {
+  device: "A device",
+  scene: "A scene",
+  area: "An area",
+};
+
+/**
+ * Short plain-language strings for one grant's scopes: the resource's name
+ * against the home's surfaces, and what the verbs allow — "see" for view,
+ * "see and control" for view+control. Rows the home no longer has fall back
+ * to their kind ("A device"), keeping the summary truthful after edits.
+ */
+export function summarizeScopes(scopes, devices = [], areas = [], scenes = []) {
+  return (Array.isArray(scopes) ? scopes : [])
+    .filter((scope) => scope && typeof scope === "object")
+    .map((scope) => {
+      const surfaces = scope.resourceType === "device" ? devices
+        : scope.resourceType === "scene" ? scenes
+        : scope.resourceType === "area" ? areas
+        : null;
+      const row = Array.isArray(surfaces)
+        ? surfaces.find((item) => (item?._id ?? item?.id) === scope.resourceRef)
+        : null;
+      const name = row?.name || RESOURCE_FALLBACK[scope.resourceType] || "A resource";
+      const verbs = Array.isArray(scope.verbs) ? scope.verbs : [];
+      const does = verbs.includes("control")
+        ? (verbs.includes("view") ? "see and control" : "control")
+        : verbs.includes("view") ? "see"
+        : null;
+      return does ? `${name} — ${does}` : name;
+    });
+}
+
+/**
+ * The plain-language visit state, mirroring the server's status order of
+ * record exactly: revocation wins, then expiry (`expiresAt <= now`), then
+ * live. No `nowIso` means now.
+ */
+export function grantStatusLabel(grant, nowIso = null) {
+  if (!grant || typeof grant !== "object") return "Unknown";
+  if (grant.revokedAt) return "Revoked";
+  const now = typeof nowIso === "string" && nowIso ? nowIso : new Date().toISOString();
+  return grant.expiresAt <= now ? "Expired" : "Live";
+}
+
+/** Is this `home.access` a visiting slice rather than membership? The
+ * visitor surfaces show the visit chip and hide every management control. */
+export function isVisitorAccess(access) {
+  return access?.accessClass === "individual-grant" || access?.accessClass === "family-grant";
+}

@@ -3,12 +3,14 @@ import { DeviceService } from "./services/device.service.js";
 import { DidService } from "./services/did.service.js";
 import { WebfingerService } from "./services/webfinger.service.js";
 import { AccountService } from "./services/account.service.js";
+import { FamilyService } from "./services/family.service.js";
 import { AvatarService } from "./services/avatar.service.js";
 import { TrustService } from "./services/trust.service.js";
 import { MigrationService } from "./services/migration.service.js";
 import { HubSigningService, sha256 } from "./services/signing.service.js";
 import { AuthController } from "./controllers/auth.controller.js";
 import { AccountController } from "./controllers/account.controller.js";
+import { FamilyController } from "./controllers/family.controller.js";
 import { AvatarController } from "./controllers/avatar.controller.js";
 import { DeviceController } from "./controllers/device.controller.js";
 import { DidController } from "./controllers/did.controller.js";
@@ -62,6 +64,13 @@ export function assembleIdentityModule(store, options = {}) {
     deviceRegistrations: collection("device_registrations"),
     adoptionEnabled: options.adoptionEnabled === true,
   });
+  // PORCH-138: the family organizer of record (family governance ruling).
+  // Families are identity-plane relations between existing identities; the
+  // home access model consumes their facts through server-wired callbacks.
+  const familyService = new FamilyService(
+    collection("families"),
+    { identities: collection("identities") },
+  );
   // PORCH-070: the member avatar plane — the byte store is wired by the hub
   // runtime to the media pipeline's content-addressed store (same root,
   // shared re-point); absent, every surface refuses plainly and nothing is
@@ -93,6 +102,7 @@ export function assembleIdentityModule(store, options = {}) {
   const controllers = {
     auth: new AuthController(authService, didService, options.log ?? null),
     account: new AccountController(accountService, authService, ledger, options.log ?? null),
+    family: new FamilyController(familyService, authService, options.log ?? null),
     avatar: new AvatarController(accountService, avatarService, options.log ?? null),
     device: new DeviceController(deviceService, authService, options.log ?? null),
     did: new DidController(didService),
@@ -105,6 +115,7 @@ export function assembleIdentityModule(store, options = {}) {
     signing,
     didService,
     accountService,
+    familyService,
     avatarService,
     authService,
     deviceService,

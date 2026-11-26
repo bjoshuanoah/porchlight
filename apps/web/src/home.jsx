@@ -20,7 +20,8 @@ import RefreshOutlined from "@mui/icons-material/RefreshOutlined";
 import { dateOf, relativeTime } from "./time.js";
 import {
   automationTriggerLabel, commandReasonOf, commandStatusOf, groupDevicesByArea,
-  nextCommandState, readActiveHomeId, renderedControlValue, writeActiveHomeId,
+  grantStatusLabel, isVisitorAccess, nextCommandState, readActiveHomeId,
+  renderedControlValue, summarizeScopes, writeActiveHomeId,
 } from "./home-model.js";
 
 const messageOf = (error) => error?.message || "That did not work. Please try again.";
@@ -43,6 +44,11 @@ const commandLabel = (command) => COMMAND_LABELS[command] ?? command;
 
 const EVENT_CLASSES = ["vehicle", "person", "animal", "button", "door"];
 
+// Membership is the first access class of record (PORCH-138); the home row
+// and the detail both carry it — read through the access block, falling back
+// to the PORCH-137 role field both keep.
+const ownerOf = (home) => home?.access?.role === "owner" || home?.role === "owner";
+
 const AUDIT_LABELS = {
   "home.created": "Home created",
   "home.renamed": "Home renamed",
@@ -56,6 +62,10 @@ const AUDIT_LABELS = {
   "scene.run": "Scene run",
   "automation.created": "Automation created",
   "automation.updated": "Automation updated",
+  // PORCH-138 access events
+  "grant": "Visit granted",
+  "family-distribute": "Family share set",
+  "revoke": "Visit ended",
 };
 const auditLabel = (type) => AUDIT_LABELS[type] ?? String(type || "Event").replace(/[._-]+/g, " ").replace(/^./, (c) => c.toUpperCase());
 
@@ -235,12 +245,257 @@ function AreaSection({ groups, empty, renderCard }) {
   );
 }
 
+// --- access (PORCH-138) -----------------------------------------------------
+
+/** One checkbox row per surface of the home in the grant dialog: tick a
+ * resource, then say how far the verbs go — see only, or see and control. */
+function ScopePickRows({ title, noneText, rows, picks, setPicks }) {
+  const setPick = (resourceRef, picked) =>
+    setPicks((current) => {
+      const next = { ...current };
+      if (picked) next[resourceRef] = "view";
+      else delete next[resourceRef];
+      return next;
+    });
+  return (
+    <Box sx={{ mt: 1.5 }}>
+      <Typography variant="subtitle2">{title}</Typography>
+      {rows.length === 0 ? (
+        <Typography variant="body2" sx={{ color: "text.muted", py: 0.5 }}>{noneText}</Typography>
+      ) : (
+        <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+          {rows.map((row) => (
+            <Stack key={row._id} direction="row" spacing={1.5} alignItems="center" sx={{ flexWrap: "wrap", rowGap: 0.5 }}>
+              <FormControlLabel
+                control={<Checkbox checked={Boolean(picks[row._id])} onChange={(event) => setPick(row._id, event.target.checked)} />}
+                label={row.name}
+                sx={{ "& .MuiTypography-body1": { fontSize: 14 } }}
+              />
+              {Boolean(picks[row._id]) && (
+                <Select size="small" value={picks[row._id]} sx={{ minWidth: 170 }} aria-label={`How much for ${row.name}`}
+                  onChange={(event) => setPicks((current) => ({ ...current, [row._id]: event.target.value }))}
+                >
+                  <MenuItem value="view">Can see</MenuItem>
+                  <MenuItem value="both">Can see and control</MenuItem>
+                </Select>
+              )}
+            </Stack>
+          ))}
+        </Stack>
+      )}
+    </Box>
+  );
+}
+
+/** The visit card on the owner's Access surface: who, what reach, until when,
+ * and the state chip. A family visit also carries the acting parent's
+ * per-member distribution editor — the server refuses any hand-out that
+ * escapes the envelope, and its refusal renders inline, verbatim. */
+function GrantRow({
+  grant, devices, areas, scenes, myDid, families,
+  onRevoke, onDistribute, busy, distributionError,
+}) {
+  const summary = summarizeScopes(grant.scopes, devices, areas, scenes).join(" · ") || "Nothing named.";
+  const status = grantStatusLabel(grant, null);
+  const family = families.find((row) => row._id === grant.familyRef) ?? null;
+  const isParent = Boolean(family?.parentIdentityRefs?.includes(myDid));
+  const distribution = grant.parentDistributions ?? [];
+  const ended = status !== "Live";
+
+  return (
+    <Paper elevation={0} sx={{ p: 2, mb: 1.25, borderRadius: 3, bgcolor: "var(--porch-surface)", border: "1px solid", borderColor: "var(--porch-border)" }}>
+      <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} justifyContent="space-between" spacing={1}>
+        <Box sx={{ minWidth: 0 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap", rowGap: 0.75 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              {grant.createdFor || (grant.familyRef ? "A family visit" : "A visit")}
+            </Typography>
+            <Chip
+              label={grant.familyRef ? "Family visit" : "Visit"}
+              size="small"
+              variant="outlined"
+              sx={{ height: 22, fontSize: 12 }}
+            />
+            <Chip
+              label={status}
+              size="small"
+              sx={{
+                height: 22, fontSize: 12,
+                color: status === "Revoked" ? "error.main" : status === "Expired" ? "text.secondary" : "var(--porch-vote-up)",
+                borderColor: "currentColor",
+              }}
+            />
+          </Stack>
+          <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+            This visit reaches: {summary}
+          </Typography>
+          <Typography variant="body2" sx={{ color: "text.muted", mt: 0.25 }}>
+            {grant.revokedAt
+              ? `The visit ended early ${relativeTime(grant.revokedAt)}.`
+              : status === "Expired"
+                ? "The visit's checkout has passed."
+                : `Runs until ${dateOf(grant.expiresAt)} (${relativeTime(grant.expiresAt)}).`}
+          </Typography>
+        </Box>
+        <Button size="small" color="error" disabled={busy || ended} onClick={() => onRevoke(grant)}>
+          End the visit
+        </Button>
+      </Stack>
+
+      {grant.familyRef && isParent && !ended && (
+        <DistributionEditor grant={grant} family={family} devices={devices} areas={areas} scenes={scenes} myDid={myDid}
+          busy={busy} error={distributionError} onDistribute={onDistribute} />
+      )}
+      {grant.familyRef && isParent && ended && distribution.length > 0 && (
+        <Typography variant="body2" sx={{ color: "text.muted", mt: 1 }}>
+          Handed out during the visit: {distribution.map((row) => `${row.memberIdentityRef} (${summarizeScopes(row.scopes, devices, areas, scenes).join(", ")})`).join(" · ")}
+        </Typography>
+      )}
+    </Paper>
+  );
+}
+
+/** One family visit's per-member distribution editor: pick a member of the
+ * family, tick what part of the visit envelope they reach (the options ARE
+ * the envelope — nothing outside it can be offered), save it. Existing shares
+ * arrive pre-ticked for their member. */
+function DistributionEditor({ grant, family, devices, areas, scenes, myDid, busy, error, onDistribute }) {
+  const members = Array.isArray(family?.memberIdentityRefs) ? family.memberIdentityRefs : [];
+  const options = grant.scopes.map((scope) => ({ scope, key: `${scope.resourceType}:${scope.resourceRef}` }));
+  const labels = summarizeScopes(grant.scopes, devices, areas, scenes);
+  const distributionOf = (did) => {
+    const row = (grant.parentDistributions ?? []).find((entry) => entry.memberIdentityRef === did);
+    return new Set((row?.scopes ?? []).map((scope) => `${scope.resourceType}:${scope.resourceRef}`));
+  };
+
+  const [memberDid, setMemberDid] = useState(members[0] ?? "");
+  const [picked, setPicked] = useState(() => distributionOf(members[0] ?? ""));
+  // Switching the member swaps the draft to that member's own share — one
+  // editor always edits exactly one member's hand-out.
+  const changeMember = (did) => {
+    setMemberDid(did);
+    setPicked(distributionOf(did));
+  };
+  const toggle = (key) =>
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  return (
+    <Box sx={{ mt: 2, pt: 2, borderTop: "1px solid", borderColor: "var(--porch-border)" }}>
+      <Typography variant="subtitle2">What this family's members reach in the visit</Typography>
+      <Typography variant="body2" sx={{ color: "text.muted", mt: 0.5 }}>
+        You parent this family — hand each of its members their own share of the host's envelope, never more than it holds.
+      </Typography>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mt: 1 }} alignItems={{ sm: "center" }}>
+        <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 220 } }}>
+          <InputLabel>Family member</InputLabel>
+          <Select value={memberDid} label="Family member" onChange={(event) => changeMember(event.target.value)}>
+            {members.length === 0 && <MenuItem value=""><em>No members yet</em></MenuItem>}
+            {members.map((did) => (
+              <MenuItem key={did} value={did}>{did === myDid ? "You" : did}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={busy || !memberDid || picked.size === 0}
+          onClick={() =>
+            onDistribute({
+              memberDid,
+              scopes: options.filter((option) => picked.has(option.key)).map((option) => ({
+                resourceType: option.scope.resourceType,
+                resourceRef: option.scope.resourceRef,
+                verbs: [...(option.scope.verbs ?? [])],
+              })),
+            })}
+        >
+          {busy ? <CircularProgress size={16} /> : "Save their share"}
+        </Button>
+        {memberDid && picked.size === 0 && (
+          <Typography variant="body2" sx={{ color: "text.muted" }}>Tick at least one thing — a member reaches nothing until a share is saved.</Typography>
+        )}
+      </Stack>
+      <Stack spacing={0.5} sx={{ mt: 1 }}>
+        {options.map((option, index) => (
+          <FormControlLabel
+            key={option.key}
+            control={<Checkbox checked={picked.has(option.key)} onChange={() => toggle(option.key)} size="small" />}
+            label={labels[index]}
+            sx={{ "& .MuiTypography-body1": { fontSize: 14 } }}
+          />
+        ))}
+      </Stack>
+      {Boolean(error) && <Alert severity="warning" sx={{ mt: 1.5 }}>{error}</Alert>}
+    </Box>
+  );
+}
+
+/** One family card in the organizer: who governs, who is governed, and the
+ * parent-only controls to grow or trim the family. Refusals render inline. */
+function FamilyCard({ family, myDid, mutate }) {
+  const [draftDid, setDraftDid] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const parents = family.parentIdentityRefs ?? [];
+  const members = (family.memberIdentityRefs ?? []).filter((did) => !parents.includes(did));
+  const isParent = parents.includes(myDid);
+
+  const run = (kind, did) => {
+    setBusy(true);
+    setError("");
+    mutate(kind, family._id, did)
+      .catch((failure) => setError(failure?.message || "That did not work. Please try again."))
+      .finally(() => setBusy(false));
+  };
+
+  const chip = (did, role) => (
+    <Chip
+      key={`${role}-${did}`}
+      size="small"
+      variant="outlined"
+      label={`${role} · ${did === myDid ? "You" : did}`}
+      sx={{ height: 24, fontSize: 12, maxWidth: 280 }}
+      onDelete={isParent ? () => run(role === "parent" ? "removeParent" : "removeMember", did) : undefined}
+    />
+  );
+
+  return (
+    <Paper elevation={0} sx={{ p: 2, mb: 1.25, borderRadius: 3, bgcolor: "var(--porch-surface)", border: "1px solid", borderColor: "var(--porch-border)" }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{family.name || "Unnamed family"}</Typography>
+      <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: "wrap", rowGap: 0.75 }}>
+        {parents.map((did) => chip(did, "parent"))}
+        {members.map((did) => chip(did, "member"))}
+        {(parents.length + members.length) === 0 && (
+          <Typography variant="body2" sx={{ color: "text.muted" }}>No members yet — the creator is always the first parent.</Typography>
+        )}
+      </Stack>
+      {isParent && (
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mt: 1.5 }} alignItems={{ sm: "center" }}>
+          <TextField
+            size="small" label="Add by Porchlight DID" fullWidth placeholder="did:porchlight:…"
+            value={draftDid} onChange={(event) => setDraftDid(event.target.value)}
+          />
+          <Button size="small" variant="outlined" disabled={busy || !draftDid.trim()} onClick={() => run("addMember", draftDid.trim())}>Add member</Button>
+          <Button size="small" disabled={busy || !draftDid.trim()} onClick={() => run("addParent", draftDid.trim())}>Make parent</Button>
+        </Stack>
+      )}
+      {Boolean(error) && <Alert severity="warning" sx={{ mt: 1.5 }}>{error}</Alert>}
+    </Paper>
+  );
+}
+
 // --- dialogs ----------------------------------------------------------------
 
 function HomeDialogs({
   dialog, busy, dialogError, closeDialog,
-  home, areas, controllableDevices,
+  home, areas, controllableDevices, devices, scenes, families,
   onCreateHome, onRenameHome, onAddArea, onAddDevice, onAddScene, onAddAutomation,
+  onCreateGrant, onCreateFamily,
 }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("room");
@@ -254,6 +509,18 @@ function HomeDialogs({
   const [afterDark, setAfterDark] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // PORCH-138 drafts: the visit grant (person or family, scope picks,
+  // checkout) and the family organizer's create form.
+  const [visitKind, setVisitKind] = useState("person");
+  const [granteeDid, setGranteeDid] = useState("");
+  const [visitFamilyId, setVisitFamilyId] = useState("");
+  const [devicePicks, setDevicePicks] = useState({});
+  const [scenePicks, setScenePicks] = useState({});
+  const [areaPicks, setAreaPicks] = useState({});
+  const [checkout, setCheckout] = useState("");
+  const [parentsText, setParentsText] = useState("");
+  const [membersText, setMembersText] = useState("");
 
   useEffect(() => {
     // Each open starts from the dialog's own resting draft.
@@ -269,7 +536,30 @@ function HomeDialogs({
     setAfterDark(false);
     setFrom("");
     setTo("");
+    setVisitKind("person");
+    setGranteeDid("");
+    setVisitFamilyId("");
+    setDevicePicks({});
+    setScenePicks({});
+    setAreaPicks({});
+    setCheckout("");
+    setParentsText("");
+    setMembersText("");
   }, [dialog]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const didsOf = (text) => text.split(",").map((did) => did.trim()).filter(Boolean);
+  const pickedScopes = (picks, rows, resourceType) =>
+    rows.filter((row) => picks[row._id]).map((row) => ({
+      resourceType,
+      resourceRef: row._id,
+      verbs: picks[row._id] === "both" ? ["view", "control"] : ["view"],
+    }));
+  const grantScopeCount =
+    pickedScopes(devicePicks, devices ?? [], "device").length
+    + pickedScopes(scenePicks, scenes ?? [], "scene").length
+    + pickedScopes(areaPicks, areas ?? [], "area").length;
+  const grantTargetReady =
+    (visitKind === "person" ? granteeDid.trim().length > 0 : Boolean(visitFamilyId)) && checkout.length > 0;
 
   const errorLine = dialogError && <Alert severity="warning" sx={{ mt: 2 }}>{dialogError}</Alert>;
   const open = (key) => dialog === key;
@@ -439,6 +729,103 @@ function HomeDialogs({
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Grant a visit (owner only — the button that opens it is owner-gated).
+          The checkout is required; the scope picks carry what the visit may reach. */}
+      <Dialog open={open("add-grant")} onClose={closeDialog} fullWidth maxWidth="sm">
+        <DialogTitle>Grant a visit</DialogTitle>
+        <DialogContent>
+          <FormControl fullWidth margin="dense">
+            <InputLabel>For whom</InputLabel>
+            <Select value={visitKind} label="For whom" onChange={(event) => setVisitKind(event.target.value)}>
+              <MenuItem value="person">One person</MenuItem>
+              <MenuItem value="family">One family</MenuItem>
+            </Select>
+          </FormControl>
+          {visitKind === "person" ? (
+            <TextField
+              autoFocus margin="dense" label="Porchlight DID" fullWidth value={granteeDid}
+              onChange={(event) => setGranteeDid(event.target.value)} placeholder="did:porchlight:…"
+              helperText="Grants ride the Porchlight identity a person already has."
+            />
+          ) : (
+            <>
+              <FormControl fullWidth margin="dense">
+                <InputLabel>Family</InputLabel>
+                <Select value={visitFamilyId} label="Family" onChange={(event) => setVisitFamilyId(event.target.value)}>
+                  {(families ?? []).map((family) => (
+                    <MenuItem key={family._id} value={family._id}>{family.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {(families ?? []).length === 0 && (
+                <Typography variant="body2" sx={{ color: "text.muted" }}>
+                  No families yet — create one in the family organizer below, then grant its visit here.
+                </Typography>
+              )}
+            </>
+          )}
+          <ScopePickRows title="Devices" noneText="No devices yet." rows={devices ?? []} picks={devicePicks} setPicks={setDevicePicks} />
+          <ScopePickRows title="Scenes" noneText="No scenes yet." rows={scenes ?? []} picks={scenePicks} setPicks={setScenePicks} />
+          <ScopePickRows title="Areas" noneText="No areas yet." rows={areas ?? []} picks={areaPicks} setPicks={setAreaPicks} />
+          <TextField
+            margin="dense" label="Checkout" type="datetime-local" fullWidth value={checkout}
+            onChange={(event) => setCheckout(event.target.value)}
+            helperText="The visit ends at this moment — everything it reaches stops working then."
+            InputLabelProps={{ shrink: true }}
+          />
+          {errorLine}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeDialog}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={busy || !grantTargetReady || grantScopeCount === 0}
+            onClick={() => onCreateGrant({
+              granteeDid: visitKind === "person" ? granteeDid.trim() : undefined,
+              familyId: visitKind === "family" ? visitFamilyId : undefined,
+              scopes: [
+                ...pickedScopes(devicePicks, devices ?? [], "device"),
+                ...pickedScopes(scenePicks, scenes ?? [], "scene"),
+                ...pickedScopes(areaPicks, areas ?? [], "area"),
+              ],
+              expiresAt: checkout ? new Date(checkout).toISOString() : null,
+            })}
+          >
+            {busy ? <CircularProgress size={18} /> : "Grant the visit"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Create a family in the organizer — session-bound, no device signing. */}
+      <Dialog open={open("create-family")} onClose={closeDialog} fullWidth maxWidth="xs">
+        <DialogTitle>Create a family</DialogTitle>
+        <DialogContent>
+          <TextField autoFocus margin="dense" label="Family name" fullWidth value={name} onChange={(event) => setName(event.target.value)} />
+          <TextField
+            margin="dense" label="Parents (DIDs, comma-separated)" fullWidth value={parentsText}
+            onChange={(event) => setParentsText(event.target.value)}
+            placeholder="did:porchlight:…, did:porchlight:…"
+            helperText="You are the first parent of record — list any others."
+          />
+          <TextField
+            margin="dense" label="Members (DIDs, comma-separated)" fullWidth value={membersText}
+            onChange={(event) => setMembersText(event.target.value)}
+            placeholder="did:porchlight:…"
+          />
+          {errorLine}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeDialog}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={busy || !name.trim()}
+            onClick={() => onCreateFamily({ name, parents: didsOf(parentsText), members: didsOf(membersText) })}
+          >
+            {busy ? <CircularProgress size={18} /> : "Create family"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
@@ -479,6 +866,17 @@ export function HomeDashboard({ data, actions }) {
   const [dialogError, setDialogError] = useState("");
   const [snack, setSnack] = useState("");
 
+  // PORCH-138 Access surface: the owner's grants, the organizer's families,
+  // the revoke-confirm flow, and the inline distribution refusal.
+  const [grants, setGrants] = useState([]);
+  const [grantsError, setGrantsError] = useState("");
+  const [grantsLoading, setGrantsLoading] = useState(false);
+  const [families, setFamilies] = useState([]);
+  const [familiesError, setFamiliesError] = useState("");
+  const [revoking, setRevoking] = useState(null);
+  const [revokeError, setRevokeError] = useState("");
+  const [distributionError, setDistributionError] = useState("");
+
   const applyDetail = (detail) => {
     setHome(detail?.home ?? null);
     setAreas(Array.isArray(detail?.areas) ? detail.areas : []);
@@ -496,12 +894,55 @@ export function HomeDashboard({ data, actions }) {
       const detail = await actions.loadHome(homeId);
       applyDetail(detail);
       setAudit({ events: [], hasMore: false, offset: 0 });
-      loadAudit(homeId, 0);
+      if (ownerOf(detail?.home)) loadGrants(homeId); // owner-only, and the server refuses anyone else anyway
+      if (!isVisitorAccess(detail?.home?.access)) loadAudit(homeId, 0); // the hub refuses a visitor's audit read
     } catch (error) {
       setHomeError(messageOf(error));
     } finally {
       setHomeLoading(false);
     }
+  };
+
+  // The owner's Access surface of record — reset with everything else when
+  // the home swaps.
+  const loadGrants = async (homeId) => {
+    setGrantsError("");
+    setGrantsLoading(true);
+    try {
+      const result = await actions.loadGrants(homeId);
+      setGrants(Array.isArray(result?.grants) ? result.grants : []);
+    } catch (error) {
+      setGrants([]);
+      setGrantsError(messageOf(error));
+    } finally {
+      setGrantsLoading(false);
+    }
+  };
+
+  // The family organizer works for any signed-in member, independent of which
+  // home is in view.
+  const loadFamilies = async () => {
+    setFamiliesError("");
+    try {
+      const result = await actions.loadFamilies();
+      setFamilies(Array.isArray(result?.families) ? result.families : []);
+    } catch (error) {
+      setFamiliesError(messageOf(error));
+    }
+  };
+
+  // One organizer mutation, then the family rows reload — they are the
+  // organizer's own state of record.
+  const mutateFamily = async (kind, familyId, did) => {
+    const route = {
+      addMember: (id, target) => actions.addFamilyMember(id, target),
+      removeMember: (id, target) => actions.removeFamilyMember(id, target),
+      addParent: (id, target) => actions.addFamilyParent(id, target),
+      removeParent: (id, target) => actions.removeFamilyParent(id, target),
+    }[kind];
+    const result = await route(familyId, did);
+    await loadFamilies();
+    return result;
   };
 
   const loadAudit = async (homeId, offset) => {
@@ -540,7 +981,8 @@ export function HomeDashboard({ data, actions }) {
           const detail = await actions.loadHome(target._id);
           if (cancelled) return;
           applyDetail(detail);
-          loadAudit(target._id, 0);
+          if (!isVisitorAccess(detail?.home?.access)) loadAudit(target._id, 0);
+          if (ownerOf(detail?.home)) loadGrants(target._id);
         }
       } catch (error) {
         if (!cancelled) setHomesError(messageOf(error));
@@ -548,6 +990,7 @@ export function HomeDashboard({ data, actions }) {
         if (!cancelled) setHomesLoading(false);
       }
     })();
+    loadFamilies(); // the organizer belongs to the signed-in identity, not to any home
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -563,7 +1006,9 @@ export function HomeDashboard({ data, actions }) {
     await loadHome(homeId);
   };
 
-  const ownerHere = home?.role === "owner";
+  const ownerHere = ownerOf(home);
+  const visitorAccess = isVisitorAccess(home?.access);
+  const myDid = data?.identity?.id ?? "";
   const grouped = useMemo(() => groupDevicesByArea(devices, areas), [devices, areas]);
 
   const runCommand = async (view, command) => {
@@ -628,6 +1073,49 @@ export function HomeDashboard({ data, actions }) {
     } catch (error) {
       setSnack(messageOf(error));
     }
+  };
+
+  // --- Access (PORCH-138) ----------------------------------------------------
+
+  const submitCreateGrant = submitWith(async (draft) => {
+    await actions.createGrant({ homeId: home._id, ...draft });
+    await loadGrants(home._id); // the new visit lands on the surface of record
+  });
+
+  const submitCreateFamily = submitWith(async ({ name: name_, parents, members }) => {
+    await actions.createFamily({ name: name_, parentIdentityRefs: parents, memberIdentityRefs: members });
+    await loadFamilies();
+  });
+
+  // The confirm-reject flow mirrors the app's other destructive dialogs: the
+  // consequence named plainly, reject keeps things as they are, confirm runs.
+  const confirmRevoke = async () => {
+    if (!revoking) return;
+    setBusy(true);
+    setRevokeError("");
+    try {
+      await actions.revokeGrant({ grantId: revoking._id });
+      setRevoking(null);
+      const result = await actions.loadGrants(home._id);
+      setGrants(Array.isArray(result?.grants) ? result.grants : []);
+      loadAudit(home._id, 0); // the revocation rides the audit window too
+    } catch (error) {
+      setRevokeError(messageOf(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // A family's acting parent saves one member's share. The typed refusal —
+  // E_ENVELOPE_EXCEEDED among them — renders inline in the editor, verbatim.
+  const distribute = (grant) => ({ memberDid, scopes }) => {
+    setDistributionError("");
+    return actions.distributeGrant({ grantId: grant._id, memberIdentityRef: memberDid, scopes })
+      .then((result) => {
+        const row = result?.grant;
+        if (row?._id) setGrants((current) => current.map((item) => (item._id === row._id ? row : item)));
+      })
+      .catch((failure) => setDistributionError(failure?.message || "That did not work. Please try again."));
   };
 
   const openDialog = (name_) => {
@@ -786,8 +1274,20 @@ export function HomeDashboard({ data, actions }) {
       </Stack>
       {home && (
         <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-          {ownerHere ? "You look after this home." : "You belong to this home."}
+          {ownerHere
+            ? "You look after this home."
+            : visitorAccess
+            ? "You hold a visit here, granted for now — everything below was shared with you."
+            : "You belong to this home."}
         </Typography>
+      )}
+      {home && visitorAccess && (
+        <Chip
+          label="Visiting — the controls granted for this visit"
+          variant="outlined"
+          size="small"
+          sx={{ mt: 1 }}
+        />
       )}
       {homeError && <Alert severity="warning" sx={{ mt: 2 }}>{homeError}</Alert>}
       {homeLoading && (
@@ -801,9 +1301,11 @@ export function HomeDashboard({ data, actions }) {
       <SectionHeader
         title="Rooms"
         action={(
-          <Button size="small" startIcon={<AddOutlined />} onClick={() => openDialog("add-area")}>
-            Add area
-          </Button>
+          !visitorAccess && (
+            <Button size="small" startIcon={<AddOutlined />} onClick={() => openDialog("add-area")}>
+              Add area
+            </Button>
+          )
         )}
       />
       <AreaSection groups={grouped.rooms} empty="No rooms yet — add an area to place devices in." renderCard={renderCard} />
@@ -813,14 +1315,16 @@ export function HomeDashboard({ data, actions }) {
       <AreaSection groups={grouped.outdoor} empty="No outdoor areas yet." renderCard={renderCard} />
 
       <Box sx={{ mt: 2 }}>
-        <Button
-          size="small"
-          startIcon={<AddOutlined />}
-          onClick={() => openDialog("add-device")}
-          disabled={!areas.length}
-        >
-          {anyDevices ? "Register another device" : "Register your first device"}
-        </Button>
+        {!visitorAccess && (
+          <Button
+            size="small"
+            startIcon={<AddOutlined />}
+            onClick={() => openDialog("add-device")}
+            disabled={!areas.length}
+          >
+            {anyDevices ? "Register another device" : "Register your first device"}
+          </Button>
+        )}
       </Box>
       <Divider sx={{ mt: 4 }} />
 
@@ -828,14 +1332,16 @@ export function HomeDashboard({ data, actions }) {
       <SectionHeader
         title="Scenes"
         action={(
-          <Button
-            size="small"
-            startIcon={<AddOutlined />}
-            onClick={() => openDialog("add-scene")}
-            disabled={!controllableDevices.length}
-          >
-            New scene
-          </Button>
+          !visitorAccess && (
+            <Button
+              size="small"
+              startIcon={<AddOutlined />}
+              onClick={() => openDialog("add-scene")}
+              disabled={!controllableDevices.length}
+            >
+              New scene
+            </Button>
+          )
         )}
       />
       {scenes.length === 0 && <EmptyLine>No scenes yet — group a few device actions into one tap.</EmptyLine>}
@@ -874,14 +1380,16 @@ export function HomeDashboard({ data, actions }) {
       <SectionHeader
         title="Automations"
         action={(
-          <Button
-            size="small"
-            startIcon={<AddOutlined />}
-            onClick={() => openDialog("add-automation")}
-            disabled={!controllableDevices.length}
-          >
-            New automation
-          </Button>
+          !visitorAccess && (
+            <Button
+              size="small"
+              startIcon={<AddOutlined />}
+              onClick={() => openDialog("add-automation")}
+              disabled={!controllableDevices.length}
+            >
+              New automation
+            </Button>
+          )
         )}
       />
       {automations.length === 0 && <EmptyLine>No automations yet — let the house act on its own.</EmptyLine>}
@@ -889,11 +1397,13 @@ export function HomeDashboard({ data, actions }) {
         <Paper key={automation._id} elevation={0} sx={{ p: 2, mb: 1.25, borderRadius: 3, border: "1px solid", borderColor: "var(--porch-border)", bgcolor: "var(--porch-surface)" }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{automation.name}</Typography>
-            <FormControlLabel
-              control={<Switch checked={automation.enabled === true} onChange={() => toggleAutomation(automation)} />}
-              label={automation.enabled === true ? "On" : "Off"}
-              labelPlacement="start"
-            />
+            {!visitorAccess && (
+              <FormControlLabel
+                control={<Switch checked={automation.enabled === true} onChange={() => toggleAutomation(automation)} />}
+                label={automation.enabled === true ? "On" : "Off"}
+                labelPlacement="start"
+              />
+            )}
           </Stack>
           <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
             {automationTriggerLabel(automation.trigger, areas)}
@@ -908,13 +1418,78 @@ export function HomeDashboard({ data, actions }) {
       ))}
       <Divider sx={{ mt: 4 }} />
 
-      {/* Recent activity (audit) */}
-      <SectionHeader title="Recent activity" />
-      {auditError && <Alert severity="warning" sx={{ mb: 1.5 }}>{auditError}</Alert>}
-      {!auditError && (audit.events ?? []).length === 0 && (
-        <EmptyLine>{auditLoading ? "Loading recent activity…" : "Nothing has happened in this home yet."}</EmptyLine>
+      {/* Access (PORCH-138): the owner's grant surface of record. A visitor
+          never sees this — they hold the visit, they don't grant it. */}
+      {ownerHere && (
+        <>
+          <SectionHeader
+            title="Access"
+            action={(
+              <Button size="small" startIcon={<AddOutlined />} onClick={() => openDialog("add-grant")}>
+                Grant a visit
+              </Button>
+            )}
+          />
+          <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
+            Share what the house can do — to one person or one family — only until the checkout you set. A family visit's parents hand each of their members what part of that envelope they reach.
+          </Typography>
+          {grantsError && <Alert severity="warning" sx={{ mb: 1.5 }}>{grantsError}</Alert>}
+          {grantsLoading && (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>Loading visits…</Typography>
+          )}
+          {!grantsLoading && grants.length === 0 && !grantsError && (
+            <EmptyLine>No visits granted yet — grant one to let someone in for a while.</EmptyLine>
+          )}
+          {grants.map((grant) => (
+            <GrantRow
+              key={grant._id}
+              grant={grant}
+              devices={devices}
+              areas={areas}
+              scenes={scenes}
+              myDid={myDid}
+              families={families}
+              busy={busy}
+              onRevoke={setRevoking}
+              onDistribute={distribute(grant)}
+              distributionError={distributionError}
+            />
+          ))}
+          <Divider sx={{ mt: 4 }} />
+        </>
       )}
-      {(audit.events ?? []).map((event) => (
+
+      {/* Family organizer (PORCH-138): rides the identity plane, not any one
+          home — any signed-in member may start a family; parents govern it. */}
+      <SectionHeader
+        title="Family organizer"
+        action={(
+          <Button size="small" startIcon={<AddOutlined />} onClick={() => openDialog("create-family")}>
+            New family
+          </Button>
+        )}
+      />
+      <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
+        Families ride the identity this device already holds. A host's family grant gives its parents an envelope to hand out to their members — the organizer keeps the roles straight.
+      </Typography>
+      {familiesError && <Alert severity="warning" sx={{ mb: 1.5 }}>{familiesError}</Alert>}
+      {!familiesError && families.length === 0 && <EmptyLine>No families yet — start one so a visit can be granted to it.</EmptyLine>}
+      {families.map((family) => (
+        <FamilyCard key={family._id} family={family} myDid={myDid} mutate={mutateFamily} />
+      ))}
+      <Divider sx={{ mt: 4 }} />
+
+      {/* Recent activity (audit): a member's window. A visitor's read is
+          refused hub-side (E_NOT_PERMITTED), so the whole section stays in
+          the members' half of the screen. */}
+      {!visitorAccess && (
+        <>
+          <SectionHeader title="Recent activity" />
+          {auditError && <Alert severity="warning" sx={{ mb: 1.5 }}>{auditError}</Alert>}
+          {!auditError && (audit.events ?? []).length === 0 && (
+            <EmptyLine>{auditLoading ? "Loading recent activity…" : "Nothing has happened in this home yet."}</EmptyLine>
+          )}
+          {(audit.events ?? []).map((event) => (
         <Stack
           key={event._id}
           direction={{ xs: "column", sm: "row" }}
@@ -939,17 +1514,41 @@ export function HomeDashboard({ data, actions }) {
           <Button size="small" onClick={() => loadAudit(home._id, audit.offset)}>Load more</Button>
         </Box>
       )}
+        </>
+      )}
 
       <HomeDialogs
         dialog={dialog} busy={busy} dialogError={dialogError} closeDialog={closeDialog}
         home={home} homes={homes} areas={areas} controllableDevices={controllableDevices}
+        devices={devices} scenes={scenes} families={families}
         onCreateHome={submitCreateHome}
         onRenameHome={submitRenameHome}
         onAddArea={submitAddArea}
         onAddDevice={submitAddDevice}
         onAddScene={submitAddScene}
         onAddAutomation={submitAddAutomation}
+        onCreateGrant={submitCreateGrant}
+        onCreateFamily={submitCreateFamily}
       />
+
+      {/* Grant revocation: the app's confirm-reject shape — the consequence
+          named in plain language, "keep" rejects, the error-colored button
+          confirms, and a refusal renders inside the dialog. */}
+      <Dialog open={Boolean(revoking)} onClose={() => { setRevoking(null); setRevokeError(""); }} fullWidth maxWidth="xs">
+        <DialogTitle>End this visit early?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Revoking takes everything {revoking?.createdFor || "this visit"} can reach away the moment you confirm — even if the visit hasn't reached its checkout yet.
+          </Typography>
+          {revokeError && <Alert severity="warning" sx={{ mt: 2 }}>{revokeError}</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setRevoking(null); setRevokeError(""); }}>Keep the visit</Button>
+          <Button color="error" variant="contained" disabled={busy} onClick={confirmRevoke}>
+            {busy ? <CircularProgress size={18} /> : "Revoke the visit"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {snack && (
         <Alert severity="warning" onClose={() => setSnack("")} sx={{ position: "fixed", bottom: 96, left: 24, zIndex: 30, maxWidth: 420 }}>

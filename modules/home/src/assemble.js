@@ -4,6 +4,7 @@ import { DeviceService } from "./services/device.service.js";
 import { DeviceAdapterManager } from "./services/adapter.registry.js";
 import { SceneService } from "./services/scene.service.js";
 import { AutomationService } from "./services/automation.service.js";
+import { GrantService } from "./services/grant.service.js";
 import { HomeAuditService } from "./services/audit.service.js";
 import { HomeController } from "./controllers/home.controller.js";
 import { DeviceController } from "./controllers/device.controller.js";
@@ -42,6 +43,15 @@ import { createHomeRouter } from "./routes.js";
  *     detection/entity events; the home module subscribes and applies its
  *     rules. The handler resolves AutomationService.handleEvent. Absent →
  *     rules ride the REST surfaces and tests drive handleEvent directly.
+ *   identityFacts?: {
+ *     resolveIdentity: (did) => Promise<{ did, displayName? } | null>,
+ *       The resolve of a grantee's EXISTING Porchlight identity (grants never
+ *       mint identities); absent → grant creation fails closed.
+ *     familyById: (familyId) => Promise<family | null>, and
+ *     familiesForMember: (did) => Promise<family[]>,
+ *       The identity-plane family facts family grants consume (resolved
+ *       through the family organizer, never a model import).
+ *   },
  *   log?: ((line: string) => void) | null,
  *     Auth-failure capture sink (PORCH-019 shape); defaults to console.
  *   now?: () => string,
@@ -57,6 +67,7 @@ export function assembleHomeModule(store, options = {}) {
   const scenes = collection("scenes");
   const automations = collection("automations");
   const homeAudit = collection("home_audit");
+  const grants = collection("grants");
 
   const audit = new HomeAuditService(homeAudit, now);
   const verifySession = (token) => (options.verifySession ? options.verifySession(token) : Promise.resolve(null));
@@ -71,7 +82,7 @@ export function assembleHomeModule(store, options = {}) {
     orgId: options.orgId ?? null,
     now,
   });
-  const areaService = new AreaService(areas, homeService, now);
+  const areaService = new AreaService(areas, homeService, now, { devices });
   const deviceService = new DeviceService(devices, areas, homeService, audit, adapters, { verifySession, registeredDeviceKey }, now);
   const sceneService = new SceneService(scenes, homeService, deviceService, now);
   const automationService = new AutomationService(automations, homeService, deviceService, audit, {
@@ -79,6 +90,21 @@ export function assembleHomeModule(store, options = {}) {
     registeredDeviceKey,
     dark: options.dark ?? null,
   }, now);
+  // PORCH-138: the grant layer. identityFacts is the injected identity-plane
+  // resolve (existing-identity check + family facts) — never an import of
+  // identity; unwired facts fail closed (no grant can be created).
+  const grantService = new GrantService(
+    grants, homeService,
+    { devices, scenes, areas },
+    audit,
+    { verifySession, registeredDeviceKey },
+    options.identityFacts ?? null,
+    now,
+  );
+  // Membership wins the resolution: the HomeService seam consults the grant
+  // side only when no membership matches, so exactly one of the three V1
+  // access classes applies with no parallel mechanism.
+  homeService.grantResolver = ({ did, homeId = null }) => grantService.resolveFor({ did, homeId });
 
   if (typeof options.onDeviceEvent === "function") {
     options.onDeviceEvent((event) => automationService.handleEvent(event));
@@ -92,6 +118,7 @@ export function assembleHomeModule(store, options = {}) {
       deviceService,
       sceneService,
       automationService,
+      grants: grantService,
     }),
     device: new DeviceController(deviceService),
     automation: new AutomationController({ scenes: sceneService, automations: automationService }),
@@ -99,11 +126,13 @@ export function assembleHomeModule(store, options = {}) {
 
   return {
     api: createHomeRouter(controllers),
+    controllers,
     homeService,
     areaService,
     deviceService,
     sceneService,
     automationService,
+    grantService,
     auditService: audit,
     adapters,
   };
