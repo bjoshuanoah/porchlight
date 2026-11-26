@@ -351,6 +351,8 @@ declare module "@porchlight/home" {
     storage(): Promise<{ state: string; detail?: unknown }>;
   }
   /** PORCH-139: the engine's MQTT detection-bus consumer (DetectedObject facts). */
+  /** PORCH-142: the engine detections topic contract of record (one copy, home-owned). */
+  export const ENGINE_DETECTIONS_PREFIX: string;
   export function createMqttEngineConsumer(options: {
     url: string;
     clientId?: string;
@@ -392,6 +394,11 @@ declare module "@porchlight/home" {
   export function createHomeRouter(controllers: unknown): import("express").Router;
 }
 declare module "@porchlight/overwatch" {
+  /** PORCH-140 scope-law constants of record; PORCH-142 adds the derived trained-vocabulary extension. */
+  export const TRACKED_CLASSES: string[];
+  export const FOLLOWABLE_CLASSES: string[];
+  export function extendTrackedVocabulary(labels: string[]): void;
+  export function resetTrackedVocabulary(): void;
   /** PORCH-140: the overwatch data-plane services (plain-JS package, typed here). */
   export function createConfigStore(options: {
     path: string;
@@ -490,6 +497,8 @@ declare module "@porchlight/recognition" {
     name: string;
     describeFaces(frame: unknown): Promise<Array<{ descriptor: number[]; conf?: number; box?: number[] }>>;
     readPlates?(frame: unknown): Promise<Array<{ text: string; conf?: number; box?: number[] }>>;
+    /** PORCH-142: the watchlist exemplar embedder stage (qwen3-embedding-class). */
+    embedImage?(frame: unknown): Promise<number[][]>;
     status?(): { engine: string; [key: string]: unknown };
     close?(): Promise<void>;
   }
@@ -535,6 +544,27 @@ declare module "@porchlight/recognition" {
     recognize(intake: Record<string, unknown>): Promise<{ outcome: { decision: string; entryId: string | null; name: string | null; confidence: number }; annotated: boolean; annotationId: string | null }>;
     metrics(): { descriptorComputations: number; plateReads: number; recognitionRuns: number; refusedDisabled: number };
   };
+  /** PORCH-142: the household-trained few-shot classifier (see watchlists.js). */
+  export function createWatchlistService(options: {
+    store: unknown;
+    audit?: unknown | null;
+    trackedClasses?: string[];
+    providerRef?: (() => Promise<VisionProvider>) | null;
+    providerName?: string;
+    now?: () => number;
+  }): {
+    createClass(req: Record<string, unknown>): Promise<{ view: Record<string, unknown>; expectedAccuracy: Record<string, unknown>; heldReplay: Record<string, unknown> | null }>;
+    retrain(req: Record<string, unknown>): Promise<{ view: Record<string, unknown>; heldReplay: Record<string, unknown> }>;
+    classify(req: { homeId: string; descriptor?: number[]; cameraId?: string; trackId?: string; eventId?: string; t?: number }): Promise<{ decision: "asserted" | "looks-like"; label: string; classId: string; confidence: number; similarity: number; shouldEmit: boolean } | null>;
+    correct(req: Record<string, unknown>): Promise<{ view: Record<string, unknown>; correction: Record<string, unknown> }>;
+    setClassThreshold(req: Record<string, unknown>): Promise<Record<string, unknown>>;
+    getClass(homeId: string, classId: string): Promise<Record<string, unknown>>;
+    listClasses(homeId: string): Promise<Array<Record<string, unknown>>>;
+    listDetections(req: Record<string, unknown>): Promise<Array<Record<string, unknown>>>;
+    deleteClass(req: Record<string, unknown>): Promise<{ purged: Record<string, number | string> }>;
+    vocabulary(homeId: string): Promise<{ builtIn: Array<Record<string, unknown>>; trained: Array<Record<string, unknown>> }>;
+    trackedTrainedLabels(homeId?: string): Promise<string[]>;
+  };
 }
 declare module "@porchlight/recognition/server" {
   /**
@@ -546,6 +576,10 @@ declare module "@porchlight/recognition/server" {
     services: {
       registry: unknown;
       recognition: unknown;
+      /** PORCH-142: the household-trained few-shot classifier (required). */
+      watchlists: unknown;
+      /** Fire-and-forget mutation side-channel (the derived vocabulary refresh). */
+      hooks?: { onWatchlistMutated?: () => unknown } | null;
     };
     authorize?: ((args: { req: unknown; action: string; resource: string; homeId?: string | null }) => Promise<unknown> | unknown) | null;
     log?: ((line: string) => void) | null;

@@ -30,6 +30,9 @@ import {
 // PORCH-141: recognized identities decorate the camera-activity events — the
 // by-reference annotation join is people-model.js's of record.
 import { annotationsForEvent, annotationLines, namesByEntryId } from "./people-model.js";
+// PORCH-142: a flagged event feeds its detection back as a watchlist
+// correction — the target join is the watchlists model's, reused.
+import { correctionTargetOf } from "./watchlists-model.js";
 
 const messageOf = (error) => error?.message || "That did not work. Please try again.";
 
@@ -1087,6 +1090,22 @@ function CamerasSurface({ home, areas, actions, ownerHere, origin }) {
     try {
       const answer = await actions.flagCameraEvent(event._id);
       setEvents((current) => current.map((row) => (row._id === answer?.event?._id ? answer.event : row)));
+      // PORCH-142: a flag is also a correction opportunity — when the event
+      // names a camera+track ground, feed its last detection back best-effort
+      // (the hub 404s "no recorded detection to feed back" when the detection
+      // isn't watchlist-trained, and a failed correction never breaks the
+      // flag itself).
+      const target = correctionTargetOf(answer?.event ?? event);
+      if (target) {
+        try {
+          await actions.correctFromFlaggedEvent?.({
+            homeId,
+            cameraId: target.cameraId,
+            trackId: target.trackId,
+            eventId: (answer?.event ?? event)?._id,
+          });
+        } catch {}
+      }
     } catch (failure) {
       setEventsError(messageOf(failure));
     }

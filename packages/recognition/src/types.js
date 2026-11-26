@@ -32,11 +32,12 @@
  *   conf?: number,
  *   box?: [number, number, number, number],
  * }} PlateRead
- *
+/**
  * @typedef {{
  *   name: string,
  *   describeFaces(frame: RecognitionFrame): Promise<FaceEmbedding[]>,
  *   readPlates?(frame: RecognitionFrame): Promise<PlateRead[]>,
+ *   embedImage?(frame: RecognitionFrame): Promise<number[][]>,
  *   status?(): { engine: string, [k: string]: unknown },
  *   close?: () => Promise<void>,
  * }} VisionProvider
@@ -45,6 +46,13 @@
  * OCR-class plate reader, or the deterministic test provider. Model names
  * are shaping candidates supplied by setup's per-stage selection law — the
  * provider is the boundary, never a hardcoded runtime.
+ *
+ * `embedImage` (PORCH-142, the watchlist stage): the exemplar embedder for
+ * the household-trained few-shot classes — qwen3-embedding-class per-crop
+ * vectors of every uploaded example image. The cosine/classifier mechanics
+ * live in watchlists.js; the provider is the boundary. A provider without
+ * embedImage cannot teach a watchlist class — training refuses closed with
+ * plain language (never a silent fallback), exactly like the other stages.
  *
  * @typedef {{
  *   at: number,
@@ -125,6 +133,19 @@ export const FACE_ID_PREFIX = "fce_";
 export const VEHICLE_ID_PREFIX = "veh_";
 /** Sighting history cap per entry (bounded registry — the store stays a store). */
 export const SIGHTINGS_CAP = 200;
+/** Watchlist trained-class id prefix + its detection-row prefix (PORCH-142). */
+export const WATCHLIST_ID_PREFIX = "wtl_";
+export const WATCHLIST_DETECTION_ID_PREFIX = "wdx_";
+/** Exemplar cap per trained class (bounded artifact set — the store stays a store). */
+export const EXEMPLARS_CAP = 64;
+/** Per-class bounded ring of recorded trained-detection rows (correction lookup + surface). */
+export const DETECTION_RING_CAP = 20;
+/** Asserted-emission cooldown, in seconds: one asserted trained-label detection per
+ * track per window — the family event pipeline's own dedup window (PORCH-139). */
+export const EMISSION_COOLDOWN_SEC = 300;
+/** Class label shape of record: the text the household types, capped; it rides the
+ * detection vocabulary as the detection `cls`, so it stays printable and small. */
+const CLASS_LABEL_RE = /^[\p{L}\p{N}][\p{L}\p{N} '’&.,-]{0,47}$/u;
 /** Plate text shape of record: uppercase alphanumerics + hyphen, 2-12 chars. */
 const PLATE_TEXT_RE = /^[A-Z0-9-]{2,12}$/;
 
@@ -245,9 +266,104 @@ export function assertEnrollmentMeta(body) {
 }
 
 /**
+ * Validate + normalize a trained-class label (PORCH-142). Plain-language
+ * refusal on junk — the plane maps typed refusals onto 422.
+ * @param {unknown} label
+ * @returns {string}
+ */
+export function assertClassLabel(label) {
+	if (!isNonEmptyString(label) || !CLASS_LABEL_RE.test(label.trim())) {
+		refusal('A trained class needs a name — 1 to 48 letters, digits, spaces, or \' - & . , Characters ("a 63 Chevy Impala").');
+	}
+	return label.trim();
+}
+
+/**
+ * Validate one exemplar descriptor row bound to a trained class.
+ * @param {unknown} d
+ * @returns {FaceDescriptor}
+ */
+export function assertExemplarDescriptor(d) {
+	return assertDescriptor(d);
+}
+
+/**
+ * Validate the body a watchlist train/retrain call carries (shared by
+ * service + plane).
+ * @param {unknown} body
+ * @returns {{ homeId: string, label?: string, trackingSource?: string | null }}
+ */
+export function assertWatchlistBody(body) {
+	if (!body || typeof body !== "object") {
+		refusal("Training needs a body.");
+	}
+	const b = /** @type {Record<string, unknown>} */ (body);
+	if (!isNonEmptyString(b.homeId)) {
+		refusal("Training is scoped to a home.");
+	}
+	const trackingSource = typeof b.trackingSource === "string" && b.trackingSource.trim() !== ""
+		? b.trackingSource.trim()
+		: null;
+	return {
+		homeId: /** @type {string} */ (b.homeId),
+		...(b.label !== undefined ? { label: assertClassLabel(b.label) } : {}),
+		trackingSource,
+	};
+}
+
+/**
  * @param {unknown} settings
  * @returns {boolean}
  */
 export function isEntryDoc(settings) {
 	return Boolean(settings && typeof settings === "object" && /** @type {{_id?: unknown}} */ (settings)._id);
 }
+
+/**
+ * @typedef {{
+ *   descriptor: FaceDescriptor,
+ *   image: string | null,
+ *   origin: "train" | "correction",
+ *   at: string,
+ * }} WatchExemplar
+ * One uploaded example of a trained class. `descriptor` is the LOCAL
+ * embedding (computed on-device via the provider's embedImage stage);
+ * `image` is the example's data URL — both stay on the hub (the privacy
+ * law: no training artifact or example image ever leaves it).
+ *
+ * @typedef {{
+ *   _id: string,
+ *   homeId: string,
+ *   label: string,
+ *   exemplars: WatchExemplar[],
+ *   assertThreshold: number | null,
+ *   trackingScope: "tracked" | "detection-only",
+ *   trackingSource: string | null,
+ *   heldReplay: { hitRate: number | null, heldOut: number, exemplars: number, at: string } | null,
+ *   createdAt: string,
+ *   updatedAt: string,
+ * }} WatchlistClass
+ * The trained-class artifact set of record: the exemplar pool IS the
+ * few-shot classifier (embeddings + cosine); retraining replaces it in one
+ * write. assertThreshold is the per-class calibrated bar of record —
+ * null (uncalibrated) never asserts, the shared uncertainty law.
+ *
+ * @typedef {{
+ *   _id: string,
+ *   homeId: string,
+ *   classId: string,
+ *   label: string,
+ *   decision: "asserted" | "looks-like",
+ *   confidence: number,
+ *   similarity: number,
+ *   descriptor: FaceDescriptor,
+ *   emitted: boolean,
+ *   cameraId?: string,
+ *   trackId?: string,
+ *   eventId?: string,
+ *   at: string,
+ * }} TrainingDetection
+ * One recorded trained-class classification of a bus-borne crop descriptor
+ * (bounded ring per class). The descriptors ride ONLY as the correction
+ * loop's raw material; views never surface them.
+ */

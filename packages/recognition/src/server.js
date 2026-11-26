@@ -13,6 +13,12 @@
 //                  recognition switch of record, annotations, purge, export
 //     recognition: createRecognitionService({ registry, pipeline }) —
 //                  enrollment, gallery match, metric counters
+//     watchlists:  createWatchlistService({ store, audit, ... }) (PORCH-142)
+//                  — the household-trained few-shot classes: train, retrain,
+//                  classify, correct, delete, the open vocabulary
+//     hooks:       { onWatchlistMutated?: () => void } — optional fire-and-
+//                  forget side-channel the plane uses to refresh the derived
+//                  Overwatch tracking vocabulary after label changes
 //   }
 //
 // `authorize` — the owner seam of record. Null (tests) = allow-all. When
@@ -172,10 +178,11 @@ function decodeFrames(raw) {
  * @returns {(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, prepared?: { body?: object | null }) => Promise<void>}
  */
 export function createRecognitionHandler({ services, authorize = null, log = null }) {
-	const { registry, recognition } = services;
+	const { registry, recognition, watchlists } = services;
 	for (const [name, service] of Object.entries({ registry, recognition })) {
 		if (!service) throw new TypeError(`createRecognitionHandler: services.${name} is required`);
 	}
+	if (!watchlists) throw new TypeError("createRecognitionHandler: services.watchlists is required");
 
 	/**
 	 * The authorize seam: truthy allows; falsy denies 403; thrown errors are
@@ -346,6 +353,107 @@ export function createRecognitionHandler({ services, authorize = null, log = nul
 		if (r[0] === "metrics" && r.length === 1 && method === "GET") {
 			await authorizeOrThrow({ req, homeId: authHomeId, action: "read", resource: "metrics" });
 			return sendJson(res, 200, { metrics: recognition.metrics() });
+		}
+
+		// ---- the watchlists: household-trained few-shot classes (PORCH-142) ----
+		// Training is on-device only; the artifacts (exemplar embeddings and
+		// example images) stay on the hub. Mutations stay owner-only (the
+		// plane's write rule); vocabulary and readings stay member-readable.
+		if (r[0] === "watchlists") {
+			if (r[1] === "vocabulary" && r.length === 2 && method === "GET") {
+				await authorizeOrThrow({ req, homeId: authHomeId, action: "read", resource: "watchlists/vocabulary" });
+				return sendJson(res, 200, { vocabulary: await watchlists.vocabulary(url.searchParams.get("homeId") ?? "") });
+			}
+			if (r.length === 1 && method === "GET") {
+				await authorizeOrThrow({ req, homeId: authHomeId, action: "read", resource: "watchlists" });
+				const classes = await watchlists.listClasses(url.searchParams.get("homeId") ?? "");
+				return sendJson(res, 200, { classes, count: classes.length });
+			}
+			if (r.length === 1 && method === "POST") {
+				await authorizeOrThrow({ req, homeId: authHomeId, action: "write", resource: "watchlists" });
+				const trained = await watchlists.createClass({
+					homeId: body.homeId ?? url.searchParams.get("homeId") ?? "",
+					label: body.label,
+					frames: decodeFrames(body.frames),
+					trackingSource: body.trackingSource,
+					actorDid: body.actorDid ?? null,
+				});
+				void services.hooks?.onWatchlistMutated?.();
+				return sendJson(res, 201, { class: trained.view, expectedAccuracy: trained.expectedAccuracy, heldReplay: trained.heldReplay });
+			}
+			if (r.length === 2) {
+				const classId = requireId(r[1], "class id");
+				const homeId = url.searchParams.get("homeId") ?? "";
+				if (method === "GET") {
+					await authorizeOrThrow({ req, homeId: authHomeId, action: "read", resource: `watchlists/${classId}` });
+					return sendJson(res, 200, { class: await watchlists.getClass(homeId, classId) });
+				}
+				if (method === "PUT") {
+					await authorizeOrThrow({ req, homeId: authHomeId, action: "write", resource: `watchlists/${classId}` });
+					const cls = await watchlists.setClassThreshold({
+						homeId, classId, assertThreshold: body.assertThreshold ?? null, actorDid: body.actorDid ?? null,
+					});
+					void services.hooks?.onWatchlistMutated?.();
+					return sendJson(res, 200, { class: cls });
+				}
+				if (method === "DELETE") {
+					await authorizeOrThrow({ req, homeId: authHomeId, action: "write", resource: `watchlists/${classId}` });
+					const purged = await watchlists.deleteClass({
+						homeId, classId, actorDid: body.actorDid ?? null,
+					});
+					void services.hooks?.onWatchlistMutated?.();
+					return sendJson(res, 200, purged);
+				}
+			}
+			if (r.length === 3 && r[2] === "retrain" && method === "POST") {
+				await authorizeOrThrow({ req, homeId: authHomeId, action: "write", resource: `watchlists/${requireId(r[1], "class id")}` });
+				const result = await watchlists.retrain({
+					homeId: body.homeId ?? url.searchParams.get("homeId") ?? "",
+					classId: requireId(r[1], "class id"),
+					frames: decodeFrames(body.frames),
+					replay: body.replay,
+					actorDid: body.actorDid ?? null,
+				});
+				void services.hooks?.onWatchlistMutated?.();
+				return sendJson(res, 200, { class: result.view, heldReplay: result.heldReplay });
+			}
+			if (r.length === 2 && r[1] === "corrections" && method === "POST") {
+				await authorizeOrThrow({ req, homeId: authHomeId, action: "write", resource: "watchlists" });
+				const result = await watchlists.correct({
+					homeId: body.homeId ?? url.searchParams.get("homeId") ?? "",
+					descriptor: body.descriptor,
+					eventId: body.eventId,
+					cameraId: body.cameraId,
+					trackId: body.trackId,
+					actorDid: body.actorDid ?? null,
+				});
+				void services.hooks?.onWatchlistMutated?.();
+				return sendJson(res, 200, { class: result.view, correction: result.correction });
+			}
+			if (r.length === 3 && r[2] === "corrections" && method === "POST") {
+				await authorizeOrThrow({ req, homeId: authHomeId, action: "write", resource: `watchlists/${r[1]}` });
+				const result = await watchlists.correct({
+					homeId: body.homeId ?? url.searchParams.get("homeId") ?? "",
+					classId: r[1],
+					descriptor: body.descriptor,
+					eventId: body.eventId,
+					cameraId: body.cameraId,
+					trackId: body.trackId,
+					actorDid: body.actorDid ?? null,
+				});
+				void services.hooks?.onWatchlistMutated?.();
+				return sendJson(res, 200, { class: result.view, correction: result.correction });
+			}
+			if (r.length === 3 && r[2] === "detections" && method === "GET") {
+				await authorizeOrThrow({ req, homeId: authHomeId, action: "read", resource: `watchlists/${requireId(r[1], "class id")}` });
+				return sendJson(res, 200, {
+					detections: await watchlists.listDetections({
+						homeId: url.searchParams.get("homeId") ?? "",
+						classId: r[1],
+						limit: url.searchParams.get("limit") ?? undefined,
+					}),
+				});
+			}
 		}
 
 		// ---- by-reference annotations (event/entity/track/visit surfaces) ----
