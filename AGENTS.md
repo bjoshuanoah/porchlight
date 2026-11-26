@@ -28,6 +28,8 @@ porchlight/
 ├── packages/
 │   ├── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)
 │   ├── hal/        # Platform HAL: the thin native integration layer (VideoToolbox/CoreML/Vision on macOS, Linux first cut) — @porchlight/hal (private); the only package allowed to touch OS frameworks (PORCH-132)
+│   ├── config/     # Engine config plane: zone/mask definitions (percent frame coords), composition resolver, speed calibration, configuration profiles + the admin console REST surface — @porchlight/config (private) (PORCH-135)
+│   ├── console/    # Admin console SPA: zone/mask editor, composition inspector, speed calibration, profile editor + layer inspector (MUI, React, Vite) — @porchlight/console (private) (PORCH-135)
 │   └── cli/        # porchlight CLI — global bin, the npm install surface (`npm install -g porchlight`) (public)
 ├── docs/           # Release verification instructions (signed supply-chain anchor)
 ├── .github/workflows/  # CI (lint/typecheck/build/test on Node 24) and npm-publish (npm publish with provenance via OIDC trusted publishing + signed GitHub Releases)
