@@ -12,7 +12,14 @@ A provider is a plain object (`src/types.js`):
 {
   name: "coreml",
   detect: async (frame) => [{ cls, conf, bbox /* [x,y,w,h] in [0,1] */, t }],
-  status: () => ({ engine: "coreml", cpuFallback: false }),
+  status: () => ({
+    engine: "coreml",
+    providerClass: "native-mlx" /* | "openai-spec" | "local-server" */,
+    model: "/models/yolo11n.onnx",
+    executionTarget: "gpu/ane" /* or "cpu" */,
+    state: "native" /* or "cpu" | "degraded" | "failed" */,
+    reason: null /* a degradation always states itself */,
+  }),
   close: async () => {},
 }
 ```
@@ -36,27 +43,48 @@ New providers must respect the never-silent law: any capability degradation
 (`src/tracker.js`: two-stage IoU association, tentative → confirmed → lost →
 deleted lifecycle, constant-velocity prediction), and a `DetectionSink`:
 
-frame → `provider.detect` → trackers → `sink.publish` (per-camera MQTT
-topics `porchlight/engine/detections/<camera>`). Frames are `{camera, w, h,
+frame → `provider.detect` → trackers → `sink.publish` (per-detection MQTT
+topics `porchlight/engine/detections/<camera>/<cls>` — the two-segment topic
+family of record, PORCH-152). Frames are `{camera, w, h,
 t, format: "rgb"|"rgba"|"jpeg", data}`.
 
 The bus transport itself is owned by the PORCH-129 vetting decision; the
 service depends only on the `DetectionSink` interface, so the transport can
 re-point without core changes.
 
+## Compute status & re-pointing (PORCH-152)
+
+`DetectionService.status()` is the never-silent compute posture:
+`{ stage: "detection", provider: <provider status>, sink: <sink status>,
+frames, published, generation }`. Every provider reports all five of
+engine / providerClass / model / executionTarget / state — a degradation
+(CPU fallback, forced CPU, helper respawn) always carries a `reason`, a
+native run reports `reason: null`. A provider that cannot say is a defect,
+not a blank.
+
+`service.repoint(provider)` swaps the live provider at runtime: it validates
+the `InferenceProvider` protocol, closes the old provider (close errors are
+logged, never fatal), increments `generation`, and keeps trackers and sink
+untouched — subsequent publishes carry the new provider's `name`, and the
+publish contract continues unchanged. The sink is never silent either: an
+offline MQTT bus reports `state: "degraded"` with a reason naming the
+buffered count.
+
 ## Providers
 
 - **CoreML EP** (`src/provider.coreml.js`): `onnxruntime-node` with the
   CoreML Execution Provider — ONNX models (e.g. a YOLO export) run natively
   on Apple Silicon GPU/ANE. The default execution-provider order comes from
-  the platform HAL (`@porchlight/hal`). If the accelerated EPs cannot build,
-  the session falls back to CPU and says so (`status().cpuFallback`, log
-  line).
+  the platform HAL (`@porchlight/hal`). If the accelerated EPs cannot build
+  — or a cpu-only session is forced — the provider lands on CPU and says so:
+  `status()` reports `state: "cpu"` with the exact logged fallback reason,
+  never silent.
 - **Vision helper** (`src/provider.vision.js`): Apple Vision primitives
   (person/animal) via a compiled Swift subprocess owned by the platform HAL
   (`packages/hal/swift/VisionHelper.swift` — all OS-framework code lives in
   the HAL) and speaking a framed stdin/stdout protocol (see
-  `packages/hal/swift/README.md`). Compile once:
+  `packages/hal/swift/README.md`). Helper crashes respawn with capped
+  backoff and status() names the respawn count (never silent). Compile once:
   `swiftc -O packages/hal/swift/VisionHelper.swift -o vision-helper`.
 
 ## CPU harness

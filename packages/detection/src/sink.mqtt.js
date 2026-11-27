@@ -3,7 +3,14 @@
 // The engine's event-bus transport is owned by the PORCH-129 vetting
 // decision; the detection core depends only on the DetectionSink interface
 // (types.js), never on MQTT directly. This module is the MQTT implementation
-// of that seam: normalized DetectedObject JSON, one topic per camera.
+// of that seam: normalized DetectedObject JSON.
+//
+// Topic family of record (PORCH-152): `<topicPrefix>/<camera>/<cls>` — two
+// segments after the prefix. Consumers keyed on this exact shape: the
+// recorder's DETECTIONS_PATTERN "porchlight/engine/detections/+/+"
+// (packages/recorder/src/bus.mqtt.js, cameraFromTopic = parts[3]), the home
+// hub consumer (ENGINE_DETECTIONS_PREFIX "/+/+"), and apps/server's
+// re-emitter (`<prefix>/<camera>/<cls>`).
 //
 // Reconnect: mqtt.js reconnects automatically; publications issued while
 // offline buffer (bounded — oldest drops first, drops are counted and
@@ -76,7 +83,8 @@ export class MqttDetectionSink {
 	}
 
 	/**
-	 * Publish one normalized detection to `<topicPrefix>/<camera>`.
+	 * Publish one normalized detection to `<topicPrefix>/<camera>/<cls>`
+	 * (the two-segment topic family of record, PORCH-152).
 	 * @param {DetectedObject} object
 	 */
 	async publish(object) {
@@ -88,7 +96,7 @@ export class MqttDetectionSink {
 			return;
 		}
 		if (this.buffer.length > 0) this.#flushBuffered(c);
-		c.publish(`${this.topicPrefix}/${object.camera}`, JSON.stringify(object), { qos: this.qos, retain: false });
+		c.publish(`${this.topicPrefix}/${object.camera}/${object.cls}`, JSON.stringify(object), { qos: this.qos, retain: false });
 	}
 
 	/**
@@ -105,16 +113,22 @@ export class MqttDetectionSink {
 	/** @param {any} c */
 	#flushBuffered(c) {
 		for (const buffered of this.buffer.splice(0)) {
-			c.publish(`${this.topicPrefix}/${buffered.camera}`, JSON.stringify(buffered), { qos: this.qos, retain: false });
+			c.publish(`${this.topicPrefix}/${buffered.camera}/${buffered.cls}`, JSON.stringify(buffered), { qos: this.qos, retain: false });
 		}
 	}
 
 	status() {
+		const connected = /** @type {any} */ (this.client)?.connected ?? false;
+		// Never-silent (PORCH-152): the sink names its degradation — an
+		// offline bus holds buffered detections, and that count is the reason.
+		const noun = this.buffer.length === 1 ? "detection" : "detections";
 		return {
 			transport: "mqtt",
 			url: this.url,
 			topicPrefix: this.topicPrefix,
-			connected: /** @type {any} */ (this.client)?.connected ?? false,
+			connected,
+			state: connected ? "native" : "degraded",
+			reason: connected ? null : `bus offline — ${this.buffer.length} ${noun} buffered`,
 			buffered: this.buffer.length,
 			dropped: this.dropped,
 		};

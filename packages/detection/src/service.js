@@ -38,6 +38,42 @@ export class DetectionService {
 		this.trackers = new Map();
 		this.frames = 0;
 		this.published = 0;
+		// Compute re-pointing generation (PORCH-152): 0 until the first repoint.
+		this.generation = 0;
+	}
+
+	/**
+	 * Re-point the live provider (compute re-pointing, PORCH-152): validates
+	 * the InferenceProvider protocol, closes the old provider (close errors
+	 * are logged, never fatal), and swaps it in. Trackers and sink continue
+	 * unchanged — subsequent publishes carry the new provider's name, and
+	 * every re-point bumps `generation` (visible in status()).
+	 *
+	 * @param {InferenceProvider} provider
+	 * @returns {Promise<{ name: string, generation: number }>}
+	 */
+	async repoint(provider) {
+		if (
+			!provider ||
+			typeof provider.name !== "string" ||
+			provider.name.length === 0 ||
+			typeof provider.detect !== "function"
+		) {
+			throw new TypeError("DetectionService.repoint: provider must implement InferenceProvider (a name string plus a detect(frame) function)");
+		}
+		// Swap first so the live seam never sits on a provider that is already
+		// closed; the old provider is released only after its replacement is live.
+		const previous = this.provider;
+		this.provider = provider;
+		this.generation += 1;
+		try {
+			await previous.close?.();
+		} catch (err) {
+			// Close errors never fail the re-point — the new seam is already
+			// live; the failure is logged, never silent.
+			this.log(`[detection] provider close during repoint failed (ignored): ${err instanceof Error ? err.message : String(err)}`);
+		}
+		return { name: provider.name, generation: this.generation };
 	}
 
 	/**
@@ -73,15 +109,18 @@ export class DetectionService {
 	}
 
 	/**
-	 * Compute posture (never-silent law): provider status + sink status.
-	 * @returns {{ provider: Record<string, unknown>, sink: Record<string, unknown>, frames: number, published: number }}
+	 * Compute posture (never-silent law): stage tag, provider status + sink
+	 * status, the frame/publish counters, and the re-point generation.
+	 * @returns {{ stage: string, provider: Record<string, unknown>, sink: Record<string, unknown>, frames: number, published: number, generation: number }}
 	 */
 	status() {
 		return {
+			stage: "detection",
 			provider: this.provider.status?.() ?? { engine: "unknown" },
 			sink: this.sink.status?.() ?? {},
 			frames: this.frames,
 			published: this.published,
+			generation: this.generation,
 		};
 	}
 

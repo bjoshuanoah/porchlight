@@ -67,8 +67,16 @@ test("init builds the session with the CoreML EP first; detect decodes normalize
 	const fake = fakeOrt();
 	const provider = await new CoreMLProvider({ modelPath: "/models/yolo11n.onnx", classNames: ["person"], executionProviders: ["coreml", "cpu"], log: console.log }).init(fake);
 	assert.equal(fake.createdWith[0][0], "coreml");
-	assert.equal(provider.status().engine, "coreml");
-	assert.equal(provider.status().cpuFallback, false);
+	// Never-silent posture (PORCH-152): all five fields, state native.
+	assert.deepEqual(provider.status(), {
+		engine: "coreml",
+		providerClass: "native-mlx",
+		model: "/models/yolo11n.onnx",
+		executionTarget: "gpu/ane",
+		state: "native",
+		reason: null,
+		cpuFallback: false,
+	});
 	const dets = await provider.detect(rgbFrame());
 	assert.equal(dets.length, 1);
 	assert.equal(dets[0].cls, "person");
@@ -87,9 +95,35 @@ test("CoreML EP failure falls back to CPU with an explicit never-silent log line
 		log: (...a) => lines.push(a.join(" ")),
 	}).init(fakeOrt({ failCoreml: true }));
 	assert.equal(provider.cpuFallback, true);
-	assert.equal(provider.status().engine, "cpu");
-	assert.equal(provider.status().cpuFallback, true);
+	const status = provider.status();
+	assert.equal(status.engine, "cpu");
+	// The degraded posture is stated: state "cpu" with the reason that was
+	// logged at init (never silent, PORCH-152).
+	assert.equal(status.state, "cpu");
+	assert.equal(status.providerClass, "native-mlx");
+	assert.equal(status.executionTarget, "cpu");
+	assert.ok(status.reason && status.reason.includes("EPs unavailable"), `reason states the fallback: ${status.reason}`);
 	assert.ok(lines.some((l) => l.includes("EPs unavailable") && l.includes("not on GPU/ANE")), "explicit CPU fallback line present");
+	assert.ok(lines.some((l) => l.includes(/** @type {string} */ (status.reason))), "status reason is the logged fallback message");
+});
+
+test("forced cpu-only build reports the cpu posture even without a fallback event", async () => {
+	/** @type {string[]} */
+	const lines = [];
+	const provider = await new CoreMLProvider({
+		modelPath: "/m.onnx",
+		classNames: ["person"],
+		executionProviders: ["cpu"],
+		log: (...a) => lines.push(a.join(" ")),
+	}).init(fakeOrt());
+	const status = provider.status();
+	assert.equal(status.engine, "cpu");
+	assert.equal(status.state, "cpu");
+	assert.equal(status.executionTarget, "cpu");
+	assert.equal(status.providerClass, "native-mlx");
+	assert.equal(status.cpuFallback, true);
+	assert.ok(status.reason && status.reason.includes("cpu"), `never-silent reason: ${status.reason}`);
+	assert.ok(lines.some((l) => l.includes(/** @type {string} */ (status.reason))), "the cpu-only posture is logged");
 });
 
 test("detect rejects jpeg frames (pixels must arrive decoded) and before init", async () => {

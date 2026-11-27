@@ -163,8 +163,17 @@ export class VisionProvider {
 		});
 	}
 
+	/** Never-silent compute posture (PORCH-152): all five fields, always. */
 	status() {
-		return { engine: "vision", helper: this.bin, respawns: this.respawns };
+		return {
+			engine: "vision",
+			providerClass: "native-mlx",
+			model: "apple-vision",
+			executionTarget: "ane",
+			state: "native",
+			respawns: this.respawns,
+			reason: this.respawns > 0 ? `helper respawned ${this.respawns} times` : null,
+		};
 	}
 
 	/** Stop the helper (SIGTERM). */

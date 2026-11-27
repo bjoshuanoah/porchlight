@@ -21,6 +21,8 @@
 	},
 	"dependencies": {
 		"@porchlight/hal": "0.5.3",
+		"@porchlight/config": "0.5.3",
+		"@porchlight/recorder": "0.5.3",
 		"mqtt": "^5.16.1",
 		"onnxruntime-node": "^1.31.1"
 	},

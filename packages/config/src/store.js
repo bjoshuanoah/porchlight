@@ -18,6 +18,7 @@ export const DOC_NAMES = Object.freeze([
 	"base",
 	"active-profile",
 	"storage",
+	"compute",
 ]);
 
 /** The console document directory for a Porchlight root. */

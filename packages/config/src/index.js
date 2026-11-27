@@ -14,7 +14,9 @@ import { createSpeedService } from "./speed.js";
 import { createProfileService } from "./profiles.js";
 import { createScheduler } from "./scheduler.js";
 import { createStorageService } from "./storage.js";
+import { createComputeService } from "./compute.js";
 import { createConfigServer } from "./server.js";
+import { wireComputeRepoints } from "./compute.js";
 import { polygonIntersectsPolygon } from "./geometry.js";
 
 // Porchlight root default (contract): console docs land under
@@ -132,6 +134,8 @@ export function createConfigService(opts = {}) {
 	const scheduler = createScheduler({ profiles, now });
 	const compose = createCompose({ zones, masks });
 	const storage = createStorageService({ store, recorderBase: opts.recorderBase });
+	/** The engine compute posture (PORCH-152): per-stage plans + live statuses. */
+	const compute = createComputeService({ store, publisher, root, fs: opts.fs, now });
 	const parts = {
 		store,
 		publisher,
@@ -144,8 +148,9 @@ export function createConfigService(opts = {}) {
 		base,
 		scheduler,
 		storage,
+		compute,
 	};
-	const server = createConfigServer(parts, { consoleDist: opts.consoleDist });
+	const server = createConfigServer(parts, { consoleDist: opts.consoleDist, root, recorderBase: opts.recorderBase, probeImpl: opts.probeImpl });
 	/** @type {any} */
 	const service = {
 		...parts,
@@ -155,6 +160,8 @@ export function createConfigService(opts = {}) {
 	};
 	return service;
 }
+
+export { wireComputeRepoints };
 
 /**
  * Start the service's HTTP server on an ephemeral or fixed port.

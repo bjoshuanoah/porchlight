@@ -98,6 +98,20 @@ export function createApi(baseUrl = "") {
     updateStorageRule: (ruleId, rule) => request(`/api/storage/rules/${encodeURIComponent(ruleId)}`, { method: "PUT", body: rule }),
     deleteStorageRule: (ruleId) => request(`/api/storage/rules/${encodeURIComponent(ruleId)}`, { method: "DELETE" }),
 
+    // Compute posture (PORCH-152): the per-stage provider plan of record
+    // and the live status each stage reports. Refusals (422/404) surface
+    // the service's plain-language error verbatim; PUT applies the admin
+    // layer live server-side, DELETE restores the layered default.
+    getComputeStages: () => request("/api/compute/stages"),
+    getComputeStage: (stage) => request(`/api/compute/stages/${encodeURIComponent(stage)}`),
+    setComputeStage: (stage, value) => request(`/api/compute/stages/${encodeURIComponent(stage)}`, { method: "PUT", body: value }),
+    resetComputeStage: (stage) => request(`/api/compute/stages/${encodeURIComponent(stage)}`, { method: "DELETE" }),
+
+    // Stream probe (PORCH-152): a refused URL comes back as a 200 body
+    // { ok: false, reason } so the reason renders verbatim; a malformed
+    // request (422) keeps the service's words via ApiError.
+    validateCameraUrl: (url) => request("/api/cameras/validate", { method: "POST", body: { url } }),
+
     // Manual recording (PORCH-136 ac-3): a 200 body passes through as-is,
     // including a { ok: false, reason } refusal the recorder itself sent.
     // A refused request (409/422) still throws ApiError so the server's
