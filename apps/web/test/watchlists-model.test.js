@@ -233,8 +233,8 @@ test("wiring ac-6: the Watchlists tab registers exactly where the other screens 
   // The nav affordance rides the same primary/labels/icons trio, appended
   // AFTER the People & Things entry (index 7; compose stays special-cased
   // at index 3).
-  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists"\]/);
-  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists"\]/);
+  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists", "\/agent"\]/);
+  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists", "Agent"\]/);
   assert.match(mainSource, /<FaceOutlined \/>, <LabelOutlined \/>/);
 });
 

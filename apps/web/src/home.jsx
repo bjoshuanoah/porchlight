@@ -33,6 +33,10 @@ import { annotationsForEvent, annotationLines, namesByEntryId } from "./people-m
 // PORCH-142: a flagged event feeds its detection back as a watchlist
 // correction — the target join is the watchlists model's, reused.
 import { correctionTargetOf } from "./watchlists-model.js";
+// PORCH-150: the family organizer's parental narrowing control rides the
+// agent actions' ONE assignment path; the payload shaping is the agent
+// model's, and every rule stays hub-side (no parallel enforcement).
+import { narrowingPayload, providerClassLabel } from "./agent-model.js";
 
 const messageOf = (error) => error?.message || "That did not work. Please try again.";
 
@@ -445,15 +449,105 @@ function DistributionEditor({ grant, family, devices, areas, scenes, myDid, busy
   );
 }
 
+/** One member's narrowing editor inside the family organizer (PORCH-150):
+ * the options ARE the parent's available set — the profiles the hub's
+ * member-facing list serves (memberSelectable enforced server-side, so a
+ * withheld profile is not an option here and can never be re-enabled by a
+ * parent). The save rides the ONE assignment path hub-side; its refusal
+ * renders verbatim. Narrowing never grants: anything unticked is outside
+ * the member's set. */
+export function NarrowingDialog({ family, memberId, open, profiles, picks, busy, error, setPicks, onClose, onSave, onClear }) {
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Model profiles this member may run</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+          These are the profiles the hub admin made available. Tick what {memberId === "" ? "this member" : memberId} may run; anything unticked is outside their set. A profile the hub admin withheld never appears here — a parent can narrow, never widen.
+        </Typography>
+        {Array.isArray(profiles) && profiles.length === 0 && (
+          <Typography variant="body2" sx={{ color: "text.muted" }}>
+            No model profiles have been made available to members yet.
+          </Typography>
+        )}
+        {(profiles ?? []).map((profile) => (
+          <FormControlLabel
+            key={profile.profileId}
+            control={<Checkbox size="small" checked={picks.includes(profile.profileId)}
+              onChange={(event) => setPicks((current) => current.includes(profile.profileId)
+                ? current.filter((id) => id !== profile.profileId)
+                : [...current, profile.profileId])} />}
+            label={<Typography variant="body2">{profile.name} · {profile.modelId} · {providerClassLabel(profile.providerClass)}</Typography>}
+          />
+        ))}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClear} disabled={busy}>No narrowing — any available profile</Button>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={busy} onClick={() => onSave(narrowingPayload(profiles, picks))}>
+          {busy ? <CircularProgress size={18} /> : "Save"}
+        </Button>
+      </DialogActions>
+      {Boolean(error) && <Alert severity="warning" sx={{ m: 2, mt: 0 }}>{error}</Alert>}
+    </Dialog>
+  );
+}
+
 /** One family card in the organizer: who governs, who is governed, and the
- * parent-only controls to grow or trim the family. Refusals render inline. */
-function FamilyCard({ family, myDid, mutate }) {
+ * parent-only controls to grow or trim the family. Refusals render inline.
+ * Parents also narrow each member's usable model profiles here — the ONE
+ * parental narrowing surface of record (PORCH-150; enforcement is hub-side
+ * in the agent module's assignment path). */
+export function FamilyCard({ family, myDid, mutate, agent }) {
   const [draftDid, setDraftDid] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const parents = family.parentIdentityRefs ?? [];
   const members = (family.memberIdentityRefs ?? []).filter((did) => !parents.includes(did));
   const isParent = parents.includes(myDid);
+
+  // The narrowing control's state: which member's dialog is open, the
+  // available profile set (the hub's member-facing list), the member's
+  // current picks, and the write's inline refusal.
+  const narrowingWired = typeof agent?.setNarrowing === "function" && typeof agent?.loadNarrowing === "function";
+  const [narrowFor, setNarrowFor] = useState(null);
+  const [narrowPicks, setNarrowPicks] = useState([]);
+  const [narrowProfiles, setNarrowProfiles] = useState(null);
+  const [narrowBusy, setNarrowBusy] = useState(false);
+  const [narrowError, setNarrowError] = useState("");
+
+  const loadNarrowState = async (did) => {
+    try {
+      if (!Array.isArray(narrowProfiles)) {
+        const listed = await agent.loadMySelectableProfiles();
+        setNarrowProfiles(Array.isArray(listed?.profiles) ? listed.profiles : []);
+      }
+      const view = await agent.loadNarrowing(family._id, did);
+      setNarrowPicks((view?.profiles ?? []).map((profile) => profile.profileId));
+    } catch (failure) {
+      setNarrowError(messageOf(failure));
+    }
+  };
+
+  const openNarrowing = async (did) => {
+    setNarrowFor(did);
+    setNarrowPicks([]);
+    setNarrowProfiles(null);
+    setNarrowError("");
+    await loadNarrowState(did);
+  };
+
+  const saveNarrowing = async (profileIds) => {
+    setNarrowBusy(true);
+    setNarrowError("");
+    try {
+      await agent.setNarrowing(family._id, narrowFor, profileIds);
+      setNarrowFor(null);
+    } catch (failure) {
+      setNarrowError(messageOf(failure));
+    } finally {
+      setNarrowBusy(false);
+    }
+  };
 
   const run = (kind, did) => {
     setBusy(true);
@@ -494,7 +588,32 @@ function FamilyCard({ family, myDid, mutate }) {
           <Button size="small" disabled={busy || !draftDid.trim()} onClick={() => run("addParent", draftDid.trim())}>Make parent</Button>
         </Stack>
       )}
+      {isParent && narrowingWired && members.length > 0 && (
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 1.5, flexWrap: "wrap", rowGap: 1 }} alignItems={{ sm: "center" }}>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>Model profiles:</Typography>
+          {members.map((did) => (
+            <Button key={did} size="small" disabled={narrowBusy} onClick={() => void openNarrowing(did)}>
+              Profiles · {did === myDid ? "you" : did}
+            </Button>
+          ))}
+        </Stack>
+      )}
       {Boolean(error) && <Alert severity="warning" sx={{ mt: 1.5 }}>{error}</Alert>}
+      {narrowingWired && (
+        <NarrowingDialog
+          family={family}
+          memberId={narrowFor ?? ""}
+          open={Boolean(narrowFor)}
+          profiles={narrowProfiles ?? []}
+          picks={narrowPicks}
+          busy={narrowBusy}
+          error={narrowError}
+          setPicks={setNarrowPicks}
+          onClose={() => setNarrowFor(null)}
+          onSave={saveNarrowing}
+          onClear={() => void saveNarrowing([])}
+        />
+      )}
     </Paper>
   );
 }
@@ -1940,7 +2059,17 @@ export function HomeDashboard({ data, actions }) {
       {familiesError && <Alert severity="warning" sx={{ mb: 1.5 }}>{familiesError}</Alert>}
       {!familiesError && families.length === 0 && <EmptyLine>No families yet — start one so a visit can be granted to it.</EmptyLine>}
       {families.map((family) => (
-        <FamilyCard key={family._id} family={family} myDid={myDid} mutate={mutateFamily} />
+        <FamilyCard
+          key={family._id}
+          family={family}
+          myDid={myDid}
+          mutate={mutateFamily}
+          agent={{
+            loadMySelectableProfiles: actions.loadMySelectableProfiles,
+            loadNarrowing: actions.loadNarrowing,
+            setNarrowing: actions.setNarrowing,
+          }}
+        />
       ))}
       <Divider sx={{ mt: 4 }} />
 

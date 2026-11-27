@@ -528,8 +528,8 @@ test("wiring ac: the route registers exactly where the other screens do", () => 
   // tab uses (the header and the mobile bottom navigation both derive);
   // PORCH-141 places People & Things directly after this entry; PORCH-142
   // appends Watchlists after People & Things.
-  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists"\]/);
-  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists"\]/);
+  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists", "\/agent"\]/);
+  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists", "Agent"\]/);
   assert.match(mainSource, /<FaceOutlined \/>, <LabelOutlined \/>/);
 });
 
