@@ -570,8 +570,8 @@ test("wiring ac: the tab registers exactly where the other screens do", () => {
   // The nav affordance rides the same primary/labels/icons trio every family
   // tab uses, placed AFTER the overwatch entry and the People & Things entry
   // (PORCH-142 appends Watchlists at index 7, after People & Things).
-  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists"\]/);
-  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists"\]/);
+  assert.match(mainSource, /"\/settings", "\/overwatch", "\/people", "\/watchlists", "\/agent"\]/);
+  assert.match(mainSource, /"Compose", "Settings", "Overwatch", "People & Things", "Watchlists", "Agent"\]/);
   assert.match(mainSource, /<FaceOutlined \/>, <LabelOutlined \/>/);
 });
 

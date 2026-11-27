@@ -10,6 +10,7 @@ import PersonOutline from "@mui/icons-material/PersonOutline";
 import VideocamOutlined from "@mui/icons-material/VideocamOutlined";
 import FaceOutlined from "@mui/icons-material/FaceOutlined";
 import LabelOutlined from "@mui/icons-material/LabelOutlined";
+import SmartToyOutlined from "@mui/icons-material/SmartToyOutlined";
 import { themeFor, tokenStyles, lightTokens, darkTokens } from "./theme.js";
 import { identityOf } from "./feed-filter.js";
 import { readStoredMode, writeStoredMode, resolveMode } from "./mode.js";
@@ -60,6 +61,11 @@ import { createPeopleActions } from "./people-actions.js";
 // subscription) rides the same three-file discipline next to People & Things.
 import { Watchlists } from "./watchlists.jsx";
 import { createWatchlistActions } from "./watchlists-actions.js";
+// PORCH-150: the Agent surface — the member card (which model is running),
+// the hub-admin profile/assignment screens, alongside the family-organizer
+// narrowing control rendered by FamilyCard with these same actions.
+import { Agent } from "./agent.jsx";
+import { createAgentActions } from "./agent-actions.js";
 import { Lockup } from "./brand.jsx";
 // PORCH-095: the boot surface (first paint, before route resolution) and
 // the app-ready bus — readiness ends the boot, never a timer.
@@ -107,9 +113,9 @@ const standaloneBoot = isStandaloneLaunch({
   standaloneQuery: window.matchMedia("(display-mode: standalone)").matches,
 });
 const localIdentities = [...new Set(initialConnections.map((item) => item.identity?.id).filter(Boolean))];
-const primary = ["/home", "/timeline", "/groups", "/compose", "/settings", "/overwatch", "/people", "/watchlists"];
-const labels = ["Home", "Timeline", "Groups", "Compose", "Settings", "Overwatch", "People & Things", "Watchlists"];
-const icons = [<HomeOutlined />, <PhotoLibraryOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />, <VideocamOutlined />, <FaceOutlined />, <LabelOutlined />];
+const primary = ["/home", "/timeline", "/groups", "/compose", "/settings", "/overwatch", "/people", "/watchlists", "/agent"];
+const labels = ["Home", "Timeline", "Groups", "Compose", "Settings", "Overwatch", "People & Things", "Watchlists", "Agent"];
+const icons = [<HomeOutlined />, <PhotoLibraryOutlined />, <GroupsOutlined />, <AddOutlined />, <PersonOutline />, <VideocamOutlined />, <FaceOutlined />, <LabelOutlined />, <SmartToyOutlined />];
 
 /** A photo post's media ids — the same id-extraction the share surfaces use. */
 function mediaRefIds(post) {
@@ -1850,6 +1856,10 @@ function App() {
     // PORCH-142: the Watchlists trained-class actions (owner-only REST
     // plane; the routes carry plain contract bodies, no signing envelope).
     ...createWatchlistActions({ active, navigate }),
+    // PORCH-150: the agent model-profile surfaces (member + admin) and the
+    // family organizer's narrowing control — the identity session token, no
+    // signing envelope; every enforceable rule stays hub-side.
+    ...createAgentActions({ active, navigate }),
     // PORCH-081 ac-4: the catch-up note's resolve — one member-initiated
     // refresh when the replay window was exceeded, never a poll cycle.
     refreshFeeds: () => reload(),
@@ -1993,6 +2003,10 @@ function App() {
   // People & Things; the trained classes and detections render for every
   // authorized member).
   else if (route === "/watchlists") page = <Watchlists {...props} />;
+  // PORCH-150: the Agent tab — the member card plus the hub-admin profile
+  // and assignment surfaces; a non-admin's writes refuse hub-side and the
+  // refusal renders inline.
+  else if (route === "/agent") page = <Agent {...props} />;
   else if (!connections.length) page = <Join {...props} />;
   else page = <Timeline {...props} />;
   // PORCH-051: which install surface this device earns — capability checks
