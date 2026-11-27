@@ -21,7 +21,7 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test && node scripts/boundary-check.mjs",
+    "test": "turbo run test && node scripts/boundary-check.mjs && node scripts/no-ha-sweep.mjs",
     "boundary": "node scripts/boundary-check.mjs",
     "dev": "turbo run dev"
   },

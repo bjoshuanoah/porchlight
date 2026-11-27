@@ -1,8 +1,8 @@
 // sink.mqtt.js — MQTT detection publishing (PORCH-128).
 //
 // The engine's event-bus transport is owned by the PORCH-129 vetting
-// decision; the detection core depends only on the DetectionSink interface
-// (types.js), never on MQTT directly. This module is the MQTT implementation
+// decision (docs/event-bus-transport.md); the detection core depends only on the DetectionSink
+// interface (types.js), never on MQTT directly. This module is the MQTT implementation
 // of that seam: normalized DetectedObject JSON.
 //
 // Topic family of record (PORCH-152): `<topicPrefix>/<camera>/<cls>` — two

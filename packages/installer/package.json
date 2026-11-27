@@ -22,6 +22,7 @@
 		"build": "echo 'installer ships plain JS (no build)'"
 	},
 	"dependencies": {
+		"@porchlight/bus": "0.5.3",
 		"@porchlight/recorder": "0.5.3",
 		"@porchlight/stream": "0.5.3",
 		"@porchlight/transcript": "0.5.3",

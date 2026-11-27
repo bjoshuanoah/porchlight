@@ -7,4 +7,5 @@ export { DetectionService } from "./service.js";
 export { CoreMLProvider } from "./provider.coreml.js";
 export { VisionProvider } from "./provider.vision.js";
 export { MqttDetectionSink, NullDetectionSink } from "./sink.mqtt.js";
+export { WebhookDetectionSink, fanoutDetectionSink } from "./sink.webhook.js";
 export { letterbox, modelBoxToFrame, nms, boxesIou, decodeYolo, toModelInput } from "./nms.js";

@@ -216,3 +216,52 @@ test("with no transcription seams the status page states the plane is not wired 
 		cleanup();
 	}
 });
+
+test("a fresh deployment has its bus provisioned by the runtime before any service composes (PORCH-129 ac-1)", async () => {
+	const { config, cleanup } = tmpdir();
+	try {
+		const logs = /** @type {string[]} */ ([]);
+		const rt = await startPlatformRuntime({ config, log: (l) => logs.push(l), localNetworkProbe: allowedProbe });
+		try {
+			// Green-field: busUrl was unset, so the runtime provisions the
+			// embedded broker and every service composes with the resolved
+			// busUrl — the recorder supervisor attaches its bus.
+			assert.ok(rt.broker, "the runtime provisions the embedded broker when busUrl is unset");
+			assert.match(rt.busUrl, /^mqtt:\/\/127\.0\.0\.1:\d+$/);
+			assert.equal(rt.supervisor.config.busUrl, rt.busUrl, "the supervisor connects to the provisioned bus");
+			const row = rt.aggregate().services.find((s) => s.name === "bus");
+			assert.equal(row.healthy, true);
+			assert.equal(row.state, "ok");
+			assert.ok(row.detail.includes(`provisioned at ${rt.busUrl}`), `row states the broker url: ${row.detail}`);
+			const busUrlStated = logs.some((l) => /\[runtime\] event bus provisioned/.test(l));
+			assert.ok(busUrlStated, "the runtime states the bus provisioning");
+		} finally {
+			await rt.stop();
+			// The returned handle keeps its identity; the closed state is what
+			// the stop promise guarantees — no live server, no aedes instance.
+			assert.equal(rt.broker?.server ?? null, null, "the bus closes with the runtime");
+		}
+	} finally {
+		cleanup();
+	}
+});
+
+test("a deployment busUrl in the config of record wins — no second broker is provisioned", async () => {
+	const { config, cleanup } = tmpdir();
+	config.busUrl = "mqtt://127.0.0.1:59999";
+	try {
+		const rt = await startPlatformRuntime({ config, log: () => {}, localNetworkProbe: allowedProbe });
+		try {
+			assert.equal(rt.broker, null, "the runtime does not provision an embedded broker over the config of record");
+			assert.equal(rt.busUrl, "mqtt://127.0.0.1:59999");
+			const row = rt.aggregate().services.find((s) => s.name === "bus");
+			assert.equal(row.healthy, true, "the deployment's broker is the runtime's healthy posture");
+			assert.match(row.detail, /deployment's broker at mqtt:\/\/127\.0\.0\.1:59999/);
+			assert.equal(rt.supervisor.config.busUrl, "mqtt://127.0.0.1:59999");
+		} finally {
+			await rt.stop();
+		}
+	} finally {
+		cleanup();
+	}
+});

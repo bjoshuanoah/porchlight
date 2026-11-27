@@ -1,0 +1,32 @@
+{
+	"name": "@porchlight/bus",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight engine event bus — the transport of record per the PORCH-129 vetting decision (MQTT): the embedded broker provisioned by the product's own setup and the lifecycle every engine service reconnects through.",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"scripts": {
+		"test": "node --test 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'bus ships plain JS (no build)'"
+	},
+	"dependencies": {
+		"aedes": "^1.2.0"
+	},
+	"devDependencies": {
+		"mqtt": "^5.16.1"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/bus"
+	}
+}

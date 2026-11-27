@@ -81,8 +81,8 @@
 /**
  * DetectionSink protocol — the transport seam behind detection publishing.
  * The engine's event-bus transport is owned by the PORCH-129 vetting
- * decision; the detection core depends only on this interface, so the bus
- * implementation can re-point without core changes.
+ * decision (docs/event-bus-transport.md); the detection core depends only
+ * on this interface, so the bus implementation can re-point without core changes.
  *
  * @typedef {object} DetectionSink
  * @property {(object: import("./types.js").DetectedObject) => Promise<void>} publish

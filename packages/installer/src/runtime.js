@@ -7,6 +7,7 @@
 // on crash, not on deploy.
 
 import { RecorderSupervisor } from "@porchlight/recorder";
+import { EventBusBroker } from "@porchlight/bus";
 import { StreamManager } from "@porchlight/stream";
 import {
 	TranscriptionService,
@@ -77,13 +78,31 @@ export async function startPlatformRuntime(opts = {}) {
 		localNetworkProbe,
 		localNetworkProbeMs = 60_000,
 	} = opts;
+	// The bus FIRST (PORCH-129 ac-1, the vetting decision in
+	// docs/event-bus-transport.md): the engine's event bus is provisioned by
+	// the product's own setup — an embedded MQTT broker bound to loopback,
+	// started in-process before any engine service composes, so every
+	// service's mqtt.js client connects at boot and a restarted service
+	// reconnects with no manual step. A deployment that points busUrl at its
+	// own broker runs on that broker instead; the config of record wins.
+	/** @type {import("@porchlight/bus").EventBusBroker|null} */
+	let broker = null;
+	/** @type {Record<string, unknown>} */
+	let runtimeConfig = config;
+	if (config.busUrl) {
+		log(`[runtime] event bus: ${String(config.busUrl)} (from the config of record)`);
+	} else {
+		broker = await new EventBusBroker({ log }).start();
+		runtimeConfig = { ...config, busUrl: broker.url };
+		log("[runtime] event bus provisioned green-field by the runtime (see /health for the broker row)");
+	}
 	// The stream manager composes FIRST (PORCH-154): it owns the ONE upstream
 	// connection per camera and serves the relay ports the supervisor's
 	// recorder fleet consumes — it must be answering before the recorder
 	// opens its inputs. The started promise is recorded (the initial fleet
 	// application resolves on it); a failed application is stated on the
 	// manager's own health plane, never silently swallowed.
-	const manager = new StreamManager({ config: /** @type {any} */ (config), log });
+	const manager = new StreamManager({ config: /** @type {any} */ (runtimeConfig), log });
 	const managerStarted = manager.start().applyPromise;
 	managerStarted?.catch((err) => {
 		log(`[runtime] stream manager initial fleet application failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -98,7 +117,7 @@ export async function startPlatformRuntime(opts = {}) {
 	/** @type {import("@porchlight/transcript").TranscriptionService|null} */
 	let transcription = opts.transcription ?? null;
 	if (!transcription && (opts.transcriptionResolver || opts.transcriptionEnabledFor || opts.transcriptionEventReader)) {
-		const storageRoot = /** @type {string} */ (config.storageRoot);
+		const storageRoot = /** @type {string} */ (runtimeConfig.storageRoot);
 		const transcriptsRoot = `${storageRoot.replace(/\/$/, "")}/transcripts`;
 		transcription = new TranscriptionService({
 			store: new TranscriptStore({ root: transcriptsRoot }),
@@ -142,7 +161,7 @@ export async function startPlatformRuntime(opts = {}) {
 		};
 	}
 	const supervisor = new RecorderSupervisor({
-		config: /** @type {any} */ (config),
+		config: /** @type {any} */ (runtimeConfig),
 		log,
 		...(transcription
 			? {
@@ -182,14 +201,15 @@ export async function startPlatformRuntime(opts = {}) {
 		halStatus: halStatus ?? platformPosture(),
 		localNetwork,
 		transcription,
+		bus: broker ? broker.status() : { transport: "mqtt", mode: "external", state: "external", url: /** @type {string} */ (config.busUrl), clients: null },
 	});
 	const status = createStatusServer({
 		aggregate,
-		port: /** @type {number} */ (config.statusPort ?? 8970),
-		host: /** @type {string} */ (config.statusHost ?? "0.0.0.0"),
+		port: /** @type {number} */ (runtimeConfig.statusPort ?? 8970),
+		host: /** @type {string} */ (runtimeConfig.statusHost ?? "0.0.0.0"),
 	});
 	await status.listening();
-	log(`[runtime] status page on http://${config.statusHost ?? "0.0.0.0"}:${config.statusPort ?? 8970}/`);
+	log(`[runtime] status page on http://${runtimeConfig.statusHost ?? "0.0.0.0"}:${runtimeConfig.statusPort ?? 8970}/`);
 	await runProbe(); // the first probe rides boot — the page is already up and stating "unprobed"
 	const interval = setInterval(() => { void runProbe(); }, localNetworkProbeMs);
 	interval.unref();
@@ -200,16 +220,22 @@ export async function startPlatformRuntime(opts = {}) {
 		status,
 		aggregate,
 		transcription,
+		broker,
+		/** @type {string} */
+		busUrl: /** @type {string} */ (runtimeConfig.busUrl),
 		/** @returns {Promise<void>} */
 		stop: async () => {
 			clearInterval(interval);
 			await status.close();
 			// The recorder stops before the manager: its recordings drain from
-			// the manager's relay lanes, so the manager closes last.
+			// the manager's relay lanes, so the manager closes last — and the
+			// bus closes after every client has drained from it (PORCH-129).
 			await supervisor.stop();
 			for (const unsub of transcriptionSubs.values()) unsub?.();
 			await transcription?.close();
 			await manager.stop();
+			await broker?.stop();
+			broker = null;
 		},
 	};
 }
