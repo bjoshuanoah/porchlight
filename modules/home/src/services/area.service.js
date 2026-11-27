@@ -1,4 +1,4 @@
-import { requireSignedSession } from "../util/writes.js";
+import { requireSignedSession, requireSession } from "../util/writes.js";
 import { cleanName } from "./home.service.js";
 import { ACCESS_OWNER_ONLY, visibleAreaIds } from "./scopes.js";
 
@@ -87,7 +87,17 @@ export class AreaService {
    * surface shows a visitor exactly their granted slice of the home.
    */
   async list({ accessToken, homeId } = {}) {
-    const authorized = await this.homes.authorize({ accessToken, homeId });
+    const { did } = await requireSession({ accessToken, verifySession: this.homes.verifySession });
+    return this.listForActor({ did, homeId });
+  }
+
+  /**
+   * GET /homes/:homeId/areas, session-free — the same authorizeMember
+   * verdicts, the same view-scope filter (a visit grant sees only the
+   * areas its view covers).
+   */
+  async listForActor({ did, homeId } = {}) {
+    const authorized = await this.homes.authorizeMember({ did, homeId });
     const rows = await this.areas.find({ homeId });
     const scopes = authorized.access?.scopes ?? null;
     let visible = rows;

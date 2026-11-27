@@ -6,6 +6,7 @@ export { ResolutionService } from "./services/resolution.service.js";
 export { ProvenanceService } from "./services/provenance.service.js";
 export { AgentAuditService } from "./services/audit.service.js";
 export { fail } from "./services/errors.js";
+export { ToolDelegationService, HOME_TOOLS, createHomeTools } from "./tools/delegation.service.js";
 export { createProfileInferenceProvider, PROFILE_PROVIDER_NAME, AGENT_TYPE_HOUSEHOLD_MEMBER } from "./inference/profile-provider.js";
 export { GovernanceController } from "./controllers/governance.controller.js";
 export { MemberController } from "./controllers/member.controller.js";

@@ -106,14 +106,37 @@ export class DeviceService {
    * enforcement: the caller must be a member of the device's home, and a
    * command that names a home other than the device's own is refused with
    * plain language (denied audit row). Confirmed ONLY on adapter read-back.
+   * The signed session resolves the did; the verdicts stay in the actor
+   * seam (one code path for member, scene, automation, and agent issuers).
    */
   async command({ accessToken, homeId = null, deviceId, payload, signature } = {}) {
-    const { did } = await requireSession({ accessToken, verifySession: this.verifySession });
-    const { deviceSignature } = await requireSignedSession({
+    const { did, deviceSignature } = await requireSignedSession({
       accessToken, payload, signature,
       verifySession: this.verifySession,
       registeredDeviceKey: this.registeredDeviceKey,
     });
+    return this.commandForActor({
+      did, homeId, deviceId,
+      command: payload?.command ?? null,
+      deviceSignature,
+      source: "member",
+      detail: {},
+    });
+  }
+
+  /**
+   * The command path with the acting identity already resolved. The agent
+   * tool registry (PORCH-149) rides this exact seam — the SAME
+   * authorizeMember verdicts and grant-control coverage the member's UI
+   * command applies, the single dispatch the audit family of record
+   * carries, and `detail` carrying the issuer attribution (source, agent
+   * tool). A refusal (deny or device-not-found) lands its denied audit row
+   * with the same attribution, exactly like the UI session path.
+   */
+  async commandForActor({
+    did, homeId = null, deviceId, command = null, deviceSignature = null,
+    source = "agent", detail = {},
+  } = {}) {
     try {
       const deviceDoc = await this.#deviceOfMember(homeId, deviceId);
       const scopedHomeId = deviceDoc.homeId;
@@ -125,14 +148,13 @@ export class DeviceService {
       if (!isMembership(authorized.access) && !coversDevice(authorized.access.scopes, deviceDoc, "control")) {
         return fail("E_NOT_PERMITTED", "That control isn't part of the access you were granted for this home.");
       }
-      const command = payload?.command;
       if (!command) return fail("E_COMMAND_UNKNOWN", "Tell Porchlight which command to send — lights read on/off, for example.");
       return await this.#dispatch({
         device: deviceDoc,
         command,
         actorIdentityRef: did,
-        detail: { command, source: "member" },
-        _source: "member",
+        detail: { ...detail, command, source },
+        _source: source,
         deviceSignature,
       });
     } catch (cause) {
@@ -144,7 +166,7 @@ export class DeviceService {
           deviceId,
           actorIdentityRef: did,
           deviceSignature: deviceSignature ?? null,
-          detail: { command: payload?.command ?? null, source: "member", reason: cause.message },
+          detail: { ...detail, command: command ?? null, source, reason: cause.message },
           outcome: "denied",
         });
       }
@@ -223,8 +245,23 @@ export class DeviceService {
    * A visit grant sees exactly the devices its view scopes cover — nothing
    * else renders (PORCH-138 ac-1).
    */
+  /**
+   * GET /homes/:homeId/devices — the device read of record. The session
+   * path resolves the did; the verdicts stay in the actor seam.
+   */
   async list({ accessToken, homeId } = {}) {
-    const authorized = await this.homes.authorize({ accessToken, homeId });
+    const { did } = await requireSession({ accessToken, verifySession: this.homes.verifySession });
+    return this.listForActor({ did, homeId });
+  }
+
+  /**
+   * GET /homes/:homeId/devices, session-free (the did already resolved).
+   * The same authorizeMember verdicts, the same grant-scope filter — the
+   * actor seams never widen a member's view (PORCH-149's tool registry
+   * consumes this via the injected home tool surface).
+   */
+  async listForActor({ did, homeId } = {}) {
+    const authorized = await this.homes.authorizeMember({ did, homeId });
     const rows = await this.devices.find({ homeId });
     const scopes = authorized.access?.scopes ?? null;
     const visible = scopes ? rows.filter((device) => coversDevice(scopes, device, "view")) : rows;

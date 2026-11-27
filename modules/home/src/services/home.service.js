@@ -32,6 +32,8 @@ export class HomeService {
     this.orgId = orgId ?? (() => null);
     this.now = now;
     this.grantResolver = grantResolver;
+    /** Session-free surface-list callables (wired by the assembly; see surfacesForActor). */
+    this.surfaceLists = null;
   }
 
   /**
@@ -118,6 +120,93 @@ export class HomeService {
   async authorize({ accessToken, homeId } = {}) {
     const { did } = await requireSession({ accessToken, verifySession: this.verifySession });
     return this.authorizeMember({ did, homeId });
+  }
+
+  /**
+   * The member's homes with their access blocks of record, session-free
+   * (the did already resolved — the PORCH-149 agent tool registry's
+   * authority path). The SAME resolution authorizeMember applies:
+   * membership wins and is never re-consulted with the grant side; live
+   * grant homes (individual or family-distributed) resolve through the
+   * grant resolver. One access class per home, scopes attached for
+   * grantees (null scopes = the home's full member surface).
+   */
+  async homesForActor({ did } = {}) {
+    if (!did) return fail("E_VALIDATION", "A Porchlight identity is required.");
+    const [allHomes, memberships] = await Promise.all([
+      this.homes.find({}),
+      this.homeMembers.find({ did }),
+    ]);
+    const blocks = [];
+    for (const membership of memberships) {
+      const home = allHomes.find((h) => h._id === membership.homeId);
+      if (!home) continue;
+      blocks.push({
+        homeId: home._id,
+        name: home.name,
+        accessClass: "owner-membership",
+        role: membership.role ?? null,
+        scopes: null,
+      });
+    }
+    const granted = this.grantResolver ? await this.grantResolver({ did }) : [];
+    for (const grant of granted ?? []) {
+      if (blocks.some((b) => b.homeId === grant.homeId)) continue;
+      const home = allHomes.find((h) => h._id === grant.homeId);
+      if (!home) continue;
+      blocks.push({
+        homeId: grant.homeId,
+        name: home.name,
+        accessClass: grant.accessClass,
+        role: null,
+        scopes: grant.scopes ?? [],
+      });
+    }
+    return blocks;
+  }
+
+  /**
+   * GET /homes/:homeId's whole payload, session-free (the did already
+   * resolved). The surface lists ride injected callables wired at assembly
+   * (`surfaceLists`) — the exact list services the controller surfaces()
+   * composes, every one re-resolving the member's access live (no cached
+   * or copied verdicts).
+   */
+  async surfacesForActor({ did, homeId } = {}) {
+    const { home, role, access } = await this.authorizeMember({ did, homeId });
+    if (!this.surfaceLists) {
+      return fail("E_SURFACES_UNWIRED", "This hub hasn't connected the home surfaces yet.");
+    }
+    const [areaList, deviceList, sceneList, automationList] = await Promise.all([
+      this.surfaceLists.areas({ did, homeId }),
+      this.surfaceLists.devices({ did, homeId }),
+      this.surfaceLists.scenes({ did, homeId }),
+      this.surfaceLists.automations({ did, homeId }),
+    ]);
+    return {
+      home: { ...this.homeView(home, role), viewerDid: did },
+      access: {
+        accessClass: access.accessClass,
+        role: access.role ?? null,
+        scopes: access.scopes ?? null,
+      },
+      areas: areaList.areas,
+      devices: deviceList.devices,
+      scenes: sceneList.scenes,
+      automations: automationList.automations,
+    };
+  }
+
+  /**
+   * GET /homes/:homeId — everything the home in view serves: home, areas,
+   * devices, scenes, automations. Switching homes swaps exactly this
+   * payload; every read is member-scoped hub-side. The session path of the
+   * controller's surfaces(): the session resolves the did, the verdicts
+   * stay in the actor seam.
+   */
+  async surfaces({ accessToken, homeId } = {}) {
+    const { did } = await requireSession({ accessToken, verifySession: this.verifySession });
+    return this.surfacesForActor({ did, homeId });
   }
 
   /** Home-scope enforcement for a already-resolved identity. */

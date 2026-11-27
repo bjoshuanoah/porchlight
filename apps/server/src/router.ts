@@ -511,6 +511,13 @@ export function createServerRouter(options: ServerOptions): { api: Router; wellK
       familyFacts: {
         familiesForMember: (did: string) => identityModule!.familyService.familiesForMember(did),
       },
+      // PORCH-149: the MCP-for-the-home tool registry rides the home
+      // module's OWN service verticals through its session-free actor seams
+      // (toolSurface) — the same callables the UI routes resolve into, no
+      // hidden API, no new authorization pathway: every tool call
+      // re-enforces the member's authorizeMember verdicts live. The
+      // delegation law is enforced hub-side by the agent module's registry.
+      homeSurface: homeModule.toolSurface,
     });
     router.use("/agent", agentModule.api);
     // PORCH-140: the overwatch REST plane mounts under the hub's JSON /api

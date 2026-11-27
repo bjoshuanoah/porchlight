@@ -192,7 +192,19 @@ export class EventService {
    * bounded page (the audit pagination contract carries).
    */
   async list({ accessToken, homeId, limit, offset } = {}) {
-    await this.#authorize(accessToken, homeId);
+    const authorized = await this.#authorize(accessToken, homeId);
+    return this.listForActor({ did: authorized.did, homeId, limit, offset });
+  }
+
+  /**
+   * GET /homes/:homeId/events, session-free (the did already resolved).
+   * The same camera-read authorization (membership + camera-access row, no
+   * visit-grant surface) re-resolved live; the same bounded page contract.
+   * PORCH-149's event-review tool rides this through the home tool surface.
+   */
+  async listForActor({ did, homeId, limit, offset } = {}) {
+    if (this.auth) await this.auth.authorizeReadForActor({ did, homeId });
+    else return fail("E_NOT_PERMITTED", "The camera surfaces aren't wired on this hub — camera authorization refuses closed.");
     await this.sweep(this.now());
     const rows = (await this.events.find({ homeId: String(homeId) })).sort(byStartedAtDesc);
     const pageSize = Math.min(Math.max(Math.floor(Number(limit) || 25), 1), 100);
