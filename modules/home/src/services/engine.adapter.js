@@ -5,15 +5,20 @@
  * builds no adapters and the bridge fails closed with plain language.
  *
  *   createHttpEngineAdapter — the camera/seam client against the engine's
- *     HTTP surface [Assumed paths, per PORCH-I-009 TS 7; re-point at the
- *     engine's landing when its serving plane ships]. Read failures answer
+ *     HTTP surface. The engine's landing (PORCH-152) now serves
+ *     POST /cameras, GET /cameras/:id/health, GET /service, and GET
+ *     /storage; the /live, /segments, /segment, and /evidence media/seam
+ *     paths remain pending (stream manager, PORCH-154/155) and still answer
+ *     the adapter's gap states. Read failures answer
  *     `{ gap: "unavailable" }` rather than throwing where a family surface
  *     can explain the gap.
  *
  *   createMqttEngineConsumer — the detection bus subscription (DetectedObject
  *     publish contract, PORCH-I-009 TS 3, transport per the PORCH-129
- *     vetting: MQTT with the recorder/detection topic family
- *     `porchlight/engine/detections/+/<camera>`).
+ *     vetting: MQTT with the topic family of record — ENGINE_DETECTIONS_PREFIX-owned —
+ *     `porchlight/engine/detections/<camera>/<cls>`, DETECTIONS_PATTERN
+ *     `+/+`). The payload's camera field is authoritative; the topic's
+ *     camera segment is the fallback.
  */
 import mqtt from "mqtt";
 import { CAMERA_GAPS } from "./camera.service.js";
@@ -127,39 +132,43 @@ function gapOf(reason) {
 /**
  * The engine's detection bus subscription. Returns a consumer the hub
  * starts/stops with the hub runtime; every parsed DetectedObject fans to
- * the injected handler (the home module's engine-event seam).
+ * the injected handler (the home module's engine-event seam). An optional
+ * `client` mirrors the detection sink's injectable-client seam (unit tests).
  */
-export function createMqttEngineConsumer({ url, clientId = "porchlight-home", log = () => {}, onEvent }) {
+export function createMqttEngineConsumer({ url, clientId = "porchlight-home", log = () => {}, onEvent, client }) {
   if (!url) {
     return fail("E_VALIDATION", "The engine bus consumer needs a bus URL.");
   }
-  const client = mqtt.connect(url, { clientId, reconnectPeriod: 5000, clean: true });
-  client.on("error", (error) => log(`[engine-bus] connection error: ${error.message}`));
-  client.on("connect", () => {
-    client.subscribe(DETECTIONS_PATTERN);
+  const conn = client ?? mqtt.connect(url, { clientId, reconnectPeriod: 5000, clean: true });
+  conn.on("error", (error) => log(`[engine-bus] connection error: ${error.message}`));
+  conn.on("connect", () => {
+    conn.subscribe(DETECTIONS_PATTERN);
   });
-  client.on("message", (topic, buf) => {
+  conn.on("message", (topic, buf) => {
     let detection = null;
     try {
       detection = JSON.parse(buf.toString("utf8"));
     } catch {
       return;
     }
-    const camera = detection?.camera ?? topic.split("/")[4] ?? null;
+    // Camera resolution: the payload field is authoritative; the topic's
+    // camera segment is the fallback — index [3] of the family of record
+    // `porchlight/engine/detections/<camera>/<cls>`.
+    const camera = detection?.camera ?? topic.split("/")[3] ?? null;
     if (camera) void onEvent({ ...detection, camera }).catch(() => {});
   });
   return {
     status() {
-      return { connected: client.connected, url, pattern: DETECTIONS_PATTERN };
+      return { connected: conn.connected, url, pattern: DETECTIONS_PATTERN };
     },
     close() {
       return new Promise((resolve) => {
-        if (!client.connected) {
-          client.end(true);
+        if (!conn.connected) {
+          conn.end(true);
           resolve();
           return;
         }
-        client.end(false, {}, () => resolve());
+        conn.end(false, {}, () => resolve());
       });
     },
   };

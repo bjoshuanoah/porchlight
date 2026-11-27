@@ -51,8 +51,14 @@
  * A provider is a plain object:
  *   - `name: string` — registry id (e.g. "coreml", "vision", "ollama")
  *   - `detect(frame: Frame): Promise<RawDetection[]>`
- *   - optional `status(): { engine: string, [key: string]: unknown }` —
- *     compute posture (never-silent law: CPU fallback must be visible here)
+ *   - optional `status()` — the never-silent compute posture (PORCH-152):
+ *     every provider reports all five of engine, providerClass, model,
+ *     executionTarget, and state. `providerClass` mirrors the engine's three
+ *     compute classes of record (@porchlight/agent-runtime constants.js
+ *     PROVIDER_CLASSES — mirrored by cross-reference, never imported). A
+ *     degradation (CPU fallback, helper respawn, forced CPU) always carries a
+ *     `reason` stating it; a fully native run reports `reason: null`. A
+ *     provider that cannot say all five is a defect, not a blank.
  *   - optional `close(): Promise<void>` — release resources
  *
  * Registering a new provider is `registry.register(name, factory)` — no core
@@ -61,7 +67,14 @@
  * @typedef {object} InferenceProvider
  * @property {string} name
  * @property {(frame: import("./types.js").Frame) => Promise<import("./types.js").RawDetection[]>} detect
- * @property {() => { engine: string } & Record<string, unknown>} [status]
+ * @property {() => {
+ *   engine: string,
+ *   providerClass: "native-mlx"|"openai-spec"|"local-server",
+ *   model?: string|null,
+ *   executionTarget?: string|null,
+ *   state: "native"|"cpu"|"degraded"|"failed",
+ *   reason?: string|null,
+ * } & Record<string, unknown>} [status]
  * @property {() => Promise<void>} [close]
  */
 

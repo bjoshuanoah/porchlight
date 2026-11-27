@@ -135,6 +135,88 @@ test("degraded states render visibly in the HTML", () => {
 	assert.ok(html.match(/<b>degraded<\/b>/));
 });
 
+test("the Local Network posture rides the aggregate as an explained, never-silent state (PORCH-152)", () => {
+	const denied = aggregateHealth({
+		supervisor: fakeSupervisor(idleState),
+		localNetwork: { state: "denied", reason: "probe socket error: operation not permitted" },
+	});
+	assert.equal(denied.status, "degraded");
+	assert.equal(denied.localNetwork.state, "denied");
+	assert.equal(denied.localNetwork.reason, "probe socket error: operation not permitted");
+	assert.match(denied.localNetwork.note, /Local Network permission denied/);
+	assert.match(denied.localNetwork.note, /System Settings/);
+	const deniedRow = denied.services.find((s) => s.name === "local-network");
+	assert.equal(deniedRow.healthy, false);
+	assert.match(deniedRow.detail, /silently dropped/);
+	assert.match(deniedRow.detail, /System Settings/);
+	assert.match(deniedRow.detail, /probe socket error/);
+
+	const allowed = aggregateHealth({ supervisor: fakeSupervisor(idleState), localNetwork: { state: "allowed" } });
+	assert.equal(allowed.status, "healthy");
+	assert.equal(allowed.localNetwork.state, "allowed");
+	assert.equal(allowed.localNetwork.reason, null);
+	assert.match(allowed.localNetwork.note, /granted/);
+	const allowedRow = allowed.services.find((s) => s.name === "local-network");
+	assert.equal(allowedRow.healthy, true);
+	assert.equal(allowedRow.state, "allowed");
+
+	const unprobed = aggregateHealth({ supervisor: fakeSupervisor(idleState), localNetwork: { state: "unprobed", reason: "probe not run yet" } });
+	assert.equal(unprobed.status, "healthy", "a neutral posture never degrades the page");
+	const unprobedRow = unprobed.services.find((s) => s.name === "local-network");
+	assert.equal(unprobedRow.healthy, true);
+	assert.equal(unprobedRow.state, "unprobed");
+	assert.equal(unprobedRow.detail, "probe not run yet");
+	assert.match(unprobed.localNetwork.note, /No Local Network probe has run yet/);
+
+	const unknown = aggregateHealth({ supervisor: fakeSupervisor(idleState), localNetwork: { state: "unknown" } });
+	assert.equal(unknown.status, "healthy");
+	const unknownRow = unknown.services.find((s) => s.name === "local-network");
+	assert.equal(unknownRow.state, "unknown");
+	assert.match(unknownRow.detail, /Local Network posture/);
+});
+
+test("an absent local-network opt still states a posture — never silent", () => {
+	const bare = aggregateHealth({ supervisor: fakeSupervisor(idleState) });
+	assert.equal(bare.localNetwork.state, "unprobed");
+	const row = bare.services.find((s) => s.name === "local-network");
+	assert.equal(row.state, "unprobed");
+	assert.ok(row.detail);
+});
+
+test("the denied Local Network row renders visibly and deterministically in the HTML", () => {
+	const agg = aggregateHealth({
+		supervisor: fakeSupervisor(idleState),
+		localNetwork: { state: "denied", reason: "denied by TCC" },
+	});
+	const html = renderStatusHtml(agg);
+	assert.ok(html.includes(`<span class="bad">●</span> local-network`));
+	assert.ok(html.includes("<td>denied</td>"));
+	assert.match(html, /Local Network permission denied — LAN discovery and camera local-P2P paths \(UDP\) are being silently dropped/);
+	assert.match(html, /grant Porchlight the Local Network permission in System Settings/);
+	assert.equal(html, renderStatusHtml(aggregateHealth({
+		supervisor: fakeSupervisor(idleState),
+		localNetwork: { state: "denied", reason: "denied by TCC" },
+	})), "status HTML must be deterministic given the same aggregate");
+});
+
+test("GET /health surfaces the Local Network posture block over real HTTP", async () => {
+	const srv = createStatusServer({
+		aggregate: () => aggregateHealth({ supervisor: fakeSupervisor(idleState), localNetwork: { state: "allowed" } }),
+		port: 0,
+		host: "127.0.0.1",
+	});
+	await srv.listening();
+	const port = srv.server.address().port;
+	try {
+		const agg = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+		assert.equal(agg.status, "healthy");
+		assert.equal(agg.localNetwork.state, "allowed");
+		assert.ok(agg.localNetwork.note);
+	} finally {
+		await srv.close();
+	}
+});
+
 test("GET /health returns the JSON aggregate and GET / the HTML page over real HTTP", async () => {
 	const srv = createStatusServer({ aggregate: () => aggregateHealth({ supervisor: fakeSupervisor(idleState), version: "0.5.3", halStatus: {} }), port: 0, host: "127.0.0.1" });
 	await srv.listening();

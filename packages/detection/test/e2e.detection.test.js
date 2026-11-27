@@ -93,14 +93,56 @@ T("e2e: real CoreML inference — CoreML EP session, normalized detections from 
 		classNames: COCO_CLASSES,
 		confThreshold: 0.45,
 	}).init();
-	await t.test("compute posture is explicit (never-silent law)", () => {
+	await t.test("compute posture is explicit (never-silent law, PORCH-152)", () => {
 		const status = provider.status();
-		assert.ok(["coreml", "cpu"].includes(status.engine), `engine ${status.engine}`);
+		assert.equal(status.providerClass, "native-mlx", `providerClass ${status.providerClass}`);
 		assert.equal(typeof status.cpuFallback, "boolean");
+		if (provider.cpuFallback) {
+			// The accelerated rung did not build on this host — the cpu posture
+			// is stated, never silent.
+			assert.equal(status.engine, "cpu");
+			assert.equal(status.state, "cpu");
+			assert.equal(status.executionTarget, "cpu");
+			assert.ok(typeof status.reason === "string" && status.reason.length > 0, `cpu fallback states its reason: ${status.reason}`);
+		} else {
+			assert.equal(status.engine, "coreml", `engine ${status.engine}`);
+			assert.equal(status.state, "native");
+			assert.equal(status.executionTarget, "gpu/ane");
+			assert.equal(status.reason, null);
+		}
 	});
 	const dets = await provider.detect(syntheticFrame(0, "e2e-cam"));
 	for (const d of dets) {
 		assert.ok(d.cls === "person" || d.cls === "bird" || d.cls === "cat" || d.cls === "dog", `class in head set: ${d.cls}`);
+		const [x, y, w, h] = d.bbox;
+		assert.ok(x >= 0 && y >= 0 && x + w <= 1.000001 && y + h <= 1.000001, `normalized bbox ${d.bbox}`);
+	}
+	await provider.close();
+});
+
+// PORCH-152: a forced-CPU session is never silent — the degraded posture is
+// stated in status() (state "cpu", non-null reason) even though the session
+// built on the first try.
+T("e2e: forced-CPU init — state cpu with a stated reason (never silent)", async (t) => {
+	if (!MODEL) {
+		t.skip("set PORCHLIGHT_DETECT_MODEL=<yolo.onnx> and PORCHLIGHT_E2E=1");
+		return;
+	}
+	const provider = await new CoreMLProvider({
+		modelPath: MODEL,
+		classNames: COCO_CLASSES,
+		confThreshold: 0.45,
+		// Forced CPU: the accelerated rung is not offered at all.
+		executionProviders: ["cpu"],
+	}).init();
+	const status = provider.status();
+	assert.equal(status.engine, "cpu");
+	assert.equal(status.state, "cpu");
+	assert.equal(status.executionTarget, "cpu");
+	assert.equal(status.providerClass, "native-mlx");
+	assert.equal(status.cpuFallback, true, "a cpu-only session is not native compute");
+	assert.ok(typeof status.reason === "string" && status.reason.length > 0, `forced-CPU states its reason: ${status.reason}`);
+	for (const d of await provider.detect(syntheticFrame(0, "e2e-cam"))) {
 		const [x, y, w, h] = d.bbox;
 		assert.ok(x >= 0 && y >= 0 && x + w <= 1.000001 && y + h <= 1.000001, `normalized bbox ${d.bbox}`);
 	}

@@ -45,6 +45,7 @@ export class CoreMLProvider {
 		this.log = opts.log ?? (() => {});
 		/** @type {unknown} */ this.session = null;
 		this.cpuFallback = false;
+		/** @type {string|null} */ this.reason = null;
 	}
 
 	/**
@@ -72,12 +73,26 @@ export class CoreMLProvider {
 			if (accelerated.length === 0) throw err;
 			eps = eps.filter((e) => !accelerated.includes(e));
 			this.cpuFallback = true;
-			this.log(`[${this.name}] ${accelerated.join("/")} EPs unavailable (${err instanceof Error ? err.message : String(err)}); falling back to execution providers [${eps.join(", ")}]. Detection still runs, but not on GPU/ANE.`);
+			const detail = err instanceof Error ? err.message : String(err);
+			this.reason =
+				`${accelerated.join("/")} EPs unavailable (${detail}); ` +
+				`falling back to execution providers [${eps.join(", ")}]. Detection still runs, but not on GPU/ANE.`;
+			// The status reason IS the logged fallback message, verbatim — the
+			// degradation is stated in both places, never paraphrased away.
+			this.log(`[${this.name}] ${this.reason}`);
 			session = await ort.InferenceSession.create(this.modelPath, { executionProviders: eps });
 		}
 		this.session = session;
 		this.engine = eps[0];
 		this.inputName = /** @type {any} */ (session).inputNames[0];
+		// A cpu-only build (forced ["cpu"] or a cpu-only HAL) never hit the
+		// fallback path, but it is still not native compute — the never-silent
+		// law states the cpu posture here too, so status() can never lie.
+		if (eps[0] === "cpu" && !this.cpuFallback) {
+			this.cpuFallback = true;
+			this.reason = `session built for cpu (execution providers [${eps.join(", ")}]) — no accelerated EP; detection runs on CPU only.`;
+			this.log(`[${this.name}] ${this.reason}`);
+		}
 		return this;
 	}
 
@@ -111,9 +126,17 @@ export class CoreMLProvider {
 		}).map((d) => ({ ...d, t: frame.t }));
 	}
 
-	/** Never-silent compute posture: engine + fallback state are inspectable. */
+	/** Never-silent compute posture (PORCH-152): all five fields, always. */
 	status() {
-		return { engine: this.cpuFallback ? "cpu" : "coreml", cpuFallback: this.cpuFallback, model: this.modelPath };
+		return {
+			engine: this.cpuFallback ? "cpu" : "coreml",
+			providerClass: "native-mlx",
+			model: this.modelPath,
+			executionTarget: this.cpuFallback ? "cpu" : "gpu/ane",
+			state: this.cpuFallback ? "cpu" : "native",
+			reason: this.cpuFallback ? this.reason : null,
+			cpuFallback: this.cpuFallback,
+		};
 	}
 
 	async close() {

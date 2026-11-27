@@ -8,15 +8,27 @@
 
 /** @typedef {{name: string, healthy: boolean, state: string, detail: string}} ServiceHealth */
 
+/** Closed Local Network postures (the TCC probe of record: src/tcc.js runNetworkProbe). */
+const LOCAL_NETWORK_STATES = Object.freeze(["allowed", "denied", "unknown", "unprobed"]);
+
+/** Plain-language explanation per posture (PORCH-152 never-silent law): the macOS Local Network permission silently drops UDP when ungranted, so the page says so instead of letting discovery and camera traffic vanish. */
+const LOCAL_NETWORK_NOTES = Object.freeze({
+	allowed: "Local Network access is granted — LAN discovery and camera local-P2P traffic (UDP) can leave the process.",
+	denied: "Local Network permission denied — LAN discovery and camera local-P2P paths (UDP) are being silently dropped; grant Porchlight the Local Network permission in System Settings.",
+	unknown: "The Local Network posture could not be determined — the stated reason carries the probe's own account.",
+	unprobed: "No Local Network probe has run yet — the posture is stated as soon as the runtime probes the host.",
+});
+
 /**
  * @param {{
  *   supervisor?: import("@porchlight/recorder").RecorderSupervisor | null,
  *   version?: string,
  *   halStatus?: Record<string, unknown>,
+ *   localNetwork?: {state?: string, reason?: string | null} | null,
  *   generatedAt?: string,
  * }} opts
  */
-export function aggregateHealth({ supervisor = null, version = "unknown", halStatus = null, generatedAt } = {}) {
+export function aggregateHealth({ supervisor = null, version = "unknown", halStatus = null, generatedAt, localNetwork } = {}) {
 	/** @type {ServiceHealth[]} */
 	const services = [];
 	let recorderState = null;
@@ -66,6 +78,26 @@ export function aggregateHealth({ supervisor = null, version = "unknown", halSta
 			detail: "the recorder is not running — storage state unknown",
 		});
 	}
+	// The Local Network posture (PORCH-152): TCP on the LAN is unaffected by
+	// macOS local-network privacy, but a process without the permission
+	// silently LOSES UDP — LAN discovery and camera local-P2P paths just
+	// miss. The row states the truth in plain language instead of letting
+	// the traffic vanish; only a stated denial degrades the page.
+	const lnState = localNetwork == null
+		? "unprobed"
+		: (LOCAL_NETWORK_STATES.includes(localNetwork.state) ? /** @type {"allowed"|"denied"|"unknown"|"unprobed"} */ (localNetwork.state) : "unknown");
+	const lnReason = localNetwork?.reason ?? null;
+	const lnDetail = lnState === "denied"
+		? `Local Network permission denied — LAN discovery and camera local-P2P paths (UDP) are being silently dropped; grant Porchlight the Local Network permission in System Settings.${lnReason ? ` (probe: ${lnReason})` : ""}`
+		: lnState === "allowed"
+			? "UDP discovery traffic leaves the process — Local Network access is granted."
+			: lnReason ?? "the Local Network posture has not been stated yet";
+	services.push({
+		name: "local-network",
+		healthy: lnState !== "denied",
+		state: lnState,
+		detail: lnDetail,
+	});
 	services.push({ name: "status-page", healthy: true, state: "ok", detail: "served" });
 	const cameras = recorderState?.cameras ?? [];
 	const degraded = services.some((s) => !s.healthy);
@@ -90,6 +122,11 @@ export function aggregateHealth({ supervisor = null, version = "unknown", halSta
 			driveReason: storage.driveReason ?? null,
 			paused: storage.paused ?? null,
 		} : null,
+		localNetwork: {
+			state: lnState,
+			reason: lnReason,
+			note: LOCAL_NETWORK_NOTES[lnState] ?? `the Local Network posture is stated as ${JSON.stringify(lnState)} — outside the known postures; treat as unknown`,
+		},
 		awaitingConfiguration: supervisor ? cameras.length === 0 : false,
 	};
 }

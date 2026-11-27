@@ -35,6 +35,29 @@ test("deployment inputs override the defaults through the same validation", () =
 	assert.equal(pruned.statusPort, 9001);
 });
 
+test("compute green-field defaults ride the config of record as the setup layer (PORCH-152)", () => {
+	const cfg = defaultConfigDocument();
+	assert.deepEqual(Object.keys(cfg.compute.stages).sort(), [
+		"audio-classification",
+		"detection",
+		"embedding",
+		"event-description",
+		"overwatch-evaluation",
+		"transcription",
+	]);
+	for (const stage of ["detection", "event-description", "audio-classification", "transcription", "overwatch-evaluation", "embedding"]) {
+		assert.deepEqual(cfg.compute.stages[stage], { providerClass: "native-mlx", model: null });
+	}
+});
+
+test("a deployment input's compute override merges through KNOWN_INPUT_KEYS (PORCH-152)", () => {
+	const override = {
+		stages: { detection: { providerClass: "openai-spec", model: "yolo11n", endpointRef: "deployment-secret/detection-endpoint" } },
+	};
+	const cfg = defaultConfigDocument({ compute: override });
+	assert.deepEqual(cfg.compute, override);
+});
+
 test("the storage failover plane rides the deployment inputs (PORCH-136)", () => {
 	const cfg = defaultConfigDocument({
 		failoverRoot: "/Volumes/Failover",

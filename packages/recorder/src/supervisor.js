@@ -19,7 +19,7 @@
 import fsDefault from "node:fs";
 import http from "node:http";
 import { RecorderDaemon } from "./recorder.js";
-import { resolveDefaults } from "./config.js";
+import { validateConfig, resolveDefaults } from "./config.js";
 import { pruneRolling, retentionWatchdog, pruneEventTier } from "./retention.js";
 import { StorageBackend, tierUsage } from "./storage.js";
 import { DETECTIONS_PATTERN, STORAGE_EVENTS_TOPIC, STORAGE_STATE_TOPIC, createMqttBus } from "./bus.mqtt.js";
@@ -27,6 +27,22 @@ import { DAY_MS, dateDirName } from "./paths.js";
 
 const STATE_WRITE_MS = 2000;
 const RETENTION_SWEEP_MS = 10 * 60 * 1000;
+/** Camera-set bodies are tiny; anything beyond this bound is refused upfront. */
+const BODY_CHUNK_LIMIT = 128;
+
+/** Read and parse a JSON request body; null on malformed JSON or oversize. */
+async function readJsonBody(req) {
+	const chunks = [];
+	for await (const chunk of req) {
+		chunks.push(/** @type {Buffer} */ (chunk));
+		if (chunks.length > BODY_CHUNK_LIMIT) return null;
+	}
+	try {
+		return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+	} catch {
+		return null;
+	}
+}
 
 export class RecorderSupervisor {
 	/** @param {{config: import("./types.js").RecorderConfig, log?: (line: string) => void, spawn?: typeof import("node:child_process").spawn, fs?: typeof fsDefault, pollMs?: number, bus?: import("./bus.mqtt.js").MqttBus | null}} opts */
@@ -81,6 +97,20 @@ export class RecorderSupervisor {
 		return this;
 	}
 
+	/** One daemon per camera — shared factory for boot and the live apply path (PORCH-152). */
+	#makeDaemon(camera) {
+		return new RecorderDaemon({
+			camera,
+			config: this.config,
+			activeRoot: () => this.backend.activeLocation(),
+			onWriteError: (fault) => this.handleWriteFault(fault),
+			spawn: this.spawn,
+			fs: this.fs,
+			pollMs: this.pollMs,
+			log: (l) => this.log(l),
+		});
+	}
+
 	startDaemons() {
 		if (this.stopping) return;
 		if (!this.backend.activeLocation()) {
@@ -94,16 +124,7 @@ export class RecorderSupervisor {
 		this.daemons = [];
 		this.paused = false;
 		for (const camera of this.config.cameras) {
-			const daemon = new RecorderDaemon({
-				camera,
-				config: this.config,
-				activeRoot: () => this.backend.activeLocation(),
-				onWriteError: (fault) => this.handleWriteFault(fault),
-				spawn: this.spawn,
-				fs: this.fs,
-				pollMs: this.pollMs,
-				log: (l) => this.log(l),
-			});
+			const daemon = this.#makeDaemon(camera);
 			this.daemons.push(daemon);
 			daemon.start();
 		}
@@ -125,6 +146,96 @@ export class RecorderSupervisor {
 			});
 		}
 		this.publishState();
+	}
+
+	/** The camera fields that define a writer — any change forces a rebuild. */
+	#defineDiffers(a, b) {
+		return (
+			JSON.stringify(a.source ?? null) !== JSON.stringify(b.source ?? null) ||
+			(a.recordingMode ?? "continuous") !== (b.recordingMode ?? "continuous") ||
+			(a.audioMode ?? "transcode") !== (b.audioMode ?? "transcode") ||
+			(a.preRollSeconds ?? 10) !== (b.preRollSeconds ?? 10) ||
+			(a.postRollSeconds ?? 30) !== (b.postRollSeconds ?? 30)
+		);
+	}
+
+	/** Drop a daemon from the fleet after a stop (the diff path's bookkeeping). */
+	#dropDaemon(daemon) {
+		this.daemons = this.daemons.filter((d) => d !== daemon);
+	}
+
+	/**
+	 * Live camera-set application (PORCH-152, ac-4): the health plane's
+	 * POST /api/cameras/apply path. Validation of the FULL next config runs
+	 * first — a bad camera never half-applies — then the camera set diffs
+	 * by name against the running fleet: added daemons start (same factory
+	 * as boot), removed ones stop and drop, mutated ones (source or the
+	 * recording-mode/window fields) stop and rebuild. Only the camera set
+	 * plus busUrl rewire live; the other config fields ride along in this
+	 * config of record but their boot-time wiring (e.g. the storage plane)
+	 * stays as-is until the next restart — never a silent claim otherwise.
+	 * @param {import("./types.js").RecorderConfig} nextConfig
+	 * @returns {Promise<{ok: true, started: string[], stopped: string[], kept: string[], paused?: boolean}>}
+	 */
+	async applyConfig(nextConfig) {
+		validateConfig(nextConfig);
+		const nextByName = new Map(nextConfig.cameras.map((c) => [c.name, c]));
+		const curByName = new Map(this.config.cameras.map((c) => [c.name, c]));
+		const started = [];
+		const stopped = [];
+		// Removed cameras: stop the writer before the fleet drops it.
+		for (const [name, camera] of curByName) {
+			if (nextByName.has(name)) continue;
+			stopped.push(name);
+			const daemon = this.daemonFor(camera);
+			if (daemon) {
+				await daemon.stop();
+				this.#dropDaemon(daemon);
+			}
+		}
+		// Mutated cameras: the writer's arguments changed under a live name.
+		for (const [name, nextCamera] of nextByName) {
+			const current = curByName.get(name);
+			if (!current || !this.#defineDiffers(current, nextCamera)) continue;
+			stopped.push(name);
+			const daemon = this.daemonFor(current);
+			if (daemon) {
+				await daemon.stop();
+				this.#dropDaemon(daemon);
+			}
+		}
+		const busChanged = (nextConfig.busUrl ?? null) !== (this.config.busUrl ?? null);
+		this.config = nextConfig;
+		if (busChanged) {
+			// The old endpoint dies with its subscriptions; startBus() rebuilds
+			// from the new busUrl (or leaves the bus detached when unset).
+			const old = this.bus;
+			this.bus = undefined;
+			await old?.close?.();
+			this.startBus();
+		}
+		const paused = this.paused;
+		if (!paused && !this.stopping) {
+			for (const [name, camera] of nextByName) {
+				if (this.daemonFor(camera)) continue;
+				const daemon = this.#makeDaemon(camera);
+				this.daemons.push(daemon);
+				daemon.start();
+				started.push(name);
+			}
+		}
+		this.writeState();
+		// While paused (no writable storage location, ac-2) the config of
+		// record still swaps; daemons start only when storage resumes
+		// (probeDriveHealth → startDaemons) — never a silent half-apply.
+		return paused
+			? { ok: true, started: [], stopped, kept: [], paused: true }
+			: {
+					ok: true,
+					started,
+					stopped,
+					kept: [...nextByName.keys()].filter((name) => !started.includes(name) && !stopped.includes(name)),
+				};
 	}
 
 	/** The machine surface of the storage plane (ac-4): active state + tier usage. */
@@ -227,6 +338,24 @@ export class RecorderSupervisor {
 				const result = this.failback();
 				if (!result.ok) return json(409, { error: result.reason ?? "failback refused" });
 				return json(200, { ok: true, storage: this.storageStatus() });
+			}
+			if (parts[1] === "cameras" && parts[2] === "apply" && method === "POST") {
+				// Live camera-set application (PORCH-152 ac-4): the engine's
+				// config plane and the setup wizard push new camera sets here —
+				// loopback bind, same plane as record/trigger. Validation
+				// failures refuse plain-language with 422, never silence.
+				const body = await readJsonBody(req);
+				if (!body || !Array.isArray(body.cameras)) {
+					return json(422, { error: "expected a JSON body with a cameras array of camera objects" });
+				}
+				try {
+					const result = await this.applyConfig({ ...this.config, cameras: body.cameras });
+					return json(200, result);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					this.log(`[supervisor] camera apply refused: ${message}`);
+					return json(422, { error: message });
+				}
 			}
 			if (parts[1] === "cameras" && parts.length >= 3) {
 				const camera = { name: parts[2] };
@@ -372,7 +501,12 @@ export class RecorderSupervisor {
 		clearInterval(this.retentionHandle);
 		clearInterval(this.healthHandle);
 		await Promise.all(this.daemons.map((dmn) => dmn.stop()));
-		await new Promise((resolve) => this.httpServer?.close(() => resolve()));
+		if (this.httpServer) {
+			// A null server means stop() already ran — resolve immediately so a
+			// retry path never stalls (the promise only resolves on the close
+			// callback, which never fires for an already-closed server).
+			await new Promise((resolve) => this.httpServer.close(() => resolve()));
+		}
 		this.httpServer = null;
 		await this.bus?.close?.();
 		this.bus = null;

@@ -15,6 +15,38 @@ export const DEFAULT_LABEL = "com.porchlight.home";
 export const DEFAULT_STATUS_PORT = 8970;
 export const DEFAULT_STATUS_HOST = "0.0.0.0";
 
+/**
+ * The engine's ML stage ids of record (PORCH-152) — mirrored from
+ * packages/config/src/compute.js STAGES (closed list; not imported so the
+ * installer stays dependency-light). The green-field bootstrap writes a
+ * stage plan for every one of them into the platform config of record,
+ * where the config plane resolves them as its "setup" layer.
+ */
+export const COMPUTE_STAGES = Object.freeze([
+	"detection",
+	"event-description",
+	"audio-classification",
+	"transcription",
+	"overwatch-evaluation",
+	"embedding",
+]);
+
+/**
+ * Green-field compute defaults (PORCH-152): every stage rides the
+ * platform's own native acceleration with model null — "provisioned by
+ * the product's own setup", an explicit stated state, not a silent one.
+ * @returns {{stages: Record<string, {providerClass: "native-mlx", model: null}>}}
+ */
+export function defaultComputeStages() {
+	return {
+		stages: Object.fromEntries(
+			/** @type {[string, {providerClass: "native-mlx", model: null}]} */ (
+				COMPUTE_STAGES.map((stage) => [stage, { providerClass: "native-mlx", model: null }])
+			),
+		),
+	};
+}
+
 const KNOWN_INPUT_KEYS = [
 	"storageRoot",
 	"cameras",
@@ -32,6 +64,7 @@ const KNOWN_INPUT_KEYS = [
 	"eventRetentionDays",
 	"retentionRules",
 	"busUrl",
+	"compute",
 ];
 
 /**
@@ -88,6 +121,11 @@ export function defaultConfigDocument(inputs = {}) {
 		cameras: [],
 		segmentSeconds: 600,
 		retentionDays: 7,
+		// Green-field compute posture (PORCH-152): every ML stage rides the
+		// config of record, so the config plane resolves it as the setup
+		// layer. A deployment input's "compute" overrides the block wholesale
+		// (same KNOWN_INPUT_KEYS semantics as every other input).
+		compute: defaultComputeStages(),
 		...Object.fromEntries(Object.entries(inputs ?? {}).filter(([k]) => KNOWN_INPUT_KEYS.includes(k))),
 	};
 	// Only merge the platform fields when the inputs did not set them.

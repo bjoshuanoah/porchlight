@@ -11,6 +11,8 @@ import pathDefault from "node:path";
 import { fileURLToPath } from "node:url";
 import { NotFoundError, ValidationError, assertId } from "./types.js";
 import { renderTestPattern } from "./snapshot.js";
+import { validateStreamUrl } from "./stream-validate.js";
+import { registerStreamCamera, requireStreamUrl } from "./engine-cameras.js";
 
 const MIME_TYPES = {
 	".html": "text/html; charset=utf-8",
@@ -77,8 +79,11 @@ function readJsonBody(req) {
  * @param {{ consoleDist?: string | null }} [opts] static console dist override (null disables)
  */
 export function createConfigServer(parts, opts = {}) {
-	const { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage } = parts;
+	const { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage, compute } = parts;
 	const consoleDist = opts.consoleDist === undefined ? defaultConsoleDistPath() : opts.consoleDist;
+	const probeImpl = opts.probeImpl ?? validateStreamUrl;
+	const root = opts.root ?? null;
+	const recorderBase = opts.recorderBase ?? "http://127.0.0.1:8971";
 
 	const server = httpDefault.createServer((req, res) => {
 		handle(req, res).catch((err) => {
@@ -100,8 +105,113 @@ export function createConfigServer(parts, opts = {}) {
 			}
 		});
 		const method = req.method ?? "GET";
-		if (segments[0] === "api") return handleApi(req, res, method, segments.slice(1), url);
+		// Engine guest-surface guarantee (PORCH-152 ac-4): a camera-view engine
+		// token (the "peng1." family minted by the home bridge) is definitionally
+		// NOT an admin credential. Presenting one anywhere on this admin plane
+		// refuses in plain language — the engine's side of the family/guest/admin
+		// boundary; guest members are also refused upstream at the hub.
+		if (segments[0] === "api") {
+			const auth = req.headers.authorization ?? "";
+			if (auth.startsWith("peng1.")) {
+				return sendJson(res, 403, { error: "This surface belongs to the deployment's administrators — camera-view sessions never carry NVR/admin access." });
+			}
+			return handleApi(req, res, method, segments.slice(1), url);
+		}
+		return handleEngineSeam(req, res, method, segments, url);
+	}
+
+	/**
+	 * The hub-facing engine seams (PORCH-I-009 TS 7 landing, PORCH-152): the
+	 * paths the hub's HttpEngineAdapter already calls, now served by the
+	 * engine. /live, /segments, /segment, /evidence stay unimplemented — the
+	 * stream-serving plane lands with the stream manager (PORCH-154/155) and
+	 * the adapter answers those gaps in plain language for now.
+	 */
+	async function handleEngineSeam(req, res, method, segments, url) {
+		if (segments[0] === "cameras") {
+			if (segments.length === 1 && method === "POST") {
+				const body = await readJsonBody(req);
+				const streamUrl = requireStreamUrl(body);
+				return sendJson(res, 200, await registerStreamCamera({
+					root, url: streamUrl, cameras, recorderBase,
+				}));
+			}
+			if (segments.length === 2 && method === "GET") {
+				const cameraId = requireId(segments[1]);
+				return sendJson(res, 200, await engineCameraHealth(cameraId));
+			}
+		}
+		if (segments[0] === "service" && segments.length === 1 && method === "GET") {
+			return sendJson(res, 200, await proxySupervisorJson("/health", { map: supervisorServiceView }));
+		}
+		if (segments[0] === "storage" && segments.length === 1 && method === "GET") {
+			return sendJson(res, 200, await proxySupervisorJson("/api/storage", { map: supervisorStorageView }));
+		}
 		return handleStatic(req, res, method, url.pathname);
+	}
+
+	/** The recorder supervisor health plane is loopback + same host by contract. */
+	async function proxySupervisorJson(path, { map }) {
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 3000);
+			const response = await fetch(`${recorderBase.replace(/\/+$/, "")}${path}`, { signal: controller.signal });
+			clearTimeout(timer);
+			const body = await response.json();
+			return map(body);
+		} catch {
+			return { state: "unavailable", detail: "the recorder supervisor isn't reachable" };
+		}
+	}
+
+	function supervisorServiceView(body) {
+		if (!body || typeof body !== "object") return { state: "unavailable", detail: null };
+		return {
+			state: body.health === "ok" && !body.stopping ? "ok" : "degraded",
+			detail: body.stopping ? "the recorder is shutting down" : `recording ${Array.isArray(body.cameras) ? body.cameras.length : 0} camera(s)`,
+		};
+	}
+
+	function supervisorStorageView(body) {
+		if (!body || typeof body !== "object") return { state: "unavailable", detail: null };
+		return { state: body.state ?? "unknown", detail: body.reason ?? (body.activeLocation ? `recording to ${body.activeLocation}` : null) };
+	}
+
+	/** The three health planes of a camera (PORCH-I-009 health contract). */
+	async function engineCameraHealth(cameraId) {
+		const detection = parts.compute.statusOf("detection");
+		const detectionView = detection.state === "unknown"
+			? { state: "unavailable", detail: detection.reason }
+			: { state: detection.state, detail: detection.reason };
+		const playback = { state: "unavailable", detail: "stream serving lands with the stream manager (PORCH-154)" };
+		const body = await fetchSupervisorHealth();
+		if (!body) {
+			return {
+				recording: { state: "unavailable", detail: "the recorder supervisor isn't reachable" },
+				playback,
+				detection: detectionView,
+			};
+		}
+		const cams = Array.isArray(body.cameras) ? body.cameras : [];
+		const cam = cams.find((/** @type {any} */ c) => (c.name ?? c.camera) === cameraId);
+		if (!cam) throw new NotFoundError(`unknown camera "${cameraId}"`);
+		return {
+			recording: { state: cam.state ?? "unknown", detail: cam.reason ?? null },
+			playback,
+			detection: detectionView,
+		};
+	}
+
+	async function fetchSupervisorHealth() {
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 3000);
+			const response = await fetch(`${recorderBase.replace(/\/+$/, "")}/health`, { signal: controller.signal });
+			clearTimeout(timer);
+			return await response.json();
+		} catch {
+			return null;
+		}
 	}
 
 	async function handleApi(req, res, method, r, url) {
@@ -113,10 +223,26 @@ export function createConfigServer(parts, opts = {}) {
 			if (method === "GET") return sendJson(res, 200, { ok: true, service: "config" });
 		}
 
+		// Compute posture (PORCH-152): the Models/Compute settings surface —
+		// per-stage plans, source layers, never-silent statuses; PUT re-points
+		// live (publisher event), DELETE restores the setup/built-in layer.
+		if (r[0] === "compute" && r[1] === "stages") {
+			if (r.length === 2 && method === "GET") return sendJson(res, 200, { stages: compute.list() });
+			if (r.length === 3) {
+				const stage = requireId(r[2]);
+				if (method === "GET") return sendJson(res, 200, compute.detail(stage));
+				if (method === "PUT") return sendJson(res, 200, compute.repoint(stage, body));
+				if (method === "DELETE") return sendJson(res, 200, compute.reset(stage));
+			}
+		}
+
 		if (r[0] === "cameras") {
 			if (r.length === 1) {
 				if (method === "GET") return sendJson(res, 200, cameras.list());
 			} else if (r.length === 2) {
+				if (method === "POST" && r[1] === "validate") {
+					return sendJson(res, 200, await probeImpl({ url: requireStreamUrl(body) }));
+				}
 				const cameraId = requireId(r[1]);
 				if (method === "PUT") return sendJson(res, 200, cameras.upsert(cameraId, body));
 			} else if (r.length === 3) {

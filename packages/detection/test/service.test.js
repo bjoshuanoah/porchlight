@@ -71,7 +71,7 @@ test("ac-2: frame → provider → tracker → MQTT publish lands on a subscribe
 		let t0 = null;
 		/** @type {number|null} */
 		let arrival = null;
-		subscriber.subscribe("porchlight/engine/detections/cam-1");
+		subscriber.subscribe("porchlight/engine/detections/cam-1/person");
 		subscriber.on("message", () => {
 			if (t0 !== null && arrival === null) arrival = performance.now() - t0;
 		});
@@ -118,4 +118,76 @@ test("per-camera trackers keep trackId namespaces apart", async () => {
 	const rb = await service.submit(frame("cam-b", 1.1));
 	assert.notEqual(ra.objects[0].trackId, rb.objects[0].trackId);
 	assert.equal(service.trackers.size, 2);
+});
+
+test("repoint: provider B replaces provider A live — publishes carry B, trackers survive, generation increments", async () => {
+	const sink = new SinkProbe();
+	const providerA = testDoubleProvider();
+	/** @type {string[]} */
+	const closed = [];
+	providerA.close = async () => {
+		closed.push("provider-a");
+	};
+	const providerB = {
+		name: "provider-b",
+		/** @param {import("../src/types.js").Frame} f */
+		detect: async (f) => [{ cls: "person", conf: 0.9, bbox: [0.0, 0.4, 0.2, 0.2], t: f.t }],
+		status: () => ({ engine: "provider-b", providerClass: "local-server", state: "native", reason: null }),
+	};
+	const service = new DetectionService({ provider: providerA, sink, trackerFactory });
+
+	const first = await service.submit(frame("cam-1", 1));
+	assert.equal(sink.published[0].provider, "test-double");
+
+	const swap = await service.repoint(providerB);
+	assert.deepEqual(swap, { name: "provider-b", generation: 1 });
+	assert.equal(service.provider, providerB, "the live seam points at provider B");
+	assert.deepEqual(closed, ["provider-a"], "the old provider was closed after the swap");
+	assert.equal(service.sink, sink, "the sink is untouched");
+	assert.equal(service.trackers.size, 1, "trackers survive the re-point");
+	assert.equal(service.status().provider.engine, "provider-b");
+
+	const second = await service.submit(frame("cam-1", 1.1));
+	assert.equal(second.objects[0].provider, "provider-b", "subsequent publishes carry the new provider name");
+	// Same camera + overlapping bbox across the re-point: the per-camera
+	// tracker continues the same track id — no namespace reset.
+	assert.equal(second.objects[0].trackId, first.objects[0].trackId);
+
+	await service.repoint({ ...testDoubleProvider(), name: "provider-c" });
+	assert.equal(service.status().generation, 2, "generation keeps counting");
+	assert.equal(service.status().stage, "detection");
+});
+
+test("repoint: close errors of the old provider are logged and never fail the swap", async () => {
+	/** @type {string[]} */
+	const lines = [];
+	const providerA = testDoubleProvider();
+	providerA.close = async () => {
+		throw new Error("close blew up");
+	};
+	const service = new DetectionService({
+		provider: providerA,
+		sink: new SinkProbe(),
+		log: (...a) => lines.push(a.join(" ")),
+	});
+	await service.submit(frame("cam-1", 1));
+
+	const swap = await service.repoint(testDoubleProvider());
+	assert.ok(lines.some((l) => l.includes("close during repoint") && l.includes("close blew up")), "swallowed close error is logged");
+	assert.deepEqual(swap, { name: "test-double", generation: 1 });
+});
+
+test("repoint: an object violating the InferenceProvider protocol throws a TypeError naming the protocol", async () => {
+	const service = new DetectionService({ provider: testDoubleProvider(), sink: new SinkProbe(), trackerFactory });
+	await assert.rejects(
+		() => service.repoint(/** @type {any} */ ({ name: 7, detect: async () => [] })),
+		(e) => e instanceof TypeError && /InferenceProvider/.test(e.message),
+	);
+	await assert.rejects(
+		() => service.repoint(/** @type {any} */ ({ name: "no-detect" })),
+		(e) => e instanceof TypeError && /InferenceProvider/.test(e.message),
+	);
+	// A rejected re-point leaves the live seam and generation untouched.
+	assert.equal(service.provider.name, "test-double");
+	assert.equal(service.status().generation, 0);
 });

@@ -18,6 +18,7 @@ import CompositionInspector from "./screens/CompositionInspector.jsx";
 import SpeedCalibration from "./screens/SpeedCalibration.jsx";
 import Profiles from "./screens/Profiles.jsx";
 import Storage from "./screens/Storage.jsx";
+import Compute from "./screens/Compute.jsx";
 
 const theme = createTheme({
   palette: { mode: "light" },
@@ -94,6 +95,7 @@ export default function App() {
           {tab === "speed" && <SpeedCalibration camera={camera} api={api} />}
           {tab === "profiles" && <Profiles camera={camera} cameras={cameras} api={api} />}
           {tab === "storage" && <Storage api={api} />}
+          {tab === "compute" && <Compute api={api} />}
         </Container>
         <Tabs
           value={tab}

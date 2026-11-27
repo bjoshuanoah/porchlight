@@ -9,4 +9,5 @@ export const consoleTabs = [
   { id: "speed", label: "Speed" },
   { id: "profiles", label: "Profiles" },
   { id: "storage", label: "Storage" },
+  { id: "compute", label: "Compute" },
 ];
