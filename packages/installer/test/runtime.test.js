@@ -42,8 +42,20 @@ test("the runtime starts the supervisor idle and serves the status page", async 
 			assert.equal(agg.status, "healthy");
 			assert.equal(agg.awaitingConfiguration, true);
 			assert.deepEqual(agg.platform, { platform: "darwin", decode: "videotoolbox" });
-			assert.ok(fs.existsSync(config.storageRoot)); // storageRoot created by the supervisor
+			// The stream manager composes FIRST and states its idle row —
+			// zero cameras configured, zero live sources (PORCH-154).
+			assert.ok(rt.manager, "the runtime composes the stream manager");
+			assert.equal(typeof rt.managerStarted?.then, "function", "the manager's started promise is recorded");
+			assert.deepEqual(agg.stream, {
+				state: "idle",
+				detail: "0 camera(s), 0 live source(s)",
+				cameraCount: 0,
+				cameraNames: [],
+				liveSources: 0,
+			});
+			assert.deepEqual(agg.services.find((s) => s.name === "stream"), { name: "stream", healthy: true, state: "ok", detail: "0 camera(s), 0 live source(s)" });
 			assert.equal(rt.aggregate().status, "healthy");
+			assert.ok(fs.existsSync(config.storageRoot)); // storageRoot created by the supervisor
 		} finally {
 			await rt.stop();
 		}
@@ -52,7 +64,7 @@ test("the runtime starts the supervisor idle and serves the status page", async 
 	}
 });
 
-test("stopping the runtime closes the status server and the supervisor", async () => {
+test("stopping the runtime closes the status server, the supervisor, and the stream manager", async () => {
 	const { config, cleanup } = tmpdir();
 	try {
 		const rt = await startPlatformRuntime({ config, log: () => {}, localNetworkProbe: allowedProbe });
@@ -60,6 +72,7 @@ test("stopping the runtime closes the status server and the supervisor", async (
 		await rt.stop();
 		await assert.rejects(() => fetch(`http://127.0.0.1:${port}/health`));
 		assert.equal(rt.supervisor.stopping, true);
+		assert.equal(rt.manager.stopping, true, "the stream manager stops with the runtime");
 	} finally {
 		cleanup();
 	}

@@ -1,0 +1,34 @@
+{
+	"name": "@porchlight/stream",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight engine stream serving — one upstream ffmpeg per camera demuxed into copy/rgb/jpeg/pcm lanes, per-camera localhost relay listeners, in-process subscriptions, MJPEG live view, and the stream health plane (PORCH-154).",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"bin": {
+		"porchlight-stream": "./bin/stream.js"
+	},
+	"scripts": {
+		"test": "node --test 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'stream ships plain JS (no build)'"
+	},
+	"dependencies": {
+		"@porchlight/hal": "0.5.3",
+		"mqtt": "^5.16.1",
+		"yaml": "^2.9.1"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/stream"
+	}
+}

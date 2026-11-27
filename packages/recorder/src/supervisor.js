@@ -2,9 +2,9 @@
 // plane PORCH-136).
 //
 // The supervisor is the headless entrypoint launchd keeps alive: one child
-// ffmpeg per camera (single upstream connection per camera — consumers like
-// detection ride the stream manager, never an extra camera connection), a
-// 127.0.0.1 health endpoint, and a state file that renders recording state
+// ffmpeg per camera consuming the stream manager's localhost relay (PORCH-154
+// single-upstream law — the recorder never opens a camera connection either),
+// a 127.0.0.1 health endpoint, and a state file that renders recording state
 // for the status surfaces (never a silent stall).
 //
 // Storage plane (PRD 10 / TS 10, ac-2/4/5): every writer routes through the
@@ -20,6 +20,7 @@ import fsDefault from "node:fs";
 import http from "node:http";
 import { RecorderDaemon } from "./recorder.js";
 import { validateConfig, resolveDefaults } from "./config.js";
+import { relayInputFor } from "./args.js";
 import { pruneRolling, retentionWatchdog, pruneEventTier } from "./retention.js";
 import { StorageBackend, tierUsage } from "./storage.js";
 import { DETECTIONS_PATTERN, STORAGE_EVENTS_TOPIC, STORAGE_STATE_TOPIC, createMqttBus } from "./bus.mqtt.js";
@@ -196,7 +197,18 @@ export class RecorderSupervisor {
 		// Mutated cameras: the writer's arguments changed under a live name.
 		for (const [name, nextCamera] of nextByName) {
 			const current = curByName.get(name);
-			if (!current || !this.#defineDiffers(current, nextCamera)) continue;
+			if (!current) continue;
+			// The writer's ffmpeg input is the stream manager's relay URL
+			// (single-upstream law, PORCH-154): a live fleet shift that moves a
+			// kept camera's relay port (sorted-fleet position) is a writer
+			// change too, or the kept writer would read a listener the manager
+			// moved.
+			if (
+				!this.#defineDiffers(current, nextCamera) &&
+				relayInputFor(this.config, name) === relayInputFor(nextConfig, name)
+			) {
+				continue;
+			}
 			stopped.push(name);
 			const daemon = this.daemonFor(current);
 			if (daemon) {

@@ -8,6 +8,8 @@
 import httpDefault from "node:http";
 import fsDefault from "node:fs";
 import pathDefault from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { NotFoundError, ValidationError, assertId } from "./types.js";
 import { renderTestPattern } from "./snapshot.js";
@@ -84,6 +86,7 @@ export function createConfigServer(parts, opts = {}) {
 	const probeImpl = opts.probeImpl ?? validateStreamUrl;
 	const root = opts.root ?? null;
 	const recorderBase = opts.recorderBase ?? "http://127.0.0.1:8971";
+	const streamBase = opts.streamBase ?? "http://127.0.0.1:8972";
 
 	const server = httpDefault.createServer((req, res) => {
 		handle(req, res).catch((err) => {
@@ -123,9 +126,11 @@ export function createConfigServer(parts, opts = {}) {
 	/**
 	 * The hub-facing engine seams (PORCH-I-009 TS 7 landing, PORCH-152): the
 	 * paths the hub's HttpEngineAdapter already calls, now served by the
-	 * engine. /live, /segments, /segment, /evidence stay unimplemented — the
-	 * stream-serving plane lands with the stream manager (PORCH-154/155) and
-	 * the adapter answers those gaps in plain language for now.
+	 * engine. GET /live/:id proxies the stream manager's MJPEG live view for
+	 * that camera (the manager holds the one upstream connection; this only
+	 * pipes). /segments, /segment and /evidence stay pending — they belong to
+	 * the recorded-media/timeline path, which answers those gaps in plain
+	 * language for now.
 	 */
 	async function handleEngineSeam(req, res, method, segments, url) {
 		if (segments[0] === "cameras") {
@@ -133,7 +138,7 @@ export function createConfigServer(parts, opts = {}) {
 				const body = await readJsonBody(req);
 				const streamUrl = requireStreamUrl(body);
 				return sendJson(res, 200, await registerStreamCamera({
-					root, url: streamUrl, cameras, recorderBase,
+					root, url: streamUrl, cameras, recorderBase, streamBase,
 				}));
 			}
 			if (segments.length === 2 && method === "GET") {
@@ -141,8 +146,13 @@ export function createConfigServer(parts, opts = {}) {
 				return sendJson(res, 200, await engineCameraHealth(cameraId));
 			}
 		}
+		if (segments[0] === "live" && segments.length === 2 && method === "GET") {
+			const cameraId = requireId(segments[1]);
+			return proxyLive(cameraId, res);
+		}
 		if (segments[0] === "service" && segments.length === 1 && method === "GET") {
-			return sendJson(res, 200, await proxySupervisorJson("/health", { map: supervisorServiceView }));
+			const recorderView = await proxySupervisorJson("/health", { map: supervisorServiceView });
+			return sendJson(res, 200, { ...recorderView, stream: await streamServiceRow() });
 		}
 		if (segments[0] === "storage" && segments.length === 1 && method === "GET") {
 			return sendJson(res, 200, await proxySupervisorJson("/api/storage", { map: supervisorStorageView }));
@@ -177,26 +187,119 @@ export function createConfigServer(parts, opts = {}) {
 		return { state: body.state ?? "unknown", detail: body.reason ?? (body.activeLocation ? `recording to ${body.activeLocation}` : null) };
 	}
 
+	/** The stream manager health plane is loopback + same host by contract. */
+	async function fetchManagerHealth() {
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 3000);
+			const response = await fetch(`${streamBase.replace(/\/+$/, "")}/health`, { signal: controller.signal });
+			clearTimeout(timer);
+			return await response.json();
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * The stream manager's row in the service view: the manager's aggregate
+	 * state mapped onto the row contract (idle/opening/live ⇒ ok, degraded ⇒
+	 * degraded) with the fleet counts, never silent about an unreachable
+	 * manager.
+	 */
+	async function streamServiceRow() {
+		const health = await fetchManagerHealth();
+		if (!health || typeof health !== "object") {
+			return { state: "unavailable", detail: "the stream manager isn't reachable" };
+		}
+		const cams = Array.isArray(health.cameras) ? health.cameras : [];
+		const live = cams.filter((/** @type {any} */ c) => c?.state === "live").length;
+		const state = health.state === "degraded" ? "degraded" : "ok";
+		return { state, detail: `stream manager — ${cams.length} camera(s); ${live} live` };
+	}
+
+	/**
+	 * The stream manager's row for ONE camera: the control endpoint answers
+	 * {name,state,reason,...} or 404 for an unknown camera.
+	 * @returns {Promise<{ row: any } | { missing: true } | { refused: number } | null>}
+	 *   null ⇒ the manager isn't reachable.
+	 */
+	async function fetchManagerCamera(cameraId) {
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 3000);
+			const response = await fetch(`${streamBase.replace(/\/+$/, "")}/cameras/${encodeURIComponent(cameraId)}`, { signal: controller.signal });
+			clearTimeout(timer);
+			if (response.status === 404) return { missing: true };
+			if (!response.ok) return { refused: response.status };
+			return { row: await response.json() };
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * GET /live/:id — pipe the manager's MJPEG multipart stream verbatim
+	 * (status, content-type and bytes). The manager's 404 unknown-camera and
+	 * 503 non-live answers pass through with their plain-language reason; a
+	 * manager outage names itself in the pass-through. Only the CONNECT is
+	 * guarded by a timeout — the stream itself is long-lived.
+	 */
+	async function proxyLive(cameraId, res) {
+		let response;
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 5000);
+			try {
+				response = await fetch(`${streamBase.replace(/\/+$/, "")}/live/${encodeURIComponent(cameraId)}`, { signal: controller.signal });
+			} finally {
+				clearTimeout(timer);
+			}
+		} catch {
+			sendJson(res, 503, { ok: false, reason: "the stream manager isn't reachable — the live view starts when it is (boot reads the same config of record)" });
+			return;
+		}
+		res.writeHead(response.status, { "content-type": response.headers.get("content-type") ?? "application/octet-stream" });
+		if (response.body) {
+			try {
+				await pipeline(Readable.fromWeb(/** @type {any} */ (response.body)), res);
+			} catch { /* client or upstream went away mid-stream — the failure is on the pipe, nothing to answer */ }
+		} else {
+			res.end();
+		}
+	}
+
 	/** The health planes of a camera (PORCH-I-009 health contract; the audio
-	 * plane joins in PORCH-153). The DETECTION plane maps the detection
-	 * stage's compute status; the AUDIO plane first consults the camera's
+	 * plane joined in PORCH-153, the stream/playback planes join with the
+	 * stream manager). The DETECTION plane maps the detection stage's
+	 * compute status; the AUDIO plane first consults the camera's
 	 * audioDetectionEnabled knob (off by default) — a disabled camera states
 	 * its own disabled plane, and an enabled one reports the audio stage's
-	 * never-silent posture with its explained reason. */
+	 * never-silent posture with its explained reason. The STREAM plane is the
+	 * manager's per-camera state verbatim; the PLAYBACK plane says whether
+	 * the live grid can ride the manager (live ⇒ ok, opening ⇒ degraded,
+	 * down ⇒ unavailable, each with the reason it stated). */
 	async function engineCameraHealth(cameraId) {
 		const detection = parts.compute.statusOf("detection");
 		const detectionView = detection.state === "unknown"
 			? { state: "unavailable", detail: detection.reason }
 			: { state: detection.state, detail: detection.reason };
 		const audioView = await audioPlaneFor(cameraId);
-		const playback = { state: "unavailable", detail: "stream serving lands with the stream manager (PORCH-154)" };
+		const managerAnswer = await fetchManagerCamera(cameraId);
+		const streamView = streamPlaneFor(managerAnswer, cameraId);
+		const playbackView = playbackPlaneFor(managerAnswer);
 		const body = await fetchSupervisorHealth();
 		if (!body) {
+			// The manager is the other camera id of record: its 404 still names
+			// an unknown camera even while the recorder is down.
+			if (managerAnswer && "missing" in managerAnswer) {
+				throw new NotFoundError(`unknown camera "${cameraId}"`);
+			}
 			return {
 				recording: { state: "unavailable", detail: "the recorder supervisor isn't reachable" },
-				playback,
+				playback: playbackView,
 				detection: detectionView,
 				audio: audioView,
+				stream: streamView,
 			};
 		}
 		const cams = Array.isArray(body.cameras) ? body.cameras : [];
@@ -204,10 +307,40 @@ export function createConfigServer(parts, opts = {}) {
 		if (!cam) throw new NotFoundError(`unknown camera "${cameraId}"`);
 		return {
 			recording: { state: cam.state ?? "unknown", detail: cam.reason ?? null },
-			playback,
+			playback: playbackView,
 			detection: detectionView,
 			audio: audioView,
+			stream: streamView,
 		};
+	}
+
+	/** @param {{ row: any } | { missing: true } | { refused: number } | null} managerAnswer @param {string} cameraId */
+	function streamPlaneFor(managerAnswer, cameraId) {
+		if (!managerAnswer) return { state: "unavailable", detail: "the stream manager isn't reachable" };
+		if ("missing" in managerAnswer) throw new NotFoundError(`unknown camera "${cameraId}"`);
+		if ("refused" in managerAnswer) return { state: "unavailable", detail: `the stream manager refused the camera query (${managerAnswer.refused})` };
+		return { state: managerAnswer.row?.state ?? "unknown", detail: managerAnswer.row?.reason ?? null };
+	}
+
+	/**
+	 * The playback plane rides the MANAGER row (the live grid's feed):
+	 * live ⇒ the single-upstream statement; opening/degraded with the
+	 * source's own reason; down ⇒ unavailable with the reason; the manager
+	 * being gone is never a healthy blank.
+	 * @param {{ row: any } | { missing: true } | { refused: number } | null} managerAnswer
+	 */
+	function playbackPlaneFor(managerAnswer) {
+		if (!managerAnswer) return { state: "unavailable", detail: "the stream manager isn't reachable" };
+		if ("refused" in managerAnswer) return { state: "unavailable", detail: `the stream manager refused the camera query (${managerAnswer.refused})` };
+		const row = managerAnswer.row;
+		if (!row) return { state: "unavailable", detail: "the stream manager isn't reachable" };
+		if (row.state === "live") {
+			return { state: "ok", detail: "Live grid serving rides the stream manager's single upstream connection" };
+		}
+		if (row.state === "opening") {
+			return { state: "degraded", detail: row.reason ?? "the source is opening" };
+		}
+		return { state: "unavailable", detail: row.reason };
 	}
 
 	/**

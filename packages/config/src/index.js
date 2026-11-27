@@ -110,13 +110,16 @@ function crossKindPairs(zoneDefs, maskDefs) {
 /**
  * Create the config console service.
  * @param {{ root?: string, now?: () => Date, consoleDist?: string | null,
- *   recorderBase?: string }} [opts]
+ *   recorderBase?: string, streamBase?: string }} [opts]
  *   root — Porchlight root dir (default /Library/Porchlight); docs under
  *   <root>/config/console/. now — injectable clock for the scheduler.
  *   consoleDist — static console build dir (default packages/console/dist;
  *   pass null to disable static serving).
  *   recorderBase — recorder supervisor base URL for the storage plane
  *   (default http://127.0.0.1:8971).
+ *   streamBase — stream manager control base URL (default
+ *   http://127.0.0.1:8972), used by POST /cameras's second apply and the
+ *   /live + health seams.
  * @returns {{ root, store, publisher, cameras, zones, masks, compose, speed,
  *   profiles, base, scheduler, storage, server, start(httpPort) }}
  */
@@ -150,7 +153,7 @@ export function createConfigService(opts = {}) {
 		storage,
 		compute,
 	};
-	const server = createConfigServer(parts, { consoleDist: opts.consoleDist, root, recorderBase: opts.recorderBase, probeImpl: opts.probeImpl });
+	const server = createConfigServer(parts, { consoleDist: opts.consoleDist, root, recorderBase: opts.recorderBase, streamBase: opts.streamBase, probeImpl: opts.probeImpl });
 	/** @type {any} */
 	const service = {
 		...parts,

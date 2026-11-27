@@ -22,13 +22,14 @@ const LOCAL_NETWORK_NOTES = Object.freeze({
 /**
  * @param {{
  *   supervisor?: import("@porchlight/recorder").RecorderSupervisor | null,
+ *   manager?: import("@porchlight/stream").StreamManager | null,
  *   version?: string,
  *   halStatus?: Record<string, unknown>,
  *   localNetwork?: {state?: string, reason?: string | null} | null,
  *   generatedAt?: string,
  * }} opts
  */
-export function aggregateHealth({ supervisor = null, version = "unknown", halStatus = null, generatedAt, localNetwork } = {}) {
+export function aggregateHealth({ supervisor = null, manager = null, version = "unknown", halStatus = null, generatedAt, localNetwork } = {}) {
 	/** @type {ServiceHealth[]} */
 	const services = [];
 	let recorderState = null;
@@ -46,6 +47,37 @@ export function aggregateHealth({ supervisor = null, version = "unknown", halSta
 		});
 	} else {
 		services.push({ name: "recorder", healthy: false, state: "stopped", detail: "not started" });
+	}
+	// The stream serving row (PORCH-154): the stream manager holds the ONE
+	// upstream connection per camera and feeds the live grid, the relay
+	// consumers and the recorder from it — its health maps like the recorder
+	// plane's (idle/opening/live ⇒ ok, degraded ⇒ degraded), and a stopped
+	// or failing manager states itself instead of a healthy blank. The row
+	// is stated whenever the runtime composes a manager.
+	let streamView = null;
+	if (manager) {
+		if (/** @type {any} */ (manager).stopping === true) {
+			services.push({ name: "stream", healthy: false, state: "stopped", detail: "the stream manager is stopping" });
+		} else {
+			try {
+				const mh = manager.health();
+				const mcams = Array.isArray(mh.cameras) ? mh.cameras : [];
+				const mlive = mcams.filter((/** @type {{state?: string}} */ c) => c?.state === "live").length;
+				const state = mh.state === "degraded" ? "degraded" : "ok";
+				const detail = `${mcams.length} camera(s), ${mlive} live source(s)`;
+				services.push({ name: "stream", healthy: state === "ok", state, detail });
+				streamView = {
+					state: /** @type {string} */ (mh.state),
+					detail,
+					cameraCount: mcams.length,
+					cameraNames: mcams.map((/** @type {{name?: string}} */ c) => c.name ?? "unnamed"),
+					liveSources: mlive,
+				};
+			} catch (err) {
+				const reason = /** @type {Error} */ (err).message;
+				services.push({ name: "stream", healthy: false, state: "unavailable", detail: `the stream manager isn't reachable (${reason})` });
+			}
+		}
 	}
 	// The storage plane (PORCH-136) rides the supervisor state; a supervisor
 	// state without it (or no supervisor) is a stated unknown, not a lie.
@@ -122,6 +154,7 @@ export function aggregateHealth({ supervisor = null, version = "unknown", halSta
 			driveReason: storage.driveReason ?? null,
 			paused: storage.paused ?? null,
 		} : null,
+		stream: streamView,
 		localNetwork: {
 			state: lnState,
 			reason: lnReason,

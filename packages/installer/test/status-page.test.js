@@ -117,6 +117,76 @@ test("camera fleet details ride the recorder plane of the aggregate", () => {
 	assert.equal(agg.recorder?.cameraCount, 1);
 });
 
+/** A fake stream manager: only the planes aggregateHealth reads. */
+function fakeManager(health, override = {}) {
+	return {
+		stopping: false,
+		health: () => health,
+		...override,
+	};
+}
+
+const twoCamerasLive = {
+	state: "live",
+	cameras: [
+		{ name: "front-door", state: "live", reason: null, relayPort: 8973, consumers: 2 },
+		{ name: "back-yard", state: "live", reason: null, relayPort: 8974, consumers: 0 },
+	],
+};
+
+test("the stream manager rides the aggregate as its own service row (PORCH-154)", () => {
+	const agg = aggregateHealth({
+		supervisor: fakeSupervisor(idleState),
+		manager: fakeManager(twoCamerasLive),
+	});
+	const row = agg.services.find((s) => s.name === "stream");
+	assert.deepEqual(row, { name: "stream", healthy: true, state: "ok", detail: "2 camera(s), 2 live source(s)" });
+	assert.deepEqual(agg.stream, {
+		state: "live",
+		detail: "2 camera(s), 2 live source(s)",
+		cameraCount: 2,
+		cameraNames: ["front-door", "back-yard"],
+		liveSources: 2,
+	});
+	assert.equal(agg.status, "healthy", "a live manager does not degrade the page");
+});
+
+test("an idle, fully-degraded, or stopping manager states itself on the stream row", () => {
+	const idle = aggregateHealth({ supervisor: fakeSupervisor(idleState), manager: fakeManager({ state: "idle", cameras: [] }) });
+	assert.deepEqual(idle.services.find((s) => s.name === "stream"), { name: "stream", healthy: true, state: "ok", detail: "0 camera(s), 0 live source(s)" });
+
+	const degraded = aggregateHealth({ supervisor: fakeSupervisor(idleState), manager: fakeManager({
+		state: "degraded",
+		cameras: [
+			{ name: "front-door", state: "live", relayPort: 8973, consumers: 0 },
+			{ name: "back-yard", state: "down", reason: "connection refused by the camera", relayPort: null, consumers: 0 },
+		],
+	}) });
+	assert.deepEqual(degraded.services.find((s) => s.name === "stream"), { name: "stream", healthy: false, state: "degraded", detail: "2 camera(s), 1 live source(s)" });
+	assert.equal(degraded.status, "degraded", "a degraded manager degrades the page");
+
+	const stopping = aggregateHealth({ supervisor: fakeSupervisor(idleState), manager: fakeManager(twoCamerasLive, { stopping: true }) });
+	assert.deepEqual(stopping.services.find((s) => s.name === "stream"), { name: "stream", healthy: false, state: "stopped", detail: "the stream manager is stopping" });
+});
+
+test("a failing manager health() is named with its reason — never silent", () => {
+	const agg = aggregateHealth({
+		supervisor: fakeSupervisor(idleState),
+		manager: { stopping: false, health: () => { throw new Error("the manager is gone"); } },
+	});
+	assert.deepEqual(agg.services.find((s) => s.name === "stream"), { name: "stream", healthy: false, state: "unavailable", detail: "the stream manager isn't reachable (the manager is gone)" });
+	assert.equal(agg.status, "degraded");
+});
+
+test("the composed manager renders its stream row in the HTML", () => {
+	const html = renderStatusHtml(aggregateHealth({
+		supervisor: fakeSupervisor(idleState),
+		manager: fakeManager(twoCamerasLive),
+	}));
+	assert.match(html, /stream.*2 camera\(s\), 2 live source\(s\)/);
+});
+
+
 test("the HTML status page is deterministic, script-free, and plain-language", () => {
 	const agg = aggregateHealth({ supervisor: fakeSupervisor(idleState), version: "0.5.3", halStatus: { platform: "darwin", decode: "videotoolbox" } });
 	const a = renderStatusHtml(agg);

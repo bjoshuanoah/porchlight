@@ -2,7 +2,9 @@
 
 /**
  * @typedef {Object} CameraSource
- * @property {string} [url] RTSP/HTTP/file URL to ingest ("-hwaccel videotoolbox" branch).
+ * @property {string} [url] Camera/file source URL. PORCH-154: this URL is the
+ *   stream manager's upstream — only packages/stream opens it; the recorder
+ *   ingests the manager's localhost relay instead.
  * @property {boolean} [loop] For file sources: loop indefinitely (soak fixtures).
  * @property {{
  *   size?: string, fps?: number, encoder?: string, bitrate?: string,
@@ -54,6 +56,11 @@
  *   events drive event-mode recording from porchlight/engine/detections/+.
  * @property {number} [healthProbeMs] Drive-health probe cadence (default 30000).
  * @property {number} [port] Health port (default 8971, bound to 127.0.0.1).
+ * @property {{ base?: number }} [streams] PORCH-154: the stream manager's ONE
+ *   config knob — its base port (optional integer >= 1024, default 8972).
+ *   Relay listeners sit at `base + 1 + sortedIndex(cameraName)`; the recorder
+ *   re-derives the identical formula at spawn time (args.js relayPortFor).
+ *   validateConfig checks it; resolveDefaults leaves it untouched.
  * @property {string} [statePath] Supervisor state file (default <root>/recorder-state.json). Note: written beside the store; when the store is
  *   unavailable this write fails and the state names it (ac-2).
  * @property {string} [ffmpegPath] Default "ffmpeg".

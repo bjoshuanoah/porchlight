@@ -65,9 +65,16 @@ Record<cameraId, { width: number, height: number, data: Uint8Array }>
 - The stream manager (PORCH-154) is the ONLY component allowed to produce it
   for live evaluation; the single-upstream-camera law (one connection per
   camera, every consumer fed) governs where those frames come from.
-- Until the stream manager lands, no runtime component feeds `evaluate()`
-  (the Overwatch harness injects frames in tests) — the absence is documented
-  here, not hidden behind a fake.
+- The per-camera rgb frame lane is in production: packages/stream
+  `StreamManager.subscribeFrames(name, fn)` delivers
+  `{ camera, w, h, t, data }` — rgb24 bytes keyed by the § 1 ids, the exact
+  shape the compositor's `stitchComposite`/`evaluate` consume (data is the
+  row-wise RGB for that camera at its source resolution, `w`×`h`×3 bytes).
+- The Overwatch daemon (PORCH-I-010) attaches to the lane via
+  `subscribeFrames`. The runtime evaluation wiring (compositing the fleet
+  into the dial's input and pacing it at the cap FPS) ships with Overwatch,
+  not here — the engine supplies the per-camera lane; nothing in this repo
+  calls `evaluate()` yet.
 
 ## 4. What Overwatch does NOT get from the engine
 

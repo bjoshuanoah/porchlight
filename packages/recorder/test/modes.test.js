@@ -57,9 +57,12 @@ test("event mode: segments write on events only, with pre/post-roll coverage", (
 	const staging = path.join(root, ".staging");
 	const T = Date.UTC(2026, 10, 20, 12, 15, 0);
 	let now = T;
+	// PORCH-154: config of record carries the camera fleet — the writer's
+	// relay port derives from the camera's position in it.
+	const camDef = /** @type {any} */ ({ name: "camA", source: { url: "rtsp://a" }, recordingMode: "event", preRollSeconds: 10, postRollSeconds: 30 });
 	const cam = new RecorderDaemon({
-		camera: /** @type {any} */ ({ name: "camA", source: { url: "rtsp://a" }, recordingMode: "event", preRollSeconds: 10, postRollSeconds: 30 }),
-		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60 }),
+		camera: camDef,
+		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60, cameras: [camDef] }),
 		activeRoot: () => root,
 		nowMs: () => now,
 		spawn: fakeSpawn().spawn,
@@ -117,7 +120,7 @@ test("manual trigger records into the protected tier; sweeps never prune it", ()
 	const root = tmp("manual");
 	const d = new RecorderDaemon({
 		camera: /** @type {any} */ ({ name: "camA", source: { url: "rtsp://a" }, recordingMode: "event" }),
-		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60 }),
+		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60, cameras: [{ name: "camA", source: { url: "rtsp://a" }, recordingMode: "event" }] }),
 		activeRoot: () => root,
 		spawn: fakeSpawn().spawn,
 		pollMs: 1e9,
@@ -151,7 +154,7 @@ test("continuous cameras ignore event triggers; manual switch moves the writer",
 	let now = Date.UTC(2026, 10, 20, 12, 0, 0);
 	const d = new RecorderDaemon({
 		camera: /** @type {any} */ ({ name: "camA", source: { url: "rtsp://a" } }),
-		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60 }),
+		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60, cameras: [{ name: "camA", source: { url: "rtsp://a" } }] }),
 		activeRoot: () => root,
 		nowMs: () => now,
 		spawn: fake.spawn,
@@ -190,7 +193,7 @@ test("target switches re-spawn ffmpeg immediately at the new tree", async () => 
 	const fake = fakeSpawn();
 	const d = new RecorderDaemon({
 		camera: /** @type {any} */ ({ name: "camA", source: { url: "rtsp://a" }, recordingMode: "event" }),
-		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60 }),
+		config: /** @type {any} */ ({ storageRoot: root, segmentSeconds: 60, cameras: [{ name: "camA", source: { url: "rtsp://a" }, recordingMode: "event" }] }),
 		activeRoot: () => root,
 		spawn: fake.spawn,
 		pollMs: 1e9,

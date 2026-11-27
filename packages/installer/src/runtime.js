@@ -1,10 +1,13 @@
 // runtime.js — the platform daemon: the composition root launchd keeps
-// alive (PORCH-134 ac-1). Starts the engine services of record (the
-// recorder supervisor, idle until cameras arrive in the config of
-// record) and serves the health status page. SIGTERM/SIGINT stop it
-// gracefully so launchd KeepAlive relaunches on crash, not on deploy.
+// alive (PORCH-134 ac-1). Starts the engine services of record — the
+// stream manager (the one upstream connection per camera and its relay
+// lanes, PORCH-154) first, then the recorder supervisor, idle until
+// cameras arrive in the config of record — and serves the health status
+// page. SIGTERM/SIGINT stop it gracefully so launchd KeepAlive relaunches
+// on crash, not on deploy.
 
 import { RecorderSupervisor } from "@porchlight/recorder";
+import { StreamManager } from "@porchlight/stream";
 import { resolveHal } from "@porchlight/hal";
 import { aggregateHealth, createStatusServer } from "./status-page.js";
 import { loadPlatformConfig } from "./config.js";
@@ -54,6 +57,18 @@ function defaultLocalNetworkProbe(log) {
  * }} opts
  */
 export async function startPlatformRuntime({ config, version = "unknown", log = console.log, halStatus, localNetworkProbe, localNetworkProbeMs = 60_000 } = {}) {
+	// The stream manager composes FIRST (PORCH-154): it owns the ONE upstream
+	// connection per camera and serves the relay ports the supervisor's
+	// recorder fleet consumes — it must be answering before the recorder
+	// opens its inputs. The started promise is recorded (the initial fleet
+	// application resolves on it); a failed application is stated on the
+	// manager's own health plane, never silently swallowed.
+	const manager = new StreamManager({ config: /** @type {any} */ (config), log });
+	const managerStarted = manager.start().applyPromise;
+	managerStarted?.catch((err) => {
+		log(`[runtime] stream manager initial fleet application failed: ${err instanceof Error ? err.message : String(err)}`);
+	});
+	log(`[runtime] stream manager up (${/** @type {any[]} */ (config.cameras ?? []).length} camera(s) configured)`);
 	const supervisor = new RecorderSupervisor({ config: /** @type {any} */ (config), log });
 	supervisor.start();
 	log(`[runtime] recorder supervisor up (${/** @type {any[]} */ (config.cameras ?? []).length} camera(s) configured)`);
@@ -78,6 +93,7 @@ export async function startPlatformRuntime({ config, version = "unknown", log = 
 	};
 	const aggregate = () => aggregateHealth({
 		supervisor,
+		manager,
 		version,
 		halStatus: halStatus ?? platformPosture(),
 		localNetwork,
@@ -94,13 +110,18 @@ export async function startPlatformRuntime({ config, version = "unknown", log = 
 	interval.unref();
 	return {
 		supervisor,
+		manager,
+		managerStarted,
 		status,
 		aggregate,
 		/** @returns {Promise<void>} */
 		stop: async () => {
 			clearInterval(interval);
 			await status.close();
+			// The recorder stops before the manager: its recordings drain from
+			// the manager's relay lanes, so the manager closes last.
 			await supervisor.stop();
+			await manager.stop();
 		},
 	};
 }
