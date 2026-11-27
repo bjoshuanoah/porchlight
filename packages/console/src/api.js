@@ -150,6 +150,68 @@ export function createApi(baseUrl = "") {
       return request("/api/transcripts/search", { method: "POST", body });
     },
     transcriptCascadeAudit: () => request("/api/transcripts/cascade/audit"),
+
+    // First-run wizard (PORCH-130): the setup state gate, the two inputs
+    // (deployment name, who you are with an optional picture as a data
+    // URL), and the completion step. Refusals (422) surface the service's
+    // plain-language words verbatim via ApiError.
+    getSetup: () => request("/api/setup"),
+    putSetupDeployment: (name) => request("/api/setup/deployment", { method: "PUT", body: { name } }),
+    putSetupOwner: (owner) => request("/api/setup/owner", { method: "PUT", body: owner }),
+    getSetupPhoto: () => request("/api/setup/photo"),
+    completeSetup: () => request("/api/setup/complete", { method: "POST" }),
+
+    // Timeline plane (PORCH-130): recording coverage, hour segments, and
+    // detection events — epoch seconds UTC throughout, matching the engine
+    // contract. A refused moment-lookup comes back 200 with
+    // { gap: "unavailable" } and passes through as data, never an error.
+    listRecordingDays: (cameraId) => request(`/api/segments/days?cameraId=${encodeURIComponent(cameraId)}`),
+    listHourSegments: ({ cameraId, date, hour } = {}) => {
+      const params = new URLSearchParams();
+      if (cameraId !== undefined) params.set("cameraId", cameraId);
+      if (date !== undefined) params.set("date", date);
+      if (hour !== undefined) params.set("hour", hour);
+      const query = params.toString();
+      return request(`/api/segments${query ? `?${query}` : ""}`);
+    },
+    segmentAt: ({ cameraId, at } = {}) => {
+      const params = new URLSearchParams();
+      if (cameraId !== undefined) params.set("cameraId", cameraId);
+      if (at !== undefined) params.set("at", String(at));
+      const query = params.toString();
+      return request(`/api/segment${query ? `?${query}` : ""}`);
+    },
+    listEvents: ({ cameraId, from, to, limit } = {}) => {
+      const params = new URLSearchParams();
+      if (cameraId !== undefined) params.set("cameraId", cameraId);
+      if (from !== undefined) params.set("from", String(from));
+      if (to !== undefined) params.set("to", String(to));
+      if (limit !== undefined) params.set("limit", String(limit));
+      const query = params.toString();
+      return request(`/api/events${query ? `?${query}` : ""}`);
+    },
+    // A recorded clip's same-origin path — the browser <video> handles the
+    // Range requests itself, so the wrapper only prefixes the base.
+    mediaUrl: (path) => url(path),
+
+    // Engine health seams (PORCH-130): the engine plane's liveness plus the
+    // two service rows ({state, detail} plain-language health documents).
+    getHealth: () => request("/api/health"),
+    getService: () => request("/service"),
+    getSystemStorage: () => request("/storage"),
+
+    // Live MJPEG seams (PORCH-130): the same-origin stream each <img>
+    // consumes — the stream manager owns the framing, the SPA just points
+    // at it.
+    liveUrl: (id) => url(`/live/${encodeURIComponent(id)}`),
+
+    // Engine camera registration seam (PORCH-130): after a successful probe
+    // this registers the camera on the recorder and stream planes live —
+    // POST /cameras {url} hands the fleet to both supervisors. A refused
+    // registration may be a 200 {ok:false, reason} or a 422; both surface
+    // plain language.
+    registerCamera: (body) =>
+      failSafe(() => request("/cameras", { method: "POST", body })),
   };
 
   async function failSafe(call) {
