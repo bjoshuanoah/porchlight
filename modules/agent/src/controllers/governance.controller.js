@@ -16,10 +16,11 @@ export class GovernanceController {
    *   verifySession: (token: string | null) => Promise<{ did: string, deviceId?: string } | null>,
    * }} deps
    */
-  constructor({ profiles, assignments, provenance, verifySession }) {
+  constructor({ profiles, assignments, provenance, migration, verifySession }) {
     this.profiles = profiles;
     this.assignments = assignments;
     this.provenance = provenance;
+    this.migration = migration;
     this.verifySession = verifySession;
   }
 
@@ -130,6 +131,33 @@ export class GovernanceController {
         return { rows: [], total: 0 };
       }
       return this.provenance.forMember({ memberId, limit: Number(req.query?.limit ?? 50), offset: Number(req.query?.offset ?? 0) });
+    });
+  };
+
+  /** POST /migrations — the admin's explicit per-member import of the one-time export artifact (PORCH-151). */
+  importMember = async (req, res) => {
+    return delegate(res, async () => {
+      const did = await this.#actor(req);
+      const artifact = this.#body(req).export ?? (this.#body(req).format ? this.#body(req) : null);
+      return this.migration.importOne({ actorDid: did, isAdmin: await this.assignments.resolvesAdmin(did), export: artifact });
+    });
+  };
+
+  /** GET /migrations?memberId= — the per-member migration state; without memberId, the full migration list. */
+  migrationStatus = async (req, res) => {
+    return delegate(res, async () => {
+      const did = await this.#actor(req);
+      const isAdmin = await this.assignments.resolvesAdmin(did);
+      const memberId = req.query?.memberId;
+      if (typeof memberId === "string" && memberId) {
+        return this.migration.statusFor({ actorDid: did, isAdmin, memberId });
+      }
+      return this.migration.list({
+        actorDid: did,
+        isAdmin,
+        limit: Number(req.query?.limit ?? 50),
+        offset: Number(req.query?.offset ?? 0),
+      });
     });
   };
 

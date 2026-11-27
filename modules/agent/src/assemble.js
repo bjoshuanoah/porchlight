@@ -2,6 +2,7 @@ import { ProfileService } from "./services/profiles.service.js";
 import { AssignmentService } from "./services/assignments.service.js";
 import { ResolutionService } from "./services/resolution.service.js";
 import { ProvenanceService } from "./services/provenance.service.js";
+import { MigrationService } from "./services/migration.service.js";
 import { AgentAuditService } from "./services/audit.service.js";
 import { GovernanceController } from "./controllers/governance.controller.js";
 import { MemberController } from "./controllers/member.controller.js";
@@ -41,6 +42,11 @@ import { ToolDelegationService } from "./tools/delegation.service.js";
  *     re-resolves the profile on every call, no restart.
  *   agentTypeFor?: (memberId: string) => string | Promise<string>,
  *     The member's agent type resolver; default AGENT_TYPE_HOUSEHOLD_MEMBER.
+ *   migrationBackend?: import("@porchlight/agent-runtime").KeyValueBackend,
+ *     PORCH-151: the per-member storage-seam backend the migration import
+ *     writes through (createMemberStores member:<id>:<scope> keying over the
+ *     hub's own KV store). Absent → the migration surface fails closed with
+ *     an explicit not-configured state; nothing else in the module needs it.
  *   homeSurface?: import("./tools/home-tools.js").HomeToolSurface,
  *     PORCH-149: the home module's session-free actor seams (its
  *     `toolSurface`). Present → the module builds the MCP-for-the-home tool
@@ -81,6 +87,19 @@ export function assembleAgentModule(store, options = {}) {
   const provenance = new ProvenanceService(inferenceProvenance, now);
   const agentTypeFor = options.agentTypeFor ?? null;
 
+  // PORCH-151: the per-member nanobot-class migration service. The export
+  // artifact is the ONLY input surface (one-time artifact, never a bridge,
+  // never a coexistence path); the import writes the member's topics/memory/
+  // soul/keyset through @porchlight/agent-runtime's own per-member stores
+  // over the injected backend. Without a backend the migration fails closed
+  // with an explicit not-configured state.
+  const migration = new MigrationService({
+    backend: options.migrationBackend ?? null,
+    migrations: collection("agent_migrations"),
+    audit,
+    now,
+  });
+
   // PORCH-149: the MCP-for-the-home tool registry. When the home module's
   // actor seams are injected, the registry rides the agent runtime
   // library's tool-execution seam (composition seam 2): the delegation law
@@ -92,7 +111,7 @@ export function assembleAgentModule(store, options = {}) {
     : null;
 
   const controllers = {
-    governance: new GovernanceController({ profiles, assignments, provenance, verifySession: options.verifySession }),
+    governance: new GovernanceController({ profiles, assignments, provenance, migration, verifySession: options.verifySession }),
     member: new MemberController({ profiles, assignments, resolution, provenance, verifySession: options.verifySession }),
   };
 
@@ -104,6 +123,8 @@ export function assembleAgentModule(store, options = {}) {
     resolutionService: resolution,
     provenanceService: provenance,
     auditService: audit,
+    /** PORCH-151: the per-member nanobot-class migration service. */
+    migrationService: migration,
     /** The profile-routed inference seam consumer (composition seam 1). */
     createProfileInference: ({ providers, log = null } = {}) =>
       createProfileInferenceProvider({

@@ -6,7 +6,7 @@ import { assembleAgentModule } from "../../src/index.js";
  * identity plane faked the hub would inject it: sessions, the hub-admin
  * fact, and the family facts the parental narrowing composes against.
  */
-export function makeAgentHub({ admins = [], families = [] } = {}) {
+export function makeAgentHub({ admins = [], families = [], ...assembleOptions } = {}) {
   const store = createMemoryStore();
   const sessions = new Map();
   const events = [];
@@ -19,6 +19,7 @@ export function makeAgentHub({ admins = [], families = [] } = {}) {
     adminFacts,
     familyFacts,
     onProfileChange: (event) => events.push(event),
+    ...assembleOptions,
   });
   const sign = (did, deviceId = "dev-1") => {
     const token = `tok-${did}-1`;

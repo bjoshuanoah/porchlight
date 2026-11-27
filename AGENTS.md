@@ -27,8 +27,9 @@ porchlight/
 │   ├── social/     # Social domain: routes → controllers → services → models — @porchlight/social (public)
 │   ├── agent/      # Agent domain: model profiles (InferenceProfile/ProfileAssignment), the three-part
 │   │               #   resolution chain (admin availability gate → parental narrowing → type/member), the
-│   │               #   profile-routed inference seam into @porchlight/agent-runtime, provenance, and
-│   │               #   never-silent degradation — @porchlight/agent (public) (PORCH-148)
+│   │               #   profile-routed inference seam into @porchlight/agent-runtime, provenance,
+│   │               #   never-silent degradation, and the per-member nanobot-class migration surface
+│   │               #   (one-time export-artifact import with read-back, admin-gated) — @porchlight/agent (public) (PORCH-148/151)
 │   └── home/       # Home domain: homes, rooms/outdoor areas, device command lifecycle, scenes, automations, home audit — @porchlight/home (public) (PORCH-137)
 ├── packages/
 │   ├── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)

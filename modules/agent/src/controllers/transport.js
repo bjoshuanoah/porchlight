@@ -20,6 +20,11 @@ const STATUS_BY_CODE = {
   E_PROVIDER_CLASS_INVALID: 400,
   E_MODEL_REQUIRED: 400,
   E_VALIDATION: 400,
+  // PORCH-151: the per-member migration vocabulary.
+  E_MIGRATION_REJECTED: 400,
+  E_MIGRATION_ALREADY_MIGRATED: 409,
+  E_MIGRATION_NOT_CONFIGURED: 503,
+  E_MIGRATION_FAILED: 500,
 };
 
 export function memberError(res, error) {
