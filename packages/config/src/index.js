@@ -110,7 +110,8 @@ function crossKindPairs(zoneDefs, maskDefs) {
 /**
  * Create the config console service.
  * @param {{ root?: string, now?: () => Date, consoleDist?: string | null,
- *   recorderBase?: string, streamBase?: string }} [opts]
+ *   recorderBase?: string, streamBase?: string,
+ *   transcription?: { handle: (req, res, method, segments, url) => Promise<boolean> } }} [opts]
  *   root — Porchlight root dir (default /Library/Porchlight); docs under
  *   <root>/config/console/. now — injectable clock for the scheduler.
  *   consoleDist — static console build dir (default packages/console/dist;
@@ -120,6 +121,10 @@ function crossKindPairs(zoneDefs, maskDefs) {
  *   streamBase — stream manager control base URL (default
  *   http://127.0.0.1:8972), used by POST /cameras's second apply and the
  *   /live + health seams.
+ *   transcription — the engine transcription plane's route part
+ *   (createTranscriptRoutes(service) from @porchlight/transcript, PORCH-155);
+ *   when provided, /api/transcription and /api/transcripts dispatch there
+ *   before any config-plane route.
  * @returns {{ root, store, publisher, cameras, zones, masks, compose, speed,
  *   profiles, base, scheduler, storage, server, start(httpPort) }}
  */
@@ -152,7 +157,15 @@ export function createConfigService(opts = {}) {
 		scheduler,
 		storage,
 		compute,
+		/** The transcription plane part (PORCH-155); undefined when the engine composition doesn't inject it. */
+		transcription: opts.transcription,
 	};
+	// The transcription stage rides the compute posture: a Models/Compute
+	// re-point of the transcription stage applies LIVE to the injected
+	// TranscriptionService (the provider cache rebuilds; no restart).
+	if (opts.transcription && typeof opts.transcription.repoint === "function") {
+		wireComputeRepoints({ publisher, appliers: { transcription: () => opts.transcription.repoint() } });
+	}
 	const server = createConfigServer(parts, { consoleDist: opts.consoleDist, root, recorderBase: opts.recorderBase, streamBase: opts.streamBase, probeImpl: opts.probeImpl });
 	/** @type {any} */
 	const service = {

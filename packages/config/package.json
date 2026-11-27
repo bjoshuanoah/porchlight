@@ -22,6 +22,9 @@
 		"@porchlight/recorder": "0.5.3",
 		"yaml": "^2.9.1"
 	},
+	"devDependencies": {
+		"@porchlight/transcript": "0.5.3"
+	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/bjoshuanoah/porchlight.git",

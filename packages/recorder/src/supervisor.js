@@ -59,6 +59,11 @@ export class RecorderSupervisor {
 		this.paused = false;
 		/** @type {import("./bus.mqtt.js").MqttBus | null | undefined} */
 		this.bus = opts.bus;
+		// The retention index cascade (PORCH-155; TS 13): an injected sink the
+		// retention sweep drops transcript text + vector payloads into IN THE
+		// SAME PASS as the segment deletion. Absent = no cascade (the plane is
+		// not wired); the composition root owns that wiring.
+		this.retentionCascade = opts.retentionCascade ?? null;
 		this.backend = new StorageBackend({
 			primary: this.storageRoot,
 			failover: opts.config.failoverRoot ?? null,
@@ -414,46 +419,62 @@ export class RecorderSupervisor {
 	}
 
 	sweepRetention() {
-		try {
-			const root = this.backend.activeLocation() ?? this.storageRoot;
-			pruneRolling({
-				root,
-				retentionDays: this.d.retentionDays,
-				nowMs: Date.now(),
-				coldRoot: this.config.coldRoot ?? null,
-				fs: this.fs,
-				onEvent: (e) => {
-					this.recordEvent(e);
-					this.log(`[supervisor] retention: pruned ${e.dates.join(", ")}`);
-				},
-			});
-			pruneEventTier({
-				root,
-				eventRetentionDays: this.d.eventRetentionDays,
-				retentionRules: this.config.retentionRules ?? [],
-				nowMs: Date.now(),
-				fs: this.fs,
-				onEvent: (e) => {
-					this.recordEvent(e);
-					this.log(`[supervisor] event tier: pruned ${e.dates.join(", ")}`);
-				},
-			});
-			const wd = retentionWatchdog({
-				root,
-				retentionDays: this.d.retentionDays,
-				nowMs: Date.now(),
-				highWaterFraction: this.d.highWaterFraction,
-				fs: this.fs,
-				onEvent: (e) => {
-					this.recordEvent(e);
-					this.log(`[supervisor] ${e.type}: ${e.detail ?? ""}`);
-				},
-			});
-			if (wd?.alerted) this.writeState();
-		} catch (err) {
-			this.recordEvent({ type: "retention.error", detail: String(err) });
-			this.log(`[supervisor] retention sweep failed: ${/** @type {Error} */ (err).message}`);
-		}
+		return (async () => {
+			try {
+				const root = this.backend.activeLocation() ?? this.storageRoot;
+				const rolling = pruneRolling({
+					root,
+					retentionDays: this.d.retentionDays,
+					nowMs: Date.now(),
+					coldRoot: this.config.coldRoot ?? null,
+					fs: this.fs,
+					onEvent: (e) => {
+						this.recordEvent(e);
+						this.log(`[supervisor] retention: pruned ${e.dates.join(", ")}`);
+					},
+				});
+				// The index cascade (PORCH-155): DELETED rolling dates drop their
+				// transcript text + vector payloads in the SAME pass — never a
+				// later cleanup hope. Cold-moved dates keep theirs (the footage
+				// still exists; the cascade follows deletion).
+				let cascadeRolling = null;
+				if (this.retentionCascade && rolling.removed.length > 0) {
+					cascadeRolling = await this.retentionCascade.dropRollingDates(rolling.removed);
+				}
+				const events = pruneEventTier({
+					root,
+					eventRetentionDays: this.d.eventRetentionDays,
+					retentionRules: this.config.retentionRules ?? [],
+					nowMs: Date.now(),
+					fs: this.fs,
+					onEvent: (e) => {
+						this.recordEvent(e);
+						this.log(`[supervisor] event tier: pruned ${e.dates.join(", ")}`);
+					},
+				});
+				let cascadeEvents = null;
+				if (this.retentionCascade && events.removed.length > 0) {
+					cascadeEvents = await this.retentionCascade.dropEventDates(events.removed);
+				}
+				const wd = retentionWatchdog({
+					root,
+					retentionDays: this.d.retentionDays,
+					nowMs: Date.now(),
+					highWaterFraction: this.d.highWaterFraction,
+					fs: this.fs,
+					onEvent: (e) => {
+						this.recordEvent(e);
+						this.log(`[supervisor] ${e.type}: ${e.detail ?? ""}`);
+					},
+				});
+				if (wd?.alerted) this.writeState();
+				return { rolling, events, cascadeRolling, cascadeEvents };
+			} catch (err) {
+				this.recordEvent({ type: "retention.error", detail: String(err) });
+				this.log(`[supervisor] retention sweep failed: ${/** @type {Error} */ (err).message}`);
+				return null;
+			}
+		})();
 	}
 
 	state() {

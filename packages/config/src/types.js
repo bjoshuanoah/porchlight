@@ -10,6 +10,7 @@ export const KNOB_WHITELIST = Object.freeze([
 	"detectionEnabled",
 	"detectionClasses",
 	"audioDetectionEnabled",
+	"transcriptionEnabled",
 	"alertRouting",
 	"zoneEnabled",
 ]);
@@ -21,6 +22,7 @@ export const KNOB_DEFAULTS = Object.freeze({
 	detectionEnabled: true,
 	detectionClasses: [],
 	audioDetectionEnabled: false,
+	transcriptionEnabled: false,
 	alertRouting: [],
 	zoneEnabled: true,
 });
@@ -123,6 +125,7 @@ export function validateKnobValue(knob, value) {
 			return value;
 		case "detectionEnabled":
 		case "audioDetectionEnabled":
+		case "transcriptionEnabled":
 		case "zoneEnabled":
 			return assertBoolean(value, `knob "${knob}"`);
 		case "detectionClasses":

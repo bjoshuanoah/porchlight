@@ -81,7 +81,7 @@ function readJsonBody(req) {
  * @param {{ consoleDist?: string | null }} [opts] static console dist override (null disables)
  */
 export function createConfigServer(parts, opts = {}) {
-	const { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage, compute } = parts;
+	const { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage, compute, transcription } = parts;
 	const consoleDist = opts.consoleDist === undefined ? defaultConsoleDistPath() : opts.consoleDist;
 	const probeImpl = opts.probeImpl ?? validateStreamUrl;
 	const root = opts.root ?? null;
@@ -384,6 +384,30 @@ export function createConfigServer(parts, opts = {}) {
 	async function handleApi(req, res, method, r, url) {
 		// `r` is the path after /api. Routes mirror the PORCH-135 contract table
 		// exactly — no invented endpoints.
+
+		// The transcription plane (PORCH-155): the engine composition injects
+		// the transcript routes as a part; when wired, /api/transcription and
+		// /api/transcripts dispatch there first (the handlers read their own
+		// request bodies, so this stays ahead of readJsonBody). When the part
+		// isn't wired — a console build without the engine composition — the
+		// surface refuses 503 in plain language instead of pretending to be a
+		// config route that doesn't exist (never-silent law).
+		if (r[0] === "transcription" || r[0] === "transcripts") {
+			if (!transcription) {
+				return sendJson(res, 503, { error: "the transcription service of record is not wired into this build's config service — the engine composition owns that wiring" });
+			}
+			try {
+				const handled = await transcription.handle(req, res, method, r, url);
+				if (handled) return;
+			} catch (err) {
+				// The transcript plane carries its own ValidationError class (the
+				// packages share the contract, not the import), so instanceof misses
+				// it — map by name to keep the plane's plain-language 422s intact.
+				if (err?.name === "ValidationError") return sendJson(res, 422, { error: err.message });
+				throw err;
+			}
+		}
+
 		const body = method === "POST" || method === "PUT" ? await readJsonBody(req) : undefined;
 
 		if (r.length === 1 && r[0] === "health") {
