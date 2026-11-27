@@ -186,7 +186,9 @@ test("camera bridge: add a camera through the engine onboarding, read feeds, min
   assert.equal(list.status, 200);
   const listed = ((await list.json()) as Json).cameras as Json[];
   assert.equal(listed.length, 1);
-  assert.deepEqual(listed[0].health, { recording: { state: "recording" }, playback: { state: "live" }, detection: { state: "ok" } });
+  // The audio plane joins the health contract (PORCH-153); the stub engine
+  // answers no audio plane, so the hub renders the explained unavailable row.
+  assert.deepEqual(listed[0].health, { recording: { state: "recording" }, playback: { state: "live" }, detection: { state: "ok" }, audio: { state: "unavailable", detail: null } });
 
   // The scoped view session mints the engine token and the feed descriptor
   // (portrait doorbell, per-camera audio).

@@ -96,13 +96,15 @@ export function createHttpEngineAdapter({ baseUrl, fetchImpl = globalThis.fetch 
         return { gap: "unavailable" };
       }
     },
-    /** The three health planes answer independently (PORCH-I-009 health contract). */
+    /** The health planes answer independently (PORCH-I-009 health contract;
+     * the audio plane joins in PORCH-153). */
     async health(engineCameraId) {
       const answer = await call(`/cameras/${encodeURIComponent(engineCameraId)}/health`);
       return {
         recording: answer?.recording ?? { state: "unavailable" },
         playback: answer?.playback ?? { state: "unavailable" },
         detection: answer?.detection ?? { state: "unavailable" },
+        audio: answer?.audio ?? { state: "unavailable" },
       };
     },
     async serviceHealth() {

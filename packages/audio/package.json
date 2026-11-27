@@ -1,0 +1,35 @@
+{
+	"name": "@porchlight/audio",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight engine audio event detection — per-camera local audio classification riding the stream-serving path (PORCH-153): windowed PCM classification through the AudioProvider seam, AudioEvent publishing in the detections bus family, per-camera off-by-default enablement, and never-silent consumer-loss degradation.",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"scripts": {
+		"test": "node --test 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'audio ships plain JS (no build)'"
+	},
+	"dependencies": {
+		"@porchlight/hal": "0.5.3",
+		"mqtt": "^5.16.1",
+		"onnxruntime-node": "^1.31.1"
+	},
+	"devDependencies": {
+		"@porchlight/detection": "0.5.3",
+		"aedes": "^1.2.0"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/audio"
+	}
+}

@@ -80,8 +80,25 @@ test("ac-5: the three health planes explain independently; recording-but-not-det
   assert.match(detection.note, /Detection isn't running/);
   assert.match(detection.note, /recording and playback continue/, "the plane copy names the independent planes");
   assert.equal(healthExplain({ plane: "recording", state: "disabled" }, wideFeed), "Recording is turned off for Driveway — live view continues, but nothing is captured.");
-  // Unknown plane states fall back to a read-failure line, never silence.
-  assert.match(healthExplain({ plane: "recording", state: "unknown-future" }, wideFeed), /can't be read/);
+
+});
+
+test("ac-4 (PORCH-153): the audio plane explains the consumer-loss degradation — audio only, never the other planes", () => {
+  const audioDegraded = {
+    ...doorbellFeed,
+    health: { recording: { state: "recording" }, playback: { state: "live" }, detection: { state: "ok" }, audio: { state: "degraded" } },
+  };
+  const notes = healthNotes(audioDegraded);
+  const audio = notes.find((row) => row.plane === "audio");
+  assert.match(audio.note, /Audio event analysis isn't running/, "the degradation names itself");
+  assert.match(audio.note, /recording and visual detection continue/, "the copy states what still works");
+  // The disabled state reads its own copy; recording/detection stay independent.
+  assert.equal(healthExplain({ plane: "audio", state: "disabled" }, doorbellFeed), "Audio detection is off for this camera — nothing listens, and recording stays on.");
+  assert.equal(healthExplain({ plane: "audio", state: "ok" }, doorbellFeed), "Audio detection is on — sounds raise camera events.");
+  assert.match(healthExplain({ plane: "audio", state: "unknown-future" }, doorbellFeed), /can't be read/);
+  // A feed whose engine never answered audio still renders an explained row.
+  const healthlessNotes = healthNotes({ ...doorbellFeed, health: {} });
+  assert.equal(healthlessNotes.find((row) => row.plane === "audio").state, "unavailable");
 });
 
 test("ac-1: feed play states name the gap — offline, missing feed path, and the recording-disabled note", () => {

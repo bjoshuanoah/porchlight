@@ -345,6 +345,29 @@ describe("compute REST surface + camera seams", () => {
 		assert.equal(camHealth.playback.state, "unavailable");
 		assert.match(camHealth.playback.detail, /stream manager \(PORCH-154\)/);
 		assert.ok("state" in camHealth.detection);
+		// The audio plane (PORCH-153): the knob audioDetectionEnabled is off
+		// by default, so a camera states its disabled plane — even though the
+		// audio-classification stage's compute status is an independent state.
+		assert.deepEqual(camHealth.audio, { state: "disabled", detail: null });
+
+		// With audio detection enabled for the camera, the plane reports the
+		// audio stage's never-silent posture: unregistered reporter →
+		// unavailable with the stated reason, no silent blank.
+		await fetch(`http://127.0.0.1:${handle.port}/api/config/base`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ "cam-live": { audioDetectionEnabled: true } }),
+		});
+		const enabledHealth = await fetch(`http://127.0.0.1:${handle.port}/cameras/cam-live`).then((r) => r.json());
+		assert.equal(enabledHealth.audio.state, "unavailable");
+		assert.match(String(enabledHealth.audio.detail), /not reporting — service wiring pending/, "the stage's own reason rides the plane");
+		// A failed audio stage (the consumer-loss state) renders degraded WITH
+		// its explained reason — never a silent degradation.
+		service.compute.registerStatus("audio-classification", () => ({ state: "failed", providerClass: null, model: null, executionTarget: null, reason: "audio event analysis stopped (consumer stopped) — sounds no longer raise camera events; recording and visual detection continue." }));
+		const failedHealth = await fetch(`http://127.0.0.1:${handle.port}/cameras/cam-live`).then((r) => r.json());
+		assert.equal(failedHealth.audio.state, "degraded");
+		assert.match(String(failedHealth.audio.detail), /audio event analysis stopped \(consumer stopped\)/);
+		assert.match(String(failedHealth.audio.detail), /recording and visual detection continue\.$/);
 
 		const unknown = await fetch(`http://127.0.0.1:${handle.port}/cameras/nope`);
 		assert.equal(unknown.status, 404);

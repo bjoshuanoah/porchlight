@@ -21,8 +21,8 @@ export function engineFixture({ now, interpreter, dedupWindowSec, ...rest } = {}
     segmentsImpl: () => [],
     segmentAtImpl: () => ({ ref: "seg_main_at", path: "/media/seg.m4s", kind: "segment" }),
     evidenceAtImpl: () => ({ kind: "still", ref: "still_main_at", path: "/media/still.jpg" }),
-    /** The three planes answer independently — that IS the health contract. */
-    planes: { recording: { state: "recording" }, playback: { state: "live" }, detection: { state: "ok" } },
+    /** The planes answer independently — that IS the health contract; audio joins in PORCH-153. */
+    planes: { recording: { state: "recording" }, playback: { state: "live" }, detection: { state: "ok" }, audio: { state: "ok" } },
     serviceState: { state: "ok", detail: null },
     storageState: { state: "ok", detail: null },
 
@@ -72,7 +72,7 @@ export function engineFixture({ now, interpreter, dedupWindowSec, ...rest } = {}
       const recording = engine.disabledCameras?.has(String(engineCameraId))
         ? { state: "disabled" }
         : engine.planes.recording;
-      return { recording, playback: engine.planes.playback, detection: engine.planes.detection };
+      return { recording, playback: engine.planes.playback, detection: engine.planes.detection, audio: engine.planes.audio };
     },
     async serviceHealth() {
       return engine.serviceState;
