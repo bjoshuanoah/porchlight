@@ -32,7 +32,7 @@ const frame = { camera: "c", clipStart: 100, clipEnd: 101, sampleRate: 16000, da
 
 test("classify decodes one [1, classes] output into hits above threshold", async () => {
 	const provider = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx", confThreshold: 0.5 })
-		.init(fakeOrt(new Float32Array([0.7, 0.2, 0.9, 0.01]), [1, 4]));
+		.init(fakeOrt(new Float32Array([0.7, 0.2, 0.9, 0.01]), [1, 4]), { executionProviders: ["coreml"] });
 	const got = await provider.classify(frame);
 	assert.deepEqual(got.map((h) => h.cls), ["glass-break", "smoke-co-alarm"]);
 	assert.ok(Math.abs(got[0].conf - 0.7) < 1e-6, `conf ${got[0].conf}`);
@@ -41,12 +41,12 @@ test("classify decodes one [1, classes] output into hits above threshold", async
 
 test("a model/class-name disagreement fails loudly, never guesses", async () => {
 	const provider = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx", classNames: ["only-one"] })
-		.init(fakeOrt(new Float32Array([0.7, 0.2, 0.9, 0.01]), [1, 4]));
+		.init(fakeOrt(new Float32Array([0.7, 0.2, 0.9, 0.01]), [1, 4]), { executionProviders: ["coreml", "cpu"] });
 	await assert.rejects(() => provider.classify(frame), /4 classes but 1 class labels/);
 });
 
 test("window sample rate must match the model's rate — resampling is upstream's job", async () => {
-	const provider = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx" }).init(fakeOrt(new Float32Array(4), [1, 4]));
+	const provider = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx", executionProviders: ["coreml"] }).init(fakeOrt(new Float32Array(4), [1, 4]));
 	await assert.rejects(
 		() => provider.classify({ ...frame, sampleRate: 8000 }),
 		/resampling is the stream-serving path's responsibility/,
@@ -83,7 +83,7 @@ test("never-silent EP fallback: accelerated rung drops, the CPU posture is state
 });
 
 test("a native run reports state native with a null reason — status never lies", async () => {
-	const provider = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx" }).init(fakeOrt(new Float32Array(4), [1, 4]));
+	const provider = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx", executionProviders: ["coreml"] }).init(fakeOrt(new Float32Array(4), [1, 4]));
 	const status = provider.status();
 	assert.equal(status.state, "native");
 	assert.equal(status.reason, null);
@@ -94,7 +94,7 @@ test("a native run reports state native with a null reason — status never lies
 test("classify before init refuses; close releases the session", async () => {
 	const provider = new AudioClassifierProvider({ modelPath: "/models/audio.onnx" });
 	await assert.rejects(() => provider.classify(frame), /init\(\) must run/);
-	const provider2 = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx" }).init(fakeOrt(new Float32Array(4), [1, 4]));
+	const provider2 = await new AudioClassifierProvider({ modelPath: "/models/audio.onnx", executionProviders: ["coreml"] }).init(fakeOrt(new Float32Array(4), [1, 4]));
 	await provider2.close();
 	assert.equal(provider2.session, null);
 });
