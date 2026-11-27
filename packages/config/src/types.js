@@ -32,8 +32,8 @@ const DETECTION_CLASSES = ["person", "animal", "vehicle"];
 const ALERT_ROUTINGS = ["bus", "webhook"];
 const SCOPE_LIST = ["global", "camera"];
 
-// Safe path/URL component (same discipline as the recorder camera names).
-const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** Safe path/URL component (same discipline as the recorder camera names). */
+export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export class ValidationError extends Error {
 	constructor(message) {

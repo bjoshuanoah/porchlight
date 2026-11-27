@@ -35,7 +35,122 @@ function percentFromEvent(event, element) {
   ];
 }
 
-export default function ZoneEditor({ camera, api }) {
+// Add a camera (PORCH-130): the compact registration section that tops the
+// Cameras tab — probe the stream, then hand it to the engine to register
+// and start serving. Refusals surface verbatim as data.
+function AddCamera({ api, onAdded }) {
+  const [name, setName] = useState("");
+  const [streamUrl, setStreamUrl] = useState("");
+  const [probe, setProbe] = useState(null); // { ok, text }
+  const [addNote, setAddNote] = useState(null); // { ok, text }
+  const [busy, setBusy] = useState(false);
+
+  async function validate() {
+    if (!streamUrl.trim()) {
+      setProbe({ ok: false, text: "Enter the camera's stream URL to probe." });
+      return;
+    }
+    setBusy(true);
+    setProbe(null);
+    try {
+      const result = await api.validateCameraUrl(streamUrl.trim());
+      if (result?.ok === false || result?.ok === undefined) {
+        setProbe({ ok: false, text: result?.reason ?? "The stream did not answer." });
+      } else {
+        const dims = result.aspect?.width && result.aspect?.height ? ` at ${result.aspect.width}×${result.aspect.height}` : "";
+        setProbe({ ok: true, text: `The stream answers${dims}${result.audio ? ", with audio" : ""}.` });
+      }
+    } catch (failure) {
+      setProbe({ ok: false, text: failure.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    setBusy(true);
+    setAddNote(null);
+    try {
+      const body = { url: streamUrl.trim() };
+      const trimmed = name.trim();
+      if (trimmed) body.name = trimmed;
+      const result = await api.registerCamera(body);
+      const ok = result?.ok !== false;
+      setAddNote(ok
+        ? { ok: true, text: `${trimmed || result?.cameraId || "The new camera"} was added and is starting to record and stream.` }
+        : { ok: false, text: result?.reason ?? "The camera could not be added." });
+      if (ok) {
+        setStreamUrl("");
+        setName("");
+        setProbe(null);
+        await onAdded?.();
+      }
+    } catch (failure) {
+      setAddNote({ ok: false, text: failure.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Stack spacing={2}>
+        <Typography variant="subtitle2">Add a camera</Typography>
+        <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap", gap: 2 }}>
+          <TextField
+            size="small"
+            label="Name (optional)"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            sx={{ minWidth: 180 }}
+          />
+          <TextField
+            size="small"
+            label="Stream URL"
+            value={streamUrl}
+            onChange={(event) => setStreamUrl(event.target.value)}
+            placeholder="rtsp://example.local/camera1"
+            sx={{ minWidth: 320, flex: 1 }}
+          />
+        </Stack>
+        {probe?.text && (
+          <Typography variant="body2" color={probe.ok ? "text.secondary" : "error"}>
+            {probe.text}
+          </Typography>
+        )}
+        {addNote?.text && (
+          <Typography variant="body2" color={addNote.ok ? "text.secondary" : "error"}>
+            {addNote.text}
+          </Typography>
+        )}
+        <Stack direction="row" spacing={1}>
+          <Button variant="outlined" onClick={validate} disabled={busy}>
+            Validate
+          </Button>
+          <Button variant="contained" onClick={add} disabled={busy || !streamUrl.trim() || probe?.ok !== true}>
+            Add camera
+          </Button>
+        </Stack>
+      </Stack>
+    </Paper>
+  );
+}
+
+// The camera editor proper (PORCH-135): zone + mask editing, unchanged.
+export default function ZoneEditor({ camera, api, onCamerasChanged }) {
+  return (
+    <Stack spacing={2}>
+      <AddCamera api={api} onAdded={onCamerasChanged} />
+      {camera ? (
+        <ZonePanels camera={camera} api={api} />
+      ) : (
+        <Typography color="text.secondary">Select a camera to edit its zones and masks.</Typography>
+      )}
+    </Stack>
+  );
+}
+
+function ZonePanels({ camera, api }) {
   const [kind, setKind] = useState("zone");
   const [zones, setZones] = useState([]);
   const [masks, setMasks] = useState([]);
@@ -68,9 +183,7 @@ export default function ZoneEditor({ camera, api }) {
     refresh();
   }, [cameraId]); // eslint-disable-line react-hooks/exhaustive-deps -- refresh is stable per camera
 
-  if (!camera) {
-    return <Typography color="text.secondary">Select a camera to edit its zones and masks.</Typography>;
-  }
+  if (!camera) return null;
 
   function startOrExtend(point) {
     if (drag || closed) return;

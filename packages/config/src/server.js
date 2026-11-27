@@ -15,6 +15,7 @@ import { NotFoundError, ValidationError, assertId } from "./types.js";
 import { renderTestPattern } from "./snapshot.js";
 import { validateStreamUrl } from "./stream-validate.js";
 import { registerStreamCamera, requireStreamUrl } from "./engine-cameras.js";
+import { SEAM_MEDIA_PREFIX } from "./segments.js";
 
 const MIME_TYPES = {
 	".html": "text/html; charset=utf-8",
@@ -81,7 +82,7 @@ function readJsonBody(req) {
  * @param {{ consoleDist?: string | null }} [opts] static console dist override (null disables)
  */
 export function createConfigServer(parts, opts = {}) {
-	const { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage, compute, transcription } = parts;
+	const { cameras, zones, masks, compose, speed, profiles, base, scheduler, storage, compute, transcription, segments: segmentIndex, events, setup } = parts;
 	const consoleDist = opts.consoleDist === undefined ? defaultConsoleDistPath() : opts.consoleDist;
 	const probeImpl = opts.probeImpl ?? validateStreamUrl;
 	const root = opts.root ?? null;
@@ -128,9 +129,12 @@ export function createConfigServer(parts, opts = {}) {
 	 * paths the hub's HttpEngineAdapter already calls, now served by the
 	 * engine. GET /live/:id proxies the stream manager's MJPEG live view for
 	 * that camera (the manager holds the one upstream connection; this only
-	 * pipes). /segments, /segment and /evidence stay pending — they belong to
-	 * the recorded-media/timeline path, which answers those gaps in plain
-	 * language for now.
+	 * pipes). The recorded-media seams of record (PORCH-130) — /segments,
+	 * /segment, /evidence and /media — ride the segment index service
+	 * (epoch seconds, UTC) and the shared range-serving handler; the
+	 * adapter's { gap: "unavailable" } contract is answered inline, and the
+	 * media/seam paths run BEFORE the static-SPA fallback so a seam path
+	 * never renders index.html.
 	 */
 	async function handleEngineSeam(req, res, method, segments, url) {
 		if (segments[0] === "cameras") {
@@ -156,6 +160,28 @@ export function createConfigServer(parts, opts = {}) {
 		}
 		if (segments[0] === "storage" && segments.length === 1 && method === "GET") {
 			return sendJson(res, 200, await proxySupervisorJson("/api/storage", { map: supervisorStorageView }));
+		}
+		// --- recorded-media seams (PORCH-130) --------------------------------
+		if (segments[0] === "segments" && segments.length === 1 && method === "GET") {
+			if (!segmentIndex) return seamNotWired(res);
+			const rows = await segmentIndex.listWindow(
+				url.searchParams.get("camera") ?? "",
+				queryNumber(url, "from"),
+				queryNumber(url, "to"),
+			);
+			return sendJson(res, 200, { segments: rows });
+		}
+		if ((segments[0] === "segment" || segments[0] === "evidence") && segments.length === 1 && method === "GET") {
+			if (!segmentIndex) return seamNotWired(res);
+			const camera = url.searchParams.get("camera") ?? "";
+			const at = queryNumber(url, "at");
+			const answer = segments[0] === "segment"
+				? await segmentIndex.at(camera, at, { mediaPrefix: SEAM_MEDIA_PREFIX })
+				: await segmentIndex.evidence(camera, at);
+			return sendJson(res, 200, answer);
+		}
+		if (segments[0] === "media" && segments.length === 5) {
+			return serveSegmentFile(req, res, method, segments[1], segments[2], segments[3], segments[4]);
 		}
 		return handleStatic(req, res, method, url.pathname);
 	}
@@ -539,6 +565,50 @@ export function createConfigServer(parts, opts = {}) {
 			}
 		}
 
+		// --- first-run wizard + console timeline plane (PORCH-130) -----------
+		if (r[0] === "setup") {
+			if (!setup) return seamNotWired(res);
+			if (r.length === 1 && method === "GET") return sendJson(res, 200, setup.state());
+			if (r.length === 2 && method === "PUT" && r[1] === "deployment") return sendJson(res, 200, setup.setDeployment(body));
+			if (r.length === 2 && method === "PUT" && r[1] === "owner") return sendJson(res, 200, setup.setOwner(body));
+			if (r.length === 2 && method === "GET" && r[1] === "photo") return sendJson(res, 200, { photo: setup.photo() });
+			if (r.length === 2 && method === "POST" && r[1] === "complete") return sendJson(res, 200, setup.complete());
+		}
+
+		if (r[0] === "segments") {
+			if (!segmentIndex) return seamNotWired(res);
+			if (r.length === 2 && r[1] === "days" && method === "GET") {
+				return sendJson(res, 200, await segmentIndex.days(url.searchParams.get("cameraId") ?? ""));
+			}
+			if (r.length === 1 && method === "GET") {
+				return sendJson(res, 200, await segmentIndex.hour(
+					url.searchParams.get("cameraId") ?? "",
+					url.searchParams.get("date"),
+					url.searchParams.get("hour"),
+				));
+			}
+		}
+
+		if (r[0] === "segment" && r.length === 1 && method === "GET") {
+			if (!segmentIndex) return seamNotWired(res);
+			return sendJson(res, 200, await segmentIndex.at(url.searchParams.get("cameraId") ?? "", queryNumber(url, "at")));
+		}
+
+		if (r[0] === "events" && r.length === 1 && method === "GET") {
+			if (!events) return seamNotWired(res);
+			const listing = events.listEvents({
+				cameraId: url.searchParams.get("cameraId") ?? undefined,
+				from: queryNumber(url, "from"),
+				to: queryNumber(url, "to"),
+				limit: queryNumber(url, "limit"),
+			});
+			return sendJson(res, 200, { ...listing, bus: events.status() });
+		}
+
+		if (r[0] === "media" && r.length === 5) {
+			return serveSegmentFile(req, res, method, r[1], r[2], r[3], r[4]);
+		}
+
 		throw new NotFoundError(`no route for ${method} ${url.pathname}`);
 	}
 
@@ -609,6 +679,104 @@ export function createConfigServer(parts, opts = {}) {
 			throw new ValidationError(`snapshot: ${key} must be a positive integer`);
 		}
 		return value;
+	}
+
+	/** The never-silent refusal when a plane's service part isn't wired. */
+	function seamNotWired(res) {
+		return sendJson(res, 503, { error: "the timeline services of record aren't wired into this build's config service — the engine composition owns that wiring" });
+	}
+
+	/**
+	 * Raw query param → number; undefined when absent; NaN preserved so the
+	 * service answers the plain-language refusal (validation stays in the
+	 * service module — routes are transport-thin).
+	 */
+	function queryNumber(url, key) {
+		const raw = url.searchParams.get(key);
+		if (raw === null || raw.trim() === "") return undefined;
+		const value = Number(raw);
+		return Number.isFinite(value) ? value : NaN;
+	}
+
+	/** Shared segment file serving for /api/media/... and the /media/... seam. */
+	async function serveSegmentFile(req, res, method, cameraId, date, hourValue, base) {
+		if (!segmentIndex) return seamNotWired(res);
+		const answer = await segmentIndex.open(cameraId, date, hourValue, base);
+		return serveRangeRequest(req, res, method, answer);
+	}
+
+	/**
+	 * Byte-range serving of one settled segment (RFC 9110, single range):
+	 * no range or a whole-file range → 200 full body; one satisfiable range →
+	 * 206 with Content-Range; unsatisfiable → 416 whose Content-Range names
+	 * the total size with the asterisk-length form of the RFC. A
+	 * syntactically invalid header is ignored (the full body rides). HEAD
+	 * answers headers only.
+	 */
+	async function serveRangeRequest(req, res, method, { absPath, size, type }) {
+		if (size === 0) {
+			res.writeHead(200, { "content-type": type ?? "application/octet-stream", "accept-ranges": "bytes", "content-length": "0" });
+			res.end();
+			return;
+		}
+		const range = parseSingleRange(req.headers.range, size);
+		if (range?.unsatisfiable) {
+			res.writeHead(416, {
+				"content-type": "application/json; charset=utf-8",
+				"content-range": `bytes */${size}`,
+			});
+			res.end(JSON.stringify({ error: "the requested byte range is outside this segment recording" }));
+			return;
+		}
+		// No range ⇒ the full body. A single range covering the whole file
+		// rides the same 200 (the v0 media contract).
+		const full = !range || (range.start === 0 && range.end === size - 1);
+		const start = full ? 0 : range.start;
+		const end = full ? size - 1 : range.end;
+		/** @type {Record<string, string>} */
+		const headers = {
+			"content-type": type ?? "application/octet-stream",
+			"accept-ranges": "bytes",
+			"content-length": String(end - start + 1),
+		};
+		if (!full) headers["content-range"] = `bytes ${start}-${end}/${size}`;
+		res.writeHead(full ? 200 : 206, headers);
+		if (method === "HEAD") {
+			res.end();
+			return;
+		}
+		const stream = fsDefault.createReadStream(absPath, full ? undefined : { start, end });
+		try {
+			await pipeline(stream, res);
+		} catch {
+			// The reader went away mid-stream — nothing left to answer.
+			res.destroy();
+		}
+	}
+
+	/**
+	 * Single-range parser for `bytes=a-b`. Malformed or multi-range headers
+	 * are ignored (null ⇒ full body, per RFC); a spec outside the file or a
+	 * zero-length suffix answers unsatisfiable (416).
+	 */
+	function parseSingleRange(header, size) {
+		if (typeof header !== "string") return null;
+		const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+		if (!match) return null;
+		const [, first, last] = match;
+		if (first === "" && last === "") return null;
+		if (first === "") {
+			// Suffix form: the final <last> bytes of the representation.
+			const suffix = Number(last);
+			if (suffix <= 0 || size === 0) return { unsatisfiable: true };
+			return { start: Math.max(0, size - Math.min(suffix, size)), end: size - 1 };
+		}
+		const start = Number(first);
+		if (start >= size) return { unsatisfiable: true };
+		if (last === "") return { start, end: size - 1 };
+		const rawEnd = Number(last);
+		if (rawEnd < start || rawEnd < 0) return null; // invalid spec — ignore (RFC)
+		return { start, end: Math.min(rawEnd, size - 1) };
 	}
 
 	function requireId(id) {

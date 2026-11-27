@@ -13,11 +13,14 @@ import { createCameras, createBaseService } from "./baseconfig.js";
 import { createSpeedService } from "./speed.js";
 import { createProfileService } from "./profiles.js";
 import { createScheduler } from "./scheduler.js";
-import { createStorageService } from "./storage.js";
-import { createComputeService } from "./compute.js";
+import { createStorageService, configYamlPathFor } from "./storage.js";
+import { createComputeService, readPlatformConfig } from "./compute.js";
 import { createConfigServer } from "./server.js";
 import { wireComputeRepoints } from "./compute.js";
 import { polygonIntersectsPolygon } from "./geometry.js";
+import { createSegmentIndex } from "./segments.js";
+import { createEventsFeed } from "./events.js";
+import { createSetupService } from "./setup.js";
 
 // Porchlight root default (contract): console docs land under
 // <root>/config/console/.
@@ -125,8 +128,13 @@ function crossKindPairs(zoneDefs, maskDefs) {
  *   (createTranscriptRoutes(service) from @porchlight/transcript, PORCH-155);
  *   when provided, /api/transcription and /api/transcripts dispatch there
  *   before any config-plane route.
+ *   busUrl — the event feed's bus URL override (tests); resolved from the
+ *   platform config of record when absent, null disables the feed (PORCH-130).
+ *   storageRootOverride — segment store of record override (tests; PORCH-130);
+ *   log — the event feed's log seam.
+ *   eventsClient — bus seam injection for the event feed (tests, PORCH-130).
  * @returns {{ root, store, publisher, cameras, zones, masks, compose, speed,
- *   profiles, base, scheduler, storage, server, start(httpPort) }}
+ *   profiles, base, scheduler, storage, segments, events, setup, server, start(httpPort) }}
  */
 export function createConfigService(opts = {}) {
 	const root = opts.root ?? DEFAULT_ROOT;
@@ -144,6 +152,22 @@ export function createConfigService(opts = {}) {
 	const storage = createStorageService({ store, recorderBase: opts.recorderBase });
 	/** The engine compute posture (PORCH-152): per-stage plans + live statuses. */
 	const compute = createComputeService({ store, publisher, root, fs: opts.fs, now });
+	/**
+	 * The recorded-media + entity-event + wizard planes (PORCH-130). The bus
+	 * URL of record rides the platform config of record; `opts.busUrl`
+	 * overrides (tests), null disables the feed — every part is optional-safe
+	 * for boots without a broker.
+	 */
+	const busUrl = opts.busUrl !== undefined
+		? opts.busUrl
+		: (readPlatformConfig(configYamlPathFor(root), { fs: opts.fs })?.busUrl ?? null);
+	const segments = createSegmentIndex({
+		root, fs: opts.fs, now,
+		storageRootOverride: opts.storageRootOverride,
+		cameras,
+	});
+	const events = createEventsFeed({ root, busUrl, now, log: opts.log, fs: opts.fs, client: opts.eventsClient });
+	const setup = createSetupService({ store, now });
 	const parts = {
 		store,
 		publisher,
@@ -157,6 +181,12 @@ export function createConfigService(opts = {}) {
 		scheduler,
 		storage,
 		compute,
+		/** The recorded-media index of record (PORCH-130). */
+		segments,
+		/** The entity event feed (PORCH-130); disabled without a busUrl of record. */
+		events,
+		/** The first-run wizard service (PORCH-130). */
+		setup,
 		/** The transcription plane part (PORCH-155); undefined when the engine composition doesn't inject it. */
 		transcription: opts.transcription,
 	};
@@ -178,6 +208,10 @@ export function createConfigService(opts = {}) {
 }
 
 export { wireComputeRepoints };
+
+// The PORCH-130 creators, exported for their own seams: the segment index,
+// the entity event feed, and the first-run wizard service.
+export { createSegmentIndex, createEventsFeed, createSetupService };
 
 /**
  * Start the service's HTTP server on an ephemeral or fixed port.
