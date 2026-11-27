@@ -37,6 +37,12 @@ export function createAgentRouter({ governance, member }) {
   router.post("/families/:familyId/members/:memberId/permitted-profiles", governance.parentalSet);
   router.get("/families/:familyId/members/:memberId/permitted-profiles", governance.parentalGet);
 
+  // Migration (PORCH-151): the explicit per-member import of a nanobot-class
+  // export artifact, and the per-member migration state the admin surface
+  // renders. Admin-only in the service; the artifact is the only input.
+  router.post("/migrations", governance.importMember);
+  router.get("/migrations", governance.migrationStatus);
+
   // The member surface: the running model read, the selectable list, and the
   // self-selection attempt. Withheld profiles are invisible throughout.
   router.get("/me/model", member.myModel);

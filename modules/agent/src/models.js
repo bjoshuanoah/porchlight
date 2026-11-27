@@ -149,6 +149,34 @@ export const agentModels = {
   },
 
   /**
+   * AgentMigration — the per-member migration state of record (PORCH-151,
+   * agent initiative PRD 3 / TS 3): one explicit per-member import action.
+   * State imported = the read-back verified (counts of what landed);
+   * state failed = that member's migration stopped with a plain-language
+   * reason, retryable, nothing landed.
+   */
+  agentMigration: {
+    type: "object",
+    required: ["_id", "memberId", "exportId", "source", "state", "at"],
+    properties: {
+      _id: { type: "string" },
+      memberId: { type: "string" },
+      /** The one-time export artifact's identity. */
+      exportId: { type: "string" },
+      source: { type: "string" },
+      exportedAt: { type: "string" },
+      state: { type: "string", enum: ["imported", "failed"] },
+      counts: { type: "object" },
+      /** Failed imports only: the plain-language reason and the retry flag. */
+      reason: { type: "string" },
+      retryable: { type: "boolean" },
+      rollback: { type: "object" },
+      at: { type: "string" },
+      actorIdentityRef: { type: ["string", "null"] },
+    },
+  },
+
+  /**
    * Agent audit — the module's audit family of record: profile definitions,
    * availability flips, assignments, self-assignment refusals, and parental
    * narrowing writes (including refused writes) land one append-only row:
