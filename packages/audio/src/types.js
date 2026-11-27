@@ -99,7 +99,7 @@ export const AUDIO_CLASSES = Object.freeze([
 
 /**
  * AudioSink protocol — the transport seam behind audio publishing. The
- * engine's event-bus transport decision (PORCH-129 vetting: MQTT) is owned
+ * engine's event-bus transport decision (PORCH-129 vetting: MQTT, docs/event-bus-transport.md) is owned
  * by the sink implementation; the audio core depends only on this
  * interface, so the bus can re-point without core changes.
  *

@@ -27,10 +27,11 @@ const LOCAL_NETWORK_NOTES = Object.freeze({
  *   halStatus?: Record<string, unknown>,
  *   localNetwork?: {state?: string, reason?: string | null} | null,
  *   transcription?: import("@porchlight/transcript").TranscriptionService | null,
+ *   bus?: Record<string, unknown> | null,
  *   generatedAt?: string,
  * }} opts
  */
-export function aggregateHealth({ supervisor = null, manager = null, version = "unknown", halStatus = null, generatedAt, localNetwork, transcription = null } = {}) {
+export function aggregateHealth({ supervisor = null, manager = null, version = "unknown", halStatus = null, generatedAt, localNetwork, transcription = null, bus = null } = {}) {
 	/** @type {ServiceHealth[]} */
 	const services = [];
 	let recorderState = null;
@@ -124,6 +125,34 @@ export function aggregateHealth({ supervisor = null, manager = null, version = "
 	} else {
 		services.push({ name: "transcript", healthy: false, state: "unavailable", detail: "the transcription consumer is not wired into this runtime — speech is not being transcribed" });
 	}
+	// The event-bus row (PORCH-129): the engine's transport of record. An
+	// embedded broker provisioned green-field by the runtime states its URL
+	// and client count; a deployment-owned broker (busUrl in the config of
+	// record) states the configured endpoint — healthy, because the runtime
+	// does not own that broker's lifecycle. A stopped embedded broker is a
+	// real degradation: every engine service loses its event delivery.
+	let busView = null;
+	if (bus) {
+		const state = /** @type {string} */ (bus.state ?? "unknown");
+		const url = /** @type {string|null} */ (bus.url ?? null);
+		const mode = /** @type {string} */ (bus.mode ?? "embedded");
+		const healthy = state === "running" || (mode === "external" && Boolean(url));
+		const detail = state === "running"
+			? `provisioned at ${url} — ${/** @type {number} */ (bus.clients ?? 0)} engine client(s) connected`
+			: mode === "external"
+				? `riding the deployment's broker at ${url ?? "an unspecified busUrl"}`
+				: state === "stopped"
+					? "the embedded bus broker is not running — engine services cannot deliver events"
+					: `the bus is in an unstated state: ${state}`;
+		services.push({ name: "bus", healthy, state: healthy ? "ok" : state, detail });
+		busView = { transport: bus.transport ?? "mqtt", mode, state, url, clients: bus.clients ?? 0 };
+	} else {
+		// No `bus` argument: this aggregate is not composed from the platform
+		// runtime (tests, other callers) — no bus plane exists to state, so
+		// the row is simply not rendered. The runtime ALWAYS passes this
+		// plane (embedded state, or the config-of-record broker), which is
+		// where the never-silent row lives.
+	}
 	// The Local Network posture (PORCH-152): TCP on the LAN is unaffected by
 	// macOS local-network privacy, but a process without the permission
 	// silently LOSES UDP — LAN discovery and camera local-P2P paths just
@@ -173,6 +202,7 @@ export function aggregateHealth({ supervisor = null, manager = null, version = "
 			paused: storage.paused ?? null,
 		} : null,
 		stream: streamView,
+		bus: busView,
 		localNetwork: {
 			state: lnState,
 			reason: lnReason,

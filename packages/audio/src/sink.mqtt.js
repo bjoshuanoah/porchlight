@@ -1,6 +1,6 @@
 // sink.mqtt.js — MQTT audio-event publishing (PORCH-153).
 //
-// The engine's event-bus transport decision (PORCH-129 vetting) is owned by
+// The engine's event-bus transport decision (PORCH-129 vetting — docs/event-bus-transport.md) is owned by
 // this seam; the audio core depends only on AudioSink (types.js). The topic
 // family of record is the SAME two-segment detections family every consumer
 // keys on — <topicPrefix>/<camera>/<class> — so audio events ride the same
