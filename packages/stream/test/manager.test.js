@@ -81,7 +81,7 @@ function makeFactory() {
 
 /**
  * @param {any[]} cameras
- * @param {{ relBufferMax?: number, bus?: any, base?: number }} [opts]
+ * @param {{ relBufferMax?: number, relStallMs?: number, bus?: any, base?: number }} [opts]
  */
 async function makeManager(cameras, opts = {}) {
 	const bus = opts.bus ?? new NullStreamHealthBus();
@@ -92,6 +92,7 @@ async function makeManager(cameras, opts = {}) {
 		factory: made.factory,
 		backoffMs: [10, 20],
 		relayBufferMax: opts.relBufferMax ?? (4 * 1024 * 1024),
+		relayStallMs: opts.relStallMs ?? 500,
 		log: () => {},
 	});
 	return { manager, bus, opens: made.opens };
@@ -198,7 +199,7 @@ test("relay fan-out: every connected socket receives the exact mpegts bytes", as
 });
 
 test("slow-socket guard: a consumer that cannot keep up is disconnected alone", async (t) => {
-	const { manager, opens } = await makeManager([urlCam("front-door")], { relBufferMax: 4096 });
+	const { manager, opens } = await makeManager([urlCam("front-door")], { relBufferMax: 8192, relStallMs: 60 });
 	t.after(() => manager.stop().catch(() => {}));
 	await manager.start();
 	await manager.applyPromise;
@@ -208,18 +209,25 @@ test("slow-socket guard: a consumer that cannot keep up is disconnected alone", 
 	/** @type {number} */
 	let fastBytes = 0;
 	fast.on("data", (c) => (fastBytes += c.length));
-	slow.pause(); // never reads
+	// Flowing first, then paused: the transition stops the underlying handle's
+	// reads, so the consumer genuinely never drains (a socket that was never
+	// flowing can stay window-open and absorb writes forever).
+	slow.on("data", () => {});
+	slow.pause(); // never reads, never drains
 	const stdout = /** @type {PassThrough} */ (opens["front-door"].latest.stdout);
-	// ~2MB total: past the OS send-buffer point (≈850KB measured on this host)
-	// and past the manager's bounded per-socket buffer (test cap 4KB)
-	for (let i = 0; i < 32; i++) {
-		stdout.write(Buffer.alloc(65536, 0x47));
-		if (i % 8 === 0) await sleep(1);
+	const start = Date.now();
+	// Drive the lane long enough for the stall clock (60ms test window) to
+	// expire — a client that never drains is dropped past the stall window
+	// even when the OS buffers absorb every write, so the test carries no
+	// kernel-buffer arithmetic.
+	while (Date.now() - start < 1500 && manager.health().cameras[0].consumers === 2) {
+		stdout.write(Buffer.alloc(32 * 1024, 0x47));
+		await sleep(5);
 	}
 	// server-side truth: the stalled consumer is dropped from the fan set
 	// (a paused client socket may hold unread bytes, so the client-side
 	// close event can lag — the fan bookkeeping is the observable of record)
-	await waitFor(() => manager.health().cameras[0]?.consumers === 1, 10000);
+	await waitFor(() => manager.health().cameras[0]?.consumers === 1, 5000);
 	assert.equal(manager.health().cameras[0].consumers, 1, "only the fast consumer remains");
 	assert.equal(fast.destroyed, false, "peers keep flowing");
 	assert.ok(fastBytes > 0, "the fast consumer kept receiving");

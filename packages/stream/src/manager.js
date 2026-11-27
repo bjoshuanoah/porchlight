@@ -30,6 +30,8 @@ import { CameraSource } from "./source.js";
 const BODY_CHUNK_LIMIT = 1024;
 /** Max bytes a relay socket may fall behind before it is disconnected. */
 const RELAY_BUFFER_MAX_DEFAULT = 4 * 1024 * 1024;
+/** How long a relay socket may stay blocked without a drain before it is dropped. */
+const RELAY_STALL_MS_DEFAULT = 500;
 const MJPEG_BOUNDARY = "porchlight-live";
 
 /** Read and parse a JSON request body; null on malformed JSON or oversize. */
@@ -66,10 +68,11 @@ export class StreamManager {
 	 *   factory?: (camera: import("./types.js").StreamCamera, cfg: { rgbFps: number, jpegFps: number }) => import("./types.js").StreamHandle,
 	 *   fs?: typeof fsDefault,
 	 *   nowMs?: () => number,
-	 *   backoffMs?: number[],
-	 *   relayBufferMax?: number,
-	 * }} opts
-	 */
+ *   backoffMs?: number[],
+ *   relayBufferMax?: number,
+ *   relayStallMs?: number,
+ * }} opts
+ */
 	constructor(opts) {
 		this.config = opts.config;
 		this.settings = resolveStreamSettings(opts.config);
@@ -80,6 +83,7 @@ export class StreamManager {
 		this.factory = opts.factory ?? null;
 		this.backoffMs = opts.backoffMs ?? null;
 		this.relayBufferMax = opts.relayBufferMax ?? RELAY_BUFFER_MAX_DEFAULT;
+		this.relayStallMs = opts.relayStallMs ?? RELAY_STALL_MS_DEFAULT;
 		// Bus seam of record: injected bus wins; else MQTT when busUrl is set;
 		// else the Null bus (nothing is assumed pre-deployed).
 		this.bus = opts.bus ?? (typeof this.config.busUrl === "string" && this.config.busUrl
@@ -87,7 +91,7 @@ export class StreamManager {
 			: new NullStreamHealthBus());
 		/** @type {Map<string, CameraSource>} */
 		this.sources = new Map();
-		/** @type {Map<string, { port: number, server: import("node:net").Server, sockets: Set<import("node:net").Socket>, meta: WeakMap<import("node:net").Socket, { pending: Buffer[], bytes: number }> }>} */
+		/** @type {Map<string, { port: number, server: import("node:net").Server, sockets: Set<import("node:net").Socket>, meta: WeakMap<import("node:net").Socket, { pending: Buffer[], bytes: number, stall?: NodeJS.Timeout }>, drop: (sock: import("node:net").Socket, m: { pending: Buffer[], bytes: number, stall?: NodeJS.Timeout }, why: string) => void }>} */
 		this.relays = new Map();
 		/** @type {Map<string, import("./types.js").StreamCamera>} */
 		this.cameras = new Map();
@@ -261,25 +265,42 @@ export class StreamManager {
 			}
 			/** @type {Set<import("node:net").Socket>} */
 			const sockets = new Set();
-			/** @type {WeakMap<import("node:net").Socket, { pending: Buffer[], bytes: number }>} */
+			/** @type {WeakMap<import("node:net").Socket, { pending: Buffer[], bytes: number, stall?: NodeJS.Timeout }>} */
 			const meta = new WeakMap();
+			/** One consumer's disconnect: the socket alone, with the reason. */
+			const drop = (sock, m, why) => {
+				clearTimeout(m.stall);
+				m.stall = undefined;
+				this.log(`[stream:${name}] relay consumer dropped — ${why}; this consumer alone is disconnected, the camera lane and other consumers are unaffected`);
+				sock.destroy();
+				sockets.delete(sock);
+			};
 			const server = net.createServer((sock) => {
 				sockets.add(sock);
 				sock.setNoDelay(true);
-				meta.set(sock, /** @type {{ pending: Buffer[], bytes: number }} */ ({ pending: [], bytes: 0 }));
+				meta.set(sock, /** @type {{ pending: Buffer[], bytes: number, stall?: NodeJS.Timeout }} */ ({ pending: [], bytes: 0 }));
 				sock.on("drain", () => {
 					const m = meta.get(sock);
 					if (!m || m.pending.length === 0) return;
 					const parts = m.pending;
 					m.pending = [];
+					m.bytes = 0;
+					clearTimeout(m.stall);
+					m.stall = undefined;
 					let ok = true;
 					for (const part of parts) ok = sock.write(part) && ok;
 					if (!ok) {
 						m.pending = [Buffer.concat(parts)];
 						m.bytes = m.pending[0].length;
+						// Still blocked after the flush — the stall clock restarts.
+						m.stall = setTimeout(() => drop(sock, m, `its socket stayed blocked past ${this.relayStallMs}ms (` + `${m.bytes} bytes queued)`), this.relayStallMs);
 					}
 				});
-				sock.on("close", () => sockets.delete(sock));
+				sock.on("close", () => {
+					const m = meta.get(sock);
+					clearTimeout(m?.stall);
+					sockets.delete(sock);
+				});
 				sock.on("error", (err) => {
 					this.log(`[stream:${name}] relay socket error: ${err.message}`);
 					sock.destroy();
@@ -289,14 +310,17 @@ export class StreamManager {
 				this.log(`[stream:${name}] relay listener failed on 127.0.0.1:${wanted}: ${err.message}`);
 			});
 			server.listen(wanted, "127.0.0.1");
-			this.relays.set(name, /** @type {any} */ ({ port: wanted, server, sockets, meta }));
+			this.relays.set(name, /** @type {any} */ ({ port: wanted, server, sockets, meta, drop }));
 		}
 	}
 
 	/**
-	 * Fan one mpegts chunk to every relay socket. A socket that cannot keep
-	 * up accumulates a BOUNDED buffer; the moment it exceeds the cap only
-	 * that socket is disconnected (with the explained reason in the log) —
+	 * Fan one mpegts chunk to every relay socket. Backpressure is normal
+	 * traffic, not failure — a consumer is disconnected alone only when it
+	 * does not DRAIN: its queued bytes persist past the stall window with no
+	 * drain event, or its queue exceeds the absolute memory cap. A healthy
+	 * consumer with momentary backpressure survives (the drain event clears
+	 * the stall clock); only a genuinely stalled socket is disconnected, and
 	 * the upstream lane and every other consumer continue untouched.
 	 * @param {string} name
 	 * @param {Buffer} buf
@@ -305,18 +329,20 @@ export class StreamManager {
 		const relay = /** @type {any} */ (this.relays.get(name));
 		if (!relay) return;
 		for (const sock of [...relay.sockets]) {
-			const m = /** @type {{ pending: Buffer[], bytes: number }|undefined} */ (relay.meta.get(sock));
+			const m = /** @type {{ pending: Buffer[], bytes: number, stall?: NodeJS.Timeout }|undefined} */ (relay.meta.get(sock));
 			if (!m) continue;
 			if (m.pending.length > 0) {
 				m.pending.push(buf);
 			} else if (!sock.write(buf)) {
 				m.pending.push(buf);
+				// First backpressure: the stall clock starts — a drain clears it.
+				m.stall = setTimeout(() => {
+					relay.drop(sock, m, `its socket queued ${m.bytes} bytes and stayed blocked past ${this.relayStallMs}ms with no drain`);
+				}, this.relayStallMs);
 			}
 			m.bytes = m.pending.reduce((sum, b) => sum + b.length, 0);
 			if (m.bytes > this.relayBufferMax) {
-				this.log(`[stream:${name}] relay consumer dropped — its socket fell ${m.bytes} bytes behind (bounded buffer ${this.relayBufferMax} exceeded); this consumer alone is disconnected, the camera lane and other consumers are unaffected`);
-				sock.destroy();
-				relay.sockets.delete(sock);
+				relay.drop(sock, m, `its socket fell ${m.bytes} bytes behind (bounded buffer ${this.relayBufferMax} exceeded)`);
 			}
 		}
 	}

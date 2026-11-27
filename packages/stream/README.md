@@ -22,10 +22,14 @@ a full media server. Landed middle path, three mechanisms, all localhost:
    never blocks the pipeline.
 2. **Per-camera localhost TCP relay** (`127.0.0.1:<base + 1 + sortedIndex(name)>`,
    plain codepoint sort) fans the mpegts copy lane byte-for-byte to any
-   number of socket consumers (the recorder of record is consumer #1). Slow
-   sockets carry a BOUNDED buffer; the moment one exceeds it, that socket —
-   alone — is disconnected with the explained reason in the log. A stalled
-   viewer can never back-pressure the camera lane or another consumer.
+   number of socket consumers (the recorder of record is consumer #1).
+   Backpressure is normal traffic, not failure: a consumer is disconnected —
+   alone, with the explained reason in the log — only when its queued bytes
+   persist past the stall window (`relayStallMs`, default 500 ms) with no
+   drain event, or exceed the absolute memory cap (`relayBufferMax`,
+   4 MiB default). A healthy consumer with momentary backpressure survives
+   (a drain clears the stall clock); a stalled consumer can never
+   back-pressure the camera lane or another consumer.
 3. **Localhost MJPEG live view** (`GET /live/:name`, multipart/x-mixed-replace)
    serves the latest jpeg frame with true latest-frame semantics: while the
    response is busy, newer frames REPLACE the pending one, so a slow viewer
