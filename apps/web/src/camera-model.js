@@ -82,8 +82,9 @@ export function feedPlayState(feed) {
 }
 
 /**
- * The three health planes, explained independently (recording / playback /
- * detection): a camera recording but not detecting reads as its own state.
+ * The health planes, explained independently (recording / playback /
+ * detection / audio, the last joining in PORCH-153): a camera recording but
+ * not detecting, or not hearing, reads as its own state.
  */
 const HEALTH_COPY = {
   recording: {
@@ -106,6 +107,16 @@ const HEALTH_COPY = {
     offline: () => "Detection is offline for this camera right now.",
     unavailable: () => "The detection status can't be read right now.",
   },
+  // The audio plane (PORCH-153): sounds raise camera events only while the
+  // audio analysis consumer runs; a consumer loss degrades audio events ONLY
+  // — recording and visual detection continue, and the copy says so.
+  audio: {
+    ok: () => "Audio detection is on — sounds raise camera events.",
+    degraded: () => "Audio event analysis isn't running for this camera right now — sounds aren't raising camera events, but recording and visual detection continue.",
+    disabled: () => "Audio detection is off for this camera — nothing listens, and recording stays on.",
+    offline: () => "Audio detection is offline for this camera right now.",
+    unavailable: () => "The audio detection status can't be read right now.",
+  },
 };
 
 export function healthExplain({ plane, state }, feed) {
@@ -120,6 +131,7 @@ export function healthNotes(feed) {
     { plane: "recording", note: healthExplain({ plane: "recording", state: planes.recording?.state ?? "unavailable" }, feed), state: planes.recording?.state ?? "unavailable" },
     { plane: "playback", note: healthExplain({ plane: "playback", state: planes.playback?.state ?? "unavailable" }, feed), state: planes.playback?.state ?? "unavailable" },
     { plane: "detection", note: healthExplain({ plane: "detection", state: planes.detection?.state ?? "unavailable" }, feed), state: planes.detection?.state ?? "unavailable" },
+    { plane: "audio", note: healthExplain({ plane: "audio", state: planes.audio?.state ?? "unavailable" }, feed), state: planes.audio?.state ?? "unavailable" },
   ];
 }
 

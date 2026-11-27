@@ -505,10 +505,11 @@ export class CameraService {
   }
 
   /**
-   * GET /homes/:homeId/cameras/health — the three health planes tracked
-   * independently (recording, playback, detection) plus the storage and
-   * service planes the owner surface renders. A camera recording but not
-   * detecting, or playing but not recording, reads as its own state here.
+   * GET /homes/:homeId/cameras/health — the health planes tracked
+   * independently (recording, playback, detection, and the audio plane
+   * PORCH-153 joins) plus the storage and service planes the owner surface
+   * renders. A camera recording but not detecting, or recording but not
+   * hearing, reads as its own state here.
    */
   async health({ accessToken, homeId } = {}) {
     await this.authorizeRead(accessToken, homeId);
@@ -581,7 +582,7 @@ export class CameraService {
   async #health(camera) {
     const engine = this.engine;
     if (!engine) {
-      return { recording: { state: "unavailable" }, playback: { state: "unavailable" }, detection: { state: "unavailable" } };
+      return { recording: { state: "unavailable" }, playback: { state: "unavailable" }, detection: { state: "unavailable" }, audio: { state: "unavailable" } };
     }
     try {
       const planes = await engine.health(camera.engineCameraId);
@@ -589,9 +590,13 @@ export class CameraService {
         recording: { state: planes?.recording?.state ?? "unavailable" },
         playback: { state: planes?.playback?.state ?? "unavailable" },
         detection: { state: planes?.detection?.state ?? "unavailable" },
+        // The audio plane (PORCH-153): the engine answers the camera's audio
+        // detection state independently; absent engine answers stay
+        // unavailable — never a healthy blank.
+        audio: { state: planes?.audio?.state ?? "unavailable", detail: planes?.audio?.detail ?? null },
       };
     } catch {
-      return { recording: { state: "unavailable" }, playback: { state: "unavailable" }, detection: { state: "unavailable" } };
+      return { recording: { state: "unavailable" }, playback: { state: "unavailable" }, detection: { state: "unavailable" }, audio: { state: "unavailable" } };
     }
   }
 

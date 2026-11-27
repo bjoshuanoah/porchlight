@@ -189,3 +189,67 @@ test("ac-3: the alert surface lists newest first with a bounded page, camera-cla
     { code: "E_MUST_SIGN_IN" },
   );
 });
+
+test("ac-2: the AudioEvent family opens a timeline event on the SAME evidence path — clip+timestamp through the engine seam", async () => {
+  const fx = engineFixture();
+  const owner = fx.identity();
+  const home = await createHomeFor(fx, owner);
+  const cam = await addCameraFor(fx, owner, home, null, "rtsp://main/cam1");
+  const doc = await fx.mod.cameraService.findOne(cam._id);
+  const t = AT("2026-11-20T07:05:00Z");
+  clockAt(fx, t + 5);
+  // The AudioEvent contract of record (PORCH-153): class/timestamp/confidence
+  // vocabulary, no track id — published onto the same bus family.
+  const opened = await fx.mod.eventService.ingest({
+    camera: doc.engineCameraId, class: "dog-bark", confidence: 0.92, timestamp: t,
+  });
+  assert.equal(opened.created, true);
+  assert.equal(opened.event.alert.kind, "factual");
+  assert.match(opened.event.alert.text, /^A dog bark was heard at the /, "the audio fact is phrased HEARD, never seen");
+  // The SAME evidence path as visual events: the engine's evidence seam
+  // resolved the event's timestamp into a clip/segment ref.
+  assert.deepEqual(opened.event.evidenceRefs, [{ kind: "still", ref: "still_main_at", path: "/media/still.jpg" }]);
+  assert.equal(opened.event.observations[0].label, "dog-bark");
+  assert.equal(opened.event.observations[0].confidence, 0.92);
+  assert.equal(opened.event.observations[0].trackId, "audio-dog-bark");
+  // The timeline list serves the audio event like any visual event.
+  const listed = await fx.mod.eventService.list({ accessToken: owner.token, homeId: home._id });
+  assert.equal(listed.total, 1);
+  assert.match(listed.events[0].alert.text, /dog bark was heard/);
+});
+
+test("ac-2: audio classes dedup per class — a glass break and a dog bark stay distinct records", async () => {
+  const fx = engineFixture();
+  const owner = fx.identity();
+  const home = await createHomeFor(fx, owner);
+  const cam = await addCameraFor(fx, owner, home, null, "rtsp://main/cam1");
+  const doc = await fx.mod.cameraService.findOne(cam._id);
+  const t = AT("2026-11-20T07:05:00Z");
+  clockAt(fx, t + 5);
+  const bark = await fx.mod.eventService.ingest({ camera: doc.engineCameraId, class: "dog-bark", confidence: 0.9, timestamp: t });
+  const barkTwo = await fx.mod.eventService.ingest({ camera: doc.engineCameraId, class: "dog-bark", confidence: 0.88, timestamp: t + 10 });
+  const glass = await fx.mod.eventService.ingest({ camera: doc.engineCameraId, class: "glass-break", confidence: 0.95, timestamp: t + 15 });
+  assert.equal(bark.created, true);
+  assert.equal(barkTwo.created, false, "two barks in one window resolve as one event record");
+  assert.equal(glass.created, true, "a different class opens its own timeline record");
+  const rows = await fx.collection("home_events").find({ homeId: home._id });
+  assert.equal(rows.length, 2);
+  const labels = rows.map((r) => r.alert.text).sort();
+  assert.deepEqual(labels, ["A dog bark was heard at the the property.", "Glass breaking was heard at the the property."]);
+  // Every audio-family record keys per class; nothing merges across classes.
+  assert.deepEqual([...new Set(rows.map((r) => r.trackId))].sort(), ["audio-dog-bark", "audio-glass-break"]);
+});
+
+test("ac-2: an audio arrival without its timestamp is malformed — never a silent event with a guessed time", async () => {
+  const fx = engineFixture();
+  const owner = fx.identity();
+  const home = await createHomeFor(fx, owner);
+  const cam = await addCameraFor(fx, owner, home, null, "rtsp://main/cam1");
+  const doc = await fx.mod.cameraService.findOne(cam._id);
+  const t = AT("2026-11-20T07:05:00Z");
+  clockAt(fx, t + 5);
+  const bad = await fx.mod.eventService.ingest({ camera: doc.engineCameraId, class: "dog-bark", confidence: 0.9 });
+  assert.equal(bad.ignored, "malformed-detection");
+  const rows = await fx.collection("home_events").find({ homeId: home._id });
+  assert.equal(rows.length, 0);
+});

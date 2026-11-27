@@ -177,12 +177,18 @@ export function createConfigServer(parts, opts = {}) {
 		return { state: body.state ?? "unknown", detail: body.reason ?? (body.activeLocation ? `recording to ${body.activeLocation}` : null) };
 	}
 
-	/** The three health planes of a camera (PORCH-I-009 health contract). */
+	/** The health planes of a camera (PORCH-I-009 health contract; the audio
+	 * plane joins in PORCH-153). The DETECTION plane maps the detection
+	 * stage's compute status; the AUDIO plane first consults the camera's
+	 * audioDetectionEnabled knob (off by default) — a disabled camera states
+	 * its own disabled plane, and an enabled one reports the audio stage's
+	 * never-silent posture with its explained reason. */
 	async function engineCameraHealth(cameraId) {
 		const detection = parts.compute.statusOf("detection");
 		const detectionView = detection.state === "unknown"
 			? { state: "unavailable", detail: detection.reason }
 			: { state: detection.state, detail: detection.reason };
+		const audioView = await audioPlaneFor(cameraId);
 		const playback = { state: "unavailable", detail: "stream serving lands with the stream manager (PORCH-154)" };
 		const body = await fetchSupervisorHealth();
 		if (!body) {
@@ -190,6 +196,7 @@ export function createConfigServer(parts, opts = {}) {
 				recording: { state: "unavailable", detail: "the recorder supervisor isn't reachable" },
 				playback,
 				detection: detectionView,
+				audio: audioView,
 			};
 		}
 		const cams = Array.isArray(body.cameras) ? body.cameras : [];
@@ -199,7 +206,34 @@ export function createConfigServer(parts, opts = {}) {
 			recording: { state: cam.state ?? "unknown", detail: cam.reason ?? null },
 			playback,
 			detection: detectionView,
+			audio: audioView,
 		};
+	}
+
+	/**
+	 * The audio plane of one camera (PORCH-153 ac-4's explained-state
+	 * surface): disabled (knob off), or the audio-classification stage's
+	 * never-silent status mapped onto the health contract — native stays ok,
+	 * cpu/degraded/failed stay degraded WITH their reason verbatim, unknown
+	 * reads unavailable.
+	 */
+	async function audioPlaneFor(cameraId) {
+		let enabled = false;
+		try {
+			const inspected = /** @type {any} */ (parts.profiles).inspectKnobs(cameraId);
+			enabled = inspected?.knobs?.audioDetectionEnabled?.value === true;
+		} catch {
+			enabled = false;
+		}
+		if (!enabled) return { state: "disabled", detail: null };
+		const status = parts.compute.statusOf("audio-classification");
+		if (status.state === "unknown") {
+			return { state: "unavailable", detail: status.reason };
+		}
+		if (status.state === "native") {
+			return { state: "ok", detail: status.reason };
+		}
+		return { state: "degraded", detail: status.reason };
 	}
 
 	async function fetchSupervisorHealth() {

@@ -33,12 +33,18 @@ import { fail } from "./errors.js";
 /** The dedup window of record (seconds): one routine arrival, one event. */
 export const EVENT_DEDUP_WINDOW_SEC = 300;
 
-/** Factual alert templates — observation phrasing only, never an invented claim. */
+/** Factual alert templates — observation phrasing only, never an invented claim.
+ * Audio classes (PORCH-153, the AudioEvent family) state what was HEARD:
+ * the same factual/interpretive law — a sound fact is never phrased as seen. */
 const FACTUAL_LABELS = {
   person: "Someone was seen at the {area}.",
   vehicle: "A vehicle was seen at the {area}.",
   animal: "An animal was seen at the {area}.",
   package: "A package was left, when the footage supports it — someone was seen at the {area}.",
+  "glass-break": "Glass breaking was heard at the {area}.",
+  "dog-bark": "A dog bark was heard at the {area}.",
+  "smoke-co-alarm": "An alarm was heard at the {area}.",
+  "raised-voice": "Raised voices were heard at the {area}.",
   default: "Activity was seen at the {area}.",
 };
 
@@ -85,18 +91,31 @@ export class EventService {
     this.sweep(this.now());
     const camera = await this.cameras.findOne({ engineCameraId: String(detection?.camera ?? "") });
     if (!camera) return { event: null, created: false, ignored: "unknown-camera" };
-    if (!detection?.cls || !Number.isFinite(Number(detection?.t))) {
+    // Two field vocabularies ride the same bus family (PORCH-I-009 TS 3 /
+    // TS 8): DetectedObject (cls, t, conf) and AudioEvent (class, timestamp,
+    // confidence, clipStart, clipEnd — PORCH-153's audio plane). The audio
+    // family opens family events on the SAME evidence path: the event-time
+    // evidence resolves through the engine's evidence seam below, exactly as
+    // a visual detection's does.
+    const cls = String(detection?.cls ?? detection?.class ?? "");
+    const arrivalT = detection?.t ?? detection?.timestamp;
+    if (!cls || !Number.isFinite(Number(arrivalT))) {
       return { event: null, created: false, ignored: "malformed-detection" };
     }
-    const atMs = Number(detection.t) * 1000;
+    const atMs = Number(arrivalT) * 1000;
     const at = new Date(atMs).toISOString();
-    const trackId = String(detection.trackId ?? "untracked");
+    // Audio events carry no track id (the AudioEvent contract has none):
+    // a per-class pseudo-track keys the dedup window, so a dog bark and a
+    // glass break open distinct timeline records instead of merging.
+    const trackId = String(
+      detection.trackId ?? (detection?.class ? `audio-${String(detection.class)}` : "untracked"),
+    );
     const area = camera.areaId ? await this.areas.findOne({ _id: camera.areaId }) : null;
     const areaId = camera.areaId ?? "property";
     const areaName = area?.name ?? "the property";
     const observation = {
-      label: String(detection.cls),
-      confidence: Number(detection.conf ?? 0),
+      label: cls,
+      confidence: Number(detection.conf ?? detection.confidence ?? 0),
       cameraId: camera._id,
       cameraName: camera.name,
       trackId,
@@ -139,7 +158,7 @@ export class EventService {
       inferences: [],
       evidenceRefs: await this.#evidence(camera, atMs),
       alert: {
-        text: factualLabel(detection.cls, areaName),
+        text: factualLabel(cls, areaName),
         interpretive: null,
         kind: "factual",
         at,

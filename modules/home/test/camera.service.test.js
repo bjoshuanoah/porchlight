@@ -216,6 +216,7 @@ test("ac-5: recording, playback, and detection health track independently, and t
     recording: { state: "recording" },
     playback: { state: "live" },
     detection: { state: "unhealthy" },
+    audio: { state: "ok", detail: null },
   });
   // Recording-disabled on THIS camera only — the per-camera plane stays per-camera.
   const camDocHealth = await fx.mod.cameraService.findOne(cam._id);
