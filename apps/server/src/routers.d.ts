@@ -335,6 +335,8 @@ declare module "@porchlight/home" {
     /** PORCH-139: the camera bridge and the family event/alert pipeline. */
     cameraService: CameraServiceLike;
     eventService: unknown;
+    /** PORCH-149: the session-free actor tool surface the agent registry rides. */
+    toolSurface: Record<string, unknown>;
   }
   /** PORCH-141: the camera bridge subset the hub composes against. */
   export interface CameraServiceLike {
@@ -593,14 +595,45 @@ declare module "@porchlight/recognition/server" {
   export function createRecognitionServer(parts: Parameters<typeof createRecognitionHandler>[0]): import("node:http").Server;
 }
 
+declare module "@porchlight/agent-runtime" {
+	/** PORCH-147: the MIT-licensed runtime library the agent registry consumes. */
+	export class ToolRegistry {
+		register(tool: object): ToolRegistry;
+		has(name: string): boolean;
+		list(): Array<{ name: string; description?: string }>;
+		execute(name: string, args?: unknown, authority?: { memberId: string; scopes: string[] }): Promise<unknown>;
+	}
+	export class MapBackend {
+		constructor(seed?: Map<string, string>);
+	}
+	export interface RuntimeEntity {
+		runTurn(input: { text: string; topic?: string; maxToolTurns?: number }): Promise<{ text: string; provenance: object; toolsUsed: string[] }>;
+		memory: { all(): Promise<Array<{ role: string; text: string; tool?: string }>> };
+		lastProvenance: object | null;
+	}
+	export class AgentRuntime {
+		constructor(opts: {
+			backend?: unknown;
+			inference: { name: string; providerClass?: string; providerClasses?: string[]; complete(request: object): Promise<object> };
+			tools?: unknown;
+			authority?: ((memberId: string) => Promise<{ memberId: string; scopes: string[] }>) | null;
+			onRefusal?: ((entry: object) => void) | null;
+			sessionId?: string;
+		});
+		agentFor(memberId: string): RuntimeEntity;
+	}
+}
+
 declare module "@porchlight/agent" {
   /** PORCH-148: the agent module's model-profile machinery. */
   export const agentModels: Record<string, unknown>;
+  /** PORCH-149: the five MCP-for-the-home tool descriptors of record. */
+  export const HOME_TOOLS: Record<string, { name: string; description: string; uiRoute: string }>;
   export function assembleAgentModule(
     store: { collection(name: string): unknown },
     options?: {
       /** The identity-plane access-token verifier (with its own device). */
-      verifySession: (token: string | null) => Promise<{ did: string; deviceId?: string } | null>;
+      verifySession?: (token: string | null) => Promise<{ did: string; deviceId?: string } | null>;
       /** The hub-admin fact of record (resolution's availability gate rides it). */
       adminFacts?: { isAdmin: (did: string) => Promise<boolean> | boolean };
       /** The identity-plane family facts the parental narrowing composes against. */
@@ -609,6 +642,8 @@ declare module "@porchlight/agent" {
       onProfileChange?: (event: object) => void;
       /** The member's agent type resolver; default the household-member agent. */
       agentTypeFor?: (memberId: string) => string | Promise<string>;
+      /** PORCH-149: the home module's toolSurface — the MCP-for-the-home seams. */
+      homeSurface?: Record<string, unknown>;
       now?: () => string;
     },
   ): {
@@ -624,5 +659,10 @@ declare module "@porchlight/agent" {
     auditService: unknown;
     /** The profile-routed inference seam consumer (composition seam 1). */
     createProfileInference(input: { providers?: Record<string, { name: string; providerClass: string; complete(r: object): Promise<object> }>; log?: (memberId: string, line: string) => void }): unknown;
+    /** PORCH-149: the MCP-for-the-home registry (null without homeSurface). */
+    toolRegistry: import("@porchlight/agent-runtime").ToolRegistry | null;
+    delegationService: unknown;
+    /** Composition seam 2: (memberId) => { memberId, scopes }. */
+    authorityResolver: ((memberId: string) => Promise<{ memberId: string; scopes: string[] }>) | null;
   };
 }

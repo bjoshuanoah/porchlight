@@ -1,4 +1,4 @@
-import { requireSignedSession } from "../util/writes.js";
+import { requireSignedSession, requireSession } from "../util/writes.js";
 import { fail } from "./errors.js";
 import { cleanName } from "./home.service.js";
 import { validCommandShape } from "./device.service.js";
@@ -52,7 +52,13 @@ export class SceneService {
   }
 
   async list({ accessToken, homeId } = {}) {
-    const authorized = await this.homes.authorize({ accessToken, homeId });
+    const { did } = await requireSession({ accessToken, verifySession: this.homes.verifySession });
+    return this.listForActor({ did, homeId });
+  }
+
+  /** GET /homes/:homeId/scenes, session-free — the same authorizeMember verdicts and scope filter. */
+  async listForActor({ did, homeId } = {}) {
+    const authorized = await this.homes.authorizeMember({ did, homeId });
     const rows = await this.scenes.find({ homeId });
     const scopes = authorized.access?.scopes ?? null;
     const visible = scopes
@@ -65,33 +71,46 @@ export class SceneService {
    * POST /scenes/:sceneId/run — run the scene from a home the caller
    * belongs to; per-action results with plain-language reasons. A visitor
    * runs exactly the scenes their grant carries a control scope for —
-   * every other scene refuses plainly (PORCH-138 ac-1/ac-5).
+   * every other scene refuses plainly (PORCH-138 ac-1/ac-5). The signed
+   * session resolves the did; the verdicts stay in the actor seam.
    */
   async run({ accessToken, sceneId } = {}) {
+    const { did } = await requireSession({ accessToken, verifySession: this.homes.verifySession });
+    return this.runForActor({ did, sceneId });
+  }
+
+  /**
+   * POST /scenes/:sceneId/run, session-free (the did already resolved).
+   * The agent tool registry (PORCH-149) rides this exact seam: the same
+   * authorizeMember verdicts, the same grant control coverage, the same
+   * per-action command path — with `detail` carrying the issuer
+   * attribution (member-run rows keep the scene-source detail of record).
+   */
+  async runForActor({ did, sceneId, detail = null } = {}) {
     const scene = await this.scenes.findOne({ _id: sceneId });
     if (!scene) return fail("E_SCENE_NOT_FOUND", "That scene isn't part of this home anymore.");
-    const authorized = await this.homes.authorize({ accessToken, homeId: scene.homeId });
+    const authorized = await this.homes.authorizeMember({ did, homeId: scene.homeId });
     if (authorized.access?.accessClass !== "owner-membership"
       && !coversResource(authorized.access.scopes, "scene", sceneId, "control")) {
       return fail("E_NOT_PERMITTED", "That scene isn't part of the access you were granted for this home.");
     }
-    const did = authorized.did;
+    const attribution = detail ?? { source: "scene", sceneId: scene._id, sceneName: scene.name };
     const results = [];
     for (const action of scene.actions ?? []) {
-      const { outcome, reason } = await this.#runAction(scene, action, did);
+      const { outcome, reason } = await this.#runAction(scene, action, did, attribution);
       results.push({ deviceId: action.deviceId, command: action.command, outcome, ...(reason ? { reason } : {}) });
     }
     return { scene: this.view(scene), outcome: results.some((result) => result.outcome === "confirmed") ? "confirmed" : "failed", results };
   }
 
-  async #runAction(scene, action, runnerDid) {
+  async #runAction(scene, action, runnerDid, detail) {
     try {
       const dispatched = await this.devices.runForActor({
         homeId: scene.homeId,
         deviceId: action.deviceId,
         command: action.command,
         actorIdentityRef: runnerDid,
-        detail: { source: "scene", sceneId: scene._id, sceneName: scene.name },
+        detail,
       });
       return { outcome: dispatched?.outcome ?? "confirmed" };
     } catch (cause) {

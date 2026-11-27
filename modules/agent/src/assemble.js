@@ -7,6 +7,7 @@ import { GovernanceController } from "./controllers/governance.controller.js";
 import { MemberController } from "./controllers/member.controller.js";
 import { createAgentRouter } from "./routes.js";
 import { createProfileInferenceProvider, AGENT_TYPE_HOUSEHOLD_MEMBER } from "./inference/profile-provider.js";
+import { ToolDelegationService } from "./tools/delegation.service.js";
 
 /**
  * Agent module assembly (PORCH-148). Builds the full route → controller →
@@ -40,6 +41,14 @@ import { createProfileInferenceProvider, AGENT_TYPE_HOUSEHOLD_MEMBER } from "./i
  *     re-resolves the profile on every call, no restart.
  *   agentTypeFor?: (memberId: string) => string | Promise<string>,
  *     The member's agent type resolver; default AGENT_TYPE_HOUSEHOLD_MEMBER.
+ *   homeSurface?: import("./tools/home-tools.js").HomeToolSurface,
+ *     PORCH-149: the home module's session-free actor seams (its
+ *     `toolSurface`). Present → the module builds the MCP-for-the-home tool
+ *     registry over them — the agent runtime library's tool-execution seam
+ *     (composition seam 2) with the delegation law enforced hub-side — and
+ *     returns `toolRegistry`, `delegationService`, and `authorityResolver`
+ *     for the runtime wiring. Absent → no registry is built (the profiles
+ *     machinery stands alone).
  *   now?: () => string,
  * }} [options]
  */
@@ -72,6 +81,16 @@ export function assembleAgentModule(store, options = {}) {
   const provenance = new ProvenanceService(inferenceProvenance, now);
   const agentTypeFor = options.agentTypeFor ?? null;
 
+  // PORCH-149: the MCP-for-the-home tool registry. When the home module's
+  // actor seams are injected, the registry rides the agent runtime
+  // library's tool-execution seam (composition seam 2): the delegation law
+  // enforced hub-side — identity + scopes resolved per call, refusals
+  // fail-closed, plain language, audited with agent attribution — and the
+  // tools executing the home-module services the UI routes resolve to.
+  const delegation = options.homeSurface
+    ? new ToolDelegationService({ surface: options.homeSurface, audit, now })
+    : null;
+
   const controllers = {
     governance: new GovernanceController({ profiles, assignments, provenance, verifySession: options.verifySession }),
     member: new MemberController({ profiles, assignments, resolution, provenance, verifySession: options.verifySession }),
@@ -96,6 +115,11 @@ export function assembleAgentModule(store, options = {}) {
         log,
         now,
       }),
+    /** PORCH-149: the MCP-for-the-home registry (null without homeSurface). */
+    toolRegistry: delegation?.registry ?? null,
+    delegationService: delegation,
+    /** Composition seam 2: (memberId) => { memberId, scopes } — pass into AgentRuntime's authority opt. */
+    authorityResolver: delegation ? ((memberId) => delegation.authorityFor(memberId)) : null,
     agentType: AGENT_TYPE_HOUSEHOLD_MEMBER,
   };
 }

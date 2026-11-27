@@ -1,4 +1,4 @@
-import { requireSignedSession } from "../util/writes.js";
+import { requireSignedSession, requireSession } from "../util/writes.js";
 import { fail } from "./errors.js";
 import { cleanName } from "./home.service.js";
 import { validCommandShape } from "./device.service.js";
@@ -97,7 +97,18 @@ export class AutomationService {
   }
 
   async list({ accessToken, homeId } = {}) {
-    const authorized = await this.homes.authorize({ accessToken, homeId });
+    const { did } = await requireSession({ accessToken, verifySession: this.homes.verifySession });
+    return this.listForActor({ did, homeId });
+  }
+
+  /**
+   * GET /homes/:homeId/automations, session-free. Automations are
+   * member-management surfaces, never a grant scope: a visitor's view
+   * carries no rules at all (PORCH-138 TS 1 scope list) — the same verdict
+   * here, resolved against the did.
+   */
+  async listForActor({ did, homeId } = {}) {
+    const authorized = await this.homes.authorizeMember({ did, homeId });
     const rows = await this.automations.find({ homeId });
     // Automations are member-management surfaces, never a grant scope: a
     // visitor's view carries no rules at all (PORCH-138 TS 1 scope list).

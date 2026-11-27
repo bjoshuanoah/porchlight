@@ -178,15 +178,43 @@ export function assembleHomeModule(store, options = {}) {
       homes: homeService,
       areas: areaService,
       audit,
-      deviceService,
-      sceneService,
-      automationService,
       grants: grantService,
     }),
     device: new DeviceController(deviceService),
     automation: new AutomationController({ scenes: sceneService, automations: automationService }),
     camera: new CameraController(cameraService),
     event: new EventController(eventService, verifySession),
+  };
+
+  // PORCH-149: the surface-list callables surfacesForActor composes — the
+  // exact list services the controller surfaces() aggregates, wired after
+  // the services exist (the grantResolver pattern).
+  homeService.surfaceLists = {
+    areas: ({ did, homeId }) => areaService.listForActor({ did, homeId }),
+    devices: ({ did, homeId }) => deviceService.listForActor({ did, homeId }),
+    scenes: ({ did, homeId }) => sceneService.listForActor({ did, homeId }),
+    automations: ({ did, homeId }) => automationService.listForActor({ did, homeId }),
+  };
+
+  // PORCH-149: the home module's session-free actor tool surface — every
+  // callable IS the service path its UI route resolves to (the session
+  // methods delegate into these seams; no hidden API, no parallel
+  // authorization: each call enforces the member's authorizeMember verdicts
+  // live). The agent tool registry consumes this through injected callbacks;
+  // the agent module imports no home source (CI-enforced boundary).
+  const toolSurface = {
+    homes: ({ did }) => homeService.homesForActor({ did }),
+    /** GET /homes/:homeId (the controller surfaces() payload), session-free. */
+    status: ({ did, homeId }) => homeService.surfacesForActor({ did, homeId }),
+    listDevices: ({ did, homeId }) => deviceService.listForActor({ did, homeId }),
+    /** POST /devices/:deviceId/command's verdict path; detail carries agent attribution. */
+    sendCommand: ({ did, deviceId, command, detail = {} }) =>
+      deviceService.commandForActor({ did, deviceId, command, source: "agent", detail }),
+    /** POST /scenes/:sceneId/run's verdict path; detail carries agent attribution. */
+    runScene: ({ did, sceneId, detail = {} }) =>
+      sceneService.runForActor({ did, sceneId, detail }),
+    reviewEvents: ({ did, homeId, limit, offset }) =>
+      eventService.listForActor({ did, homeId, limit, offset }),
   };
 
   return {
@@ -202,6 +230,7 @@ export function assembleHomeModule(store, options = {}) {
     adapters,
     cameraService,
     eventService,
+    toolSurface,
   };
 }
 

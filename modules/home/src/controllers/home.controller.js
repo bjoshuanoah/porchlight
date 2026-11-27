@@ -7,13 +7,10 @@ import { delegate } from "./transport.js";
  * operations live here (routes stay thin, services own the models).
  */
 export class HomeController {
-  constructor({ homes, areas, audit, deviceService, sceneService, automationService, grants }) {
+  constructor({ homes, areas, audit, grants }) {
     this.homes = homes;
     this.areas = areas;
     this.audit = audit;
-    this.deviceService = deviceService ?? null;
-    this.sceneService = sceneService ?? null;
-    this.automationService = automationService ?? null;
     this.grants = grants ?? null;
   }
 
@@ -39,7 +36,7 @@ export class HomeController {
    * payload; every read is member-scoped hub-side.
    */
   get = async (req, res) => {
-    return delegate(res, () => this.surfaces({ req, homeId: req.params?.homeId }));
+    return delegate(res, () => this.homes.surfaces({ accessToken: this.bearer(req), homeId: req.params?.homeId }));
   };
 
   /** PUT /homes/:homeId — rename (owner only). */
@@ -69,30 +66,6 @@ export class HomeController {
   listAreas = async (req, res) => {
     return delegate(res, () => this.areas.list({ accessToken: this.bearer(req), homeId: req.params?.homeId }));
   };
-
-  async surfaces({ req, homeId }) {
-    const { did, home, role, access } = await this.homes.authorize({ accessToken: this.bearer(req), homeId });
-    const [areaList, deviceList, sceneList, automationList] = await Promise.all([
-      this.areas.list({ accessToken: this.bearer(req), homeId }),
-      this.deviceService?.list({ accessToken: this.bearer(req), homeId }) ?? { devices: [] },
-      this.sceneService?.list({ accessToken: this.bearer(req), homeId }) ?? { scenes: [] },
-      this.automationService?.list({ accessToken: this.bearer(req), homeId }) ?? { automations: [] },
-    ]);
-    return {
-      home: { ...this.homes.homeView(home, role), viewerDid: did },
-      // The resolved access of record: the visitor surfaces read this to
-      // present exactly the granted controls (and no management surfaces).
-      access: {
-        accessClass: access.accessClass,
-        role: access.role ?? null,
-        scopes: access.scopes ?? null,
-      },
-      areas: areaList.areas,
-      devices: deviceList.devices,
-      scenes: sceneList.scenes,
-      automations: automationList.automations,
-    };
-  }
 
   async authoredAudit({ req, homeId, limit, offset }) {
     const authorized = await this.homes.authorize({ accessToken: this.bearer(req), homeId });

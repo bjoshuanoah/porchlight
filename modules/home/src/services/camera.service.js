@@ -29,7 +29,7 @@
  *   health(engineCameraId) → { recording: {state}, playback: {state}, detection: {state} }
  *   serviceHealth() / storage() → { state, detail }
  */
-import { requireSignedSession } from "../util/writes.js";
+import { requireSignedSession, requireSession } from "../util/writes.js";
 import { fail } from "./errors.js";
 import { createEngineTokenService } from "./engine-token.js";
 
@@ -100,7 +100,18 @@ export class CameraService {
    * language, camera authorization is never bundled with device controls.
    */
   async authorizeRead(accessToken, homeId) {
-    const authorized = await this.homes.authorize({ accessToken, homeId });
+    const { did } = await requireSession({ accessToken, verifySession: this.verifySession });
+    return this.authorizeReadForActor({ did, homeId });
+  }
+
+  /**
+   * The camera read authorization seam, session-free (the did already
+   * resolved) — the SAME verdicts: home membership, the separate
+   * camera-access row, and no camera surface for any visit grantee.
+   * PORCH-149's event-review actor seam rides this.
+   */
+  async authorizeReadForActor({ did, homeId } = {}) {
+    const authorized = await this.homes.authorizeMember({ did, homeId });
     if (authorized.access?.accessClass !== "owner-membership") {
       return fail("E_NOT_PERMITTED", "Cameras never ride a visit grant — ask the home's owner for camera access.");
     }
