@@ -1,0 +1,28 @@
+{
+  "name": "@porchlight/transcript",
+  "version": "0.5.3",
+  "description": "Engine transcription plane: rolling + event transcription consumer of the stream manager, the local vector store of record for transcript text, semantic audio search, and the retention index cascade (PORCH-155).",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "private": true,
+  "engines": {
+    "node": ">= 24"
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "lint": "eslint .",
+    "build": "echo nothing to build",
+    "typecheck": "echo nothing to typecheck"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@porchlight/recorder": "0.5.3",
+    "aedes": "^1.2.0"
+  }
+}

@@ -120,6 +120,36 @@ export function createApi(baseUrl = "") {
     // so the console always has something plain-language to show.
     manualRecord: (cameraId, action) =>
       failSafe(() => request(`/api/cameras/${encodeURIComponent(cameraId)}/record/${action === "stop" ? "stop" : "start"}`, { method: "POST" })),
+
+    // Transcription plane (PORCH-155): the method doc of record across the
+    // three scopes (global / recording types / cameras), per-camera
+    // inspection with the winning layer, the stage's never-silent status,
+    // stored records with their explicit states, semantic search, and the
+    // cascade audit. Refusals (503 when the part isn't wired, 422 for bad
+    // method docs or an unwired embedder) surface verbatim via ApiError.
+    getTranscriptionMethod: () => request("/api/transcription/method"),
+    putTranscriptionMethod: (doc) => request("/api/transcription/method", { method: "PUT", body: doc }),
+    inspectTranscriptionMethod: (cameraId, type) =>
+      request(`/api/transcription/method/inspect?cameraId=${encodeURIComponent(cameraId)}&type=${encodeURIComponent(type)}`),
+    getTranscriptionStatus: () => request("/api/transcription/status"),
+    listTranscripts: ({ cameraId, sourceType, limit } = {}) => {
+      // Undefined params are omitted so the service's own defaults apply.
+      const params = new URLSearchParams();
+      if (cameraId !== undefined) params.set("cameraId", cameraId);
+      if (sourceType !== undefined) params.set("sourceType", sourceType);
+      if (limit !== undefined) params.set("limit", String(limit));
+      const query = params.toString();
+      return request(`/api/transcripts${query ? `?${query}` : ""}`);
+    },
+    searchTranscripts: ({ query, k, cameraId, sourceType } = {}) => {
+      // Only present keys POST — the service reads what's in the body.
+      const body = { query };
+      if (k !== undefined) body.k = k;
+      if (cameraId !== undefined) body.cameraId = cameraId;
+      if (sourceType !== undefined) body.sourceType = sourceType;
+      return request("/api/transcripts/search", { method: "POST", body });
+    },
+    transcriptCascadeAudit: () => request("/api/transcripts/cascade/audit"),
   };
 
   async function failSafe(call) {

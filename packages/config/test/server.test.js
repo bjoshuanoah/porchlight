@@ -228,7 +228,7 @@ test("knob inspector returns exactly the six whitelist knobs with base/value/sou
 	const knobs = await api("GET", "/api/config/knobs?cameraId=front_left");
 	assert.equal(knobs.status, 200);
 	assert.deepEqual(Object.keys(knobs.body.knobs).sort(), [
-		"alertRouting", "audioDetectionEnabled", "detectionClasses", "detectionEnabled", "recordingMode", "zoneEnabled",
+		"alertRouting", "audioDetectionEnabled", "detectionClasses", "detectionEnabled", "recordingMode", "transcriptionEnabled", "zoneEnabled",
 	]);
 	assert.equal(knobs.body.cameraId, "front_left");
 	// Base resolves camera > _default > built-in default; nothing active here.

@@ -10,4 +10,5 @@ export const consoleTabs = [
   { id: "profiles", label: "Profiles" },
   { id: "storage", label: "Storage" },
   { id: "compute", label: "Compute" },
+  { id: "transcripts", label: "Transcripts" },
 ];

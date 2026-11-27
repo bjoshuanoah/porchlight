@@ -82,3 +82,42 @@ Entity chains, coverage-zone authoring, the property map, and follow state
 are Overwatch's own (PORCH-I-010). The engine supplies ids, detections, and
 frames; it consumes nothing back but the PropertyEntity chains published for
 bus consumers.
+
+## 5. The transcription plane joins the composition (PORCH-155)
+
+The transcription/vector-store consumer referenced above is landed and
+extends — never redefines — the sections above:
+
+- **Audio source (§ stream manager law).** The transcription consumer is an
+  in-process subscriber of the engine's per-camera decoded PCM lane. The
+  composition root (@porchlight/installer `startPlatformRuntime`) wires
+  `manager.subscribeAudio(cameraId, …)` for every configured camera and for
+  every fleet-added camera (wrapped `applyFleet`) — NOTHING it wires opens a
+  second camera connection. The pcm lane stays mono f32le at 16 kHz
+  (PCM_SAMPLE_RATE).
+- **Camera ids (§ 1).** Transcript records and vector payload refs carry
+  `cameraId` values from the same one-registry fleet name; nothing mints a
+  second namespace.
+- **Records of record.** `@porchlight/transcript`'s `TranscriptionService`
+  writes rolling ~1-minute window transcripts and full-span (chunked) event
+  transcripts into the `TranscriptStore` filesystem store
+  (`<storageRoot>/transcripts/{rolling|events}/<dateKey>/<camera>.json`),
+  with explicit states (`text | no-speech | partial`) — absence of text is
+  never a missing field, and event records obey the desc-and-transcript law.
+- **Vector store of record.** Chunks embed at write time into the local
+  `LocalVectorStore` beside the transcripts; payload refs are the TS 13 set
+  {cameraId, sourceType, sourceRef, startOffset, endOffset, text}.
+- **Retention cascade.** The recorder supervisor's retention sweep injects
+  `createTranscriptCascade` (opt `retentionCascade`): deleted dateKeys drop
+  their transcript text AND vector payloads in the same sweep pass;
+  cold-moved dates keep theirs (the cascade follows deletion, not
+  relocation). The supervisor test pins same-pass semantics
+  (packages/recorder/test/supervisor-cascade.test.js).
+- **Search.** Semantic audio search resolves source refs to timeline paths:
+  rolling → `/timeline/<cameraId>?at=<seek target ISO>`; event →
+  `/events/<cameraId>/<eventId>`.
+- **Event-record handoff.** This plane stores engine-side event transcripts
+  keyed `event-<cameraId>-<eventId>`; the description+transcript pair is
+  rendered together or neither by the event surface that consumes the
+  record (PRD 13's desc-and-transcript law). Overwatch consumes nothing
+  here; § 4 is unchanged.

@@ -8,6 +8,13 @@
 
 import { RecorderSupervisor } from "@porchlight/recorder";
 import { StreamManager } from "@porchlight/stream";
+import {
+	TranscriptionService,
+	TranscriptStore,
+	LocalVectorStore,
+	createProviderResolver,
+	createTranscriptCascade,
+} from "@porchlight/transcript";
 import { resolveHal } from "@porchlight/hal";
 import { aggregateHealth, createStatusServer } from "./status-page.js";
 import { loadPlatformConfig } from "./config.js";
@@ -54,9 +61,22 @@ function defaultLocalNetworkProbe(log) {
  *   halStatus?: Record<string, unknown>,
  *   localNetworkProbe?: () => Promise<{state: "allowed"|"denied"|"unknown"|"unprobed", reason?: string} | null>,
  *   localNetworkProbeMs?: number,
+ *   transcription?: import("@porchlight/transcript").TranscriptionService,
+ *   transcriptionResolver?: (method: string) => import("@porchlight/transcript").TranscriptionProvider,
+ *   transcriptionEnabledFor?: (cameraId: string) => Promise<boolean|{value: boolean, source: string}>|boolean|{value: boolean, source: string},
+ *   transcriptionEventReader?: (span: {cameraId: string, from: number, to: number}) => Promise<{data: Float32Array, sampleRate: number}|null>,
+ *   transcriptionWindowMs?: number,
  * }} opts
  */
-export async function startPlatformRuntime({ config, version = "unknown", log = console.log, halStatus, localNetworkProbe, localNetworkProbeMs = 60_000 } = {}) {
+export async function startPlatformRuntime(opts = {}) {
+	const {
+		config,
+		version = "unknown",
+		log = console.log,
+		halStatus,
+		localNetworkProbe,
+		localNetworkProbeMs = 60_000,
+	} = opts;
 	// The stream manager composes FIRST (PORCH-154): it owns the ONE upstream
 	// connection per camera and serves the relay ports the supervisor's
 	// recorder fleet consumes — it must be answering before the recorder
@@ -69,7 +89,71 @@ export async function startPlatformRuntime({ config, version = "unknown", log = 
 		log(`[runtime] stream manager initial fleet application failed: ${err instanceof Error ? err.message : String(err)}`);
 	});
 	log(`[runtime] stream manager up (${/** @type {any[]} */ (config.cameras ?? []).length} camera(s) configured)`);
-	const supervisor = new RecorderSupervisor({ config: /** @type {any} */ (config), log });
+	// The transcription consumer (PORCH-155; TS 13): a consumer of the stream
+	// manager — it subscribes to each camera's decoded PCM the manager
+	// already produces, so NOTHING here opens a second camera connection
+	// (stream-manager law). Composed when the runtime receives the seams; a
+	// not-wired plane states itself on the status page (never silent). The
+	// retention index cascade rides the supervisor's sweep in the same pass.
+	/** @type {import("@porchlight/transcript").TranscriptionService|null} */
+	let transcription = opts.transcription ?? null;
+	if (!transcription && (opts.transcriptionResolver || opts.transcriptionEnabledFor || opts.transcriptionEventReader)) {
+		const storageRoot = /** @type {string} */ (config.storageRoot);
+		const transcriptsRoot = `${storageRoot.replace(/\/$/, "")}/transcripts`;
+		transcription = new TranscriptionService({
+			store: new TranscriptStore({ root: transcriptsRoot }),
+			vectorStore: new LocalVectorStore({ file: `${transcriptsRoot}/vectors.json` }),
+			resolveProvider: opts.transcriptionResolver ?? createProviderResolver({}),
+			enabledFor: opts.transcriptionEnabledFor ?? (() => false),
+			eventReader: opts.transcriptionEventReader ?? null,
+			windowMs: opts.transcriptionWindowMs,
+			now: Date.now,
+			log,
+		});
+	}
+	/** @type {Map<string, () => void>} */
+	const transcriptionSubs = new Map();
+	const attachTranscription = (name) => {
+		if (!transcription || transcriptionSubs.has(name)) return;
+		const unsub = manager.subscribeAudio(name, (ch) => {
+			void transcription.submitRollingAudio(ch);
+		});
+		transcriptionSubs.set(name, unsub);
+	};
+	if (transcription) {
+		for (const camera of /** @type {any[]} */ (config.cameras ?? [])) {
+			attachTranscription(/** @type {string} */ (camera.name ?? camera.id));
+		}
+		log(`[runtime] transcription consumer attached to ${transcriptionSubs.size} camera pcm lane(s)`);
+		// Fleet changes ride the SAME manager instance the config mirror
+		// applies to (POST /api/cameras/apply): an added camera gets its
+		// subscription here — still ZERO extra camera connections; a removed
+		// camera's subscription detaches with its source.
+		const applyFleet = manager.applyFleet.bind(manager);
+		/** @param {any[]} cameras */
+		manager.applyFleet = async (cameras) => {
+			const applied = await applyFleet(cameras);
+			for (const name of applied.added ?? []) attachTranscription(/** @type {string} */ (name));
+			for (const name of applied.removed ?? []) {
+				transcriptionSubs.get(/** @type {string} */ (name))?.();
+				transcriptionSubs.delete(/** @type {string} */ (name));
+			}
+			return applied;
+		};
+	}
+	const supervisor = new RecorderSupervisor({
+		config: /** @type {any} */ (config),
+		log,
+		...(transcription
+			? {
+					retentionCascade: createTranscriptCascade({
+						store: transcription.store,
+						vectorStore: transcription.vectorStore,
+						log,
+					}),
+				}
+			: {}),
+	});
 	supervisor.start();
 	log(`[runtime] recorder supervisor up (${/** @type {any[]} */ (config.cameras ?? []).length} camera(s) configured)`);
 	// The Local Network posture (PORCH-152): probed at boot and re-probed on
@@ -97,6 +181,7 @@ export async function startPlatformRuntime({ config, version = "unknown", log = 
 		version,
 		halStatus: halStatus ?? platformPosture(),
 		localNetwork,
+		transcription,
 	});
 	const status = createStatusServer({
 		aggregate,
@@ -114,6 +199,7 @@ export async function startPlatformRuntime({ config, version = "unknown", log = 
 		managerStarted,
 		status,
 		aggregate,
+		transcription,
 		/** @returns {Promise<void>} */
 		stop: async () => {
 			clearInterval(interval);
@@ -121,6 +207,8 @@ export async function startPlatformRuntime({ config, version = "unknown", log = 
 			// The recorder stops before the manager: its recordings drain from
 			// the manager's relay lanes, so the manager closes last.
 			await supervisor.stop();
+			for (const unsub of transcriptionSubs.values()) unsub?.();
+			await transcription?.close();
 			await manager.stop();
 		},
 	};

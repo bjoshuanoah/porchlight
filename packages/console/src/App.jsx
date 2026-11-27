@@ -19,6 +19,7 @@ import SpeedCalibration from "./screens/SpeedCalibration.jsx";
 import Profiles from "./screens/Profiles.jsx";
 import Storage from "./screens/Storage.jsx";
 import Compute from "./screens/Compute.jsx";
+import Transcripts from "./screens/Transcripts.jsx";
 
 const theme = createTheme({
   palette: { mode: "light" },
@@ -96,6 +97,7 @@ export default function App() {
           {tab === "profiles" && <Profiles camera={camera} cameras={cameras} api={api} />}
           {tab === "storage" && <Storage api={api} />}
           {tab === "compute" && <Compute api={api} />}
+          {tab === "transcripts" && <Transcripts api={api} />}
         </Container>
         <Tabs
           value={tab}

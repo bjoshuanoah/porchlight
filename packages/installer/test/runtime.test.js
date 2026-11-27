@@ -165,3 +165,54 @@ test("platformPosture states the host posture, and never advertises what does no
 		assert.deepEqual(posture.inference, ["coreml", "cpu"]);
 	}
 });
+
+test("the transcription consumer composes onto the manager's pcm lane with the retention cascade in the same sweep (PORCH-155)", async () => {
+	const { config, cleanup } = tmpdir();
+	try {
+		const rt = await startPlatformRuntime({
+			config,
+			log: () => {},
+			localNetworkProbe: allowedProbe,
+			transcriptionResolver: () => ({ name: "whisper-local:test", transcribe: async () => ({ text: null }), status: () => ({ state: "configured" }) }),
+			transcriptionEnabledFor: () => ({ value: false, source: "base" }),
+		});
+		try {
+			// The consumer of record exists and is wired to the manager's
+			// in-process pcm lane — no second camera connection exists.
+			assert.ok(rt.transcription, "the transcription service composed");
+			assert.equal(typeof rt.transcription.submitRollingAudio, "function");
+			// The retention index cascade rides the supervisor's sweep pass.
+			assert.ok(rt.supervisor.retentionCascade, "the supervisor carries the retention cascade");
+			assert.equal(typeof rt.supervisor.retentionCascade.dropRollingDates, "function");
+			// Not-wired never hides: without a transcription opt the row states
+			// unavailable; wired, the row renders its own posture.
+			const agg = rt.aggregate();
+			const row = agg.services.find((s) => s.name === "transcript");
+			assert.equal(row.state, "ok");
+			assert.match(row.detail, /transcribing whisper-local/);
+		} finally {
+			await rt.stop();
+		}
+	} finally {
+		cleanup();
+	}
+});
+
+test("with no transcription seams the status page states the plane is not wired (never silent)", async () => {
+	const { config, cleanup } = tmpdir();
+	try {
+		const rt = await startPlatformRuntime({ config, log: () => {}, localNetworkProbe: allowedProbe });
+		try {
+			assert.equal(rt.transcription, null);
+			assert.equal(rt.supervisor.retentionCascade, null);
+			const row = rt.aggregate().services.find((s) => s.name === "transcript");
+			assert.equal(row.healthy, false);
+			assert.equal(row.state, "unavailable");
+			assert.match(row.detail, /not wired/);
+		} finally {
+			await rt.stop();
+		}
+	} finally {
+		cleanup();
+	}
+});

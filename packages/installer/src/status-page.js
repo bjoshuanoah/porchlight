@@ -26,10 +26,11 @@ const LOCAL_NETWORK_NOTES = Object.freeze({
  *   version?: string,
  *   halStatus?: Record<string, unknown>,
  *   localNetwork?: {state?: string, reason?: string | null} | null,
+ *   transcription?: import("@porchlight/transcript").TranscriptionService | null,
  *   generatedAt?: string,
  * }} opts
  */
-export function aggregateHealth({ supervisor = null, manager = null, version = "unknown", halStatus = null, generatedAt, localNetwork } = {}) {
+export function aggregateHealth({ supervisor = null, manager = null, version = "unknown", halStatus = null, generatedAt, localNetwork, transcription = null } = {}) {
 	/** @type {ServiceHealth[]} */
 	const services = [];
 	let recorderState = null;
@@ -110,6 +111,19 @@ export function aggregateHealth({ supervisor = null, manager = null, version = "
 			detail: "the recorder is not running — storage state unknown",
 		});
 	}
+	// The transcription row (PORCH-155): the consumer of the stream manager's
+	// pcm lane. Composed → its own never-silent posture (enablement is off
+	// by default per camera, so "off" is normal); not composed → a stated
+	// unavailable row, never a silent blank.
+	if (transcription && typeof transcription.status === "function") {
+		const ts = transcription.status();
+		const detail = ts.state === "failed"
+			? (ts.reason ?? "the transcription consumer stopped")
+			: `transcribing ${ts.methods.effective.rolling} — ${ts.counters.recordsWritten} record(s), cadence last window ${ts.cadence.lastWindowMs == null ? "pending" : `${Math.round(ts.cadence.lastWindowMs)}ms / ${ts.cadence.budgetMs}ms budget`}${ts.cadence.budgetOverruns > 0 ? `, ${ts.cadence.budgetOverruns} overrun(s)` : ""}`;
+		services.push({ name: "transcript", healthy: ts.state !== "failed", state: ts.state === "failed" ? "failed" : "ok", detail });
+	} else {
+		services.push({ name: "transcript", healthy: false, state: "unavailable", detail: "the transcription consumer is not wired into this runtime — speech is not being transcribed" });
+	}
 	// The Local Network posture (PORCH-152): TCP on the LAN is unaffected by
 	// macOS local-network privacy, but a process without the permission
 	// silently LOSES UDP — LAN discovery and camera local-P2P paths just
@@ -132,7 +146,11 @@ export function aggregateHealth({ supervisor = null, manager = null, version = "
 	});
 	services.push({ name: "status-page", healthy: true, state: "ok", detail: "served" });
 	const cameras = recorderState?.cameras ?? [];
-	const degraded = services.some((s) => !s.healthy);
+	// Degradation law (TS 13): losing the transcription consumer degrades
+	// TRANSCRIPTS ONLY — recording, visual detection, and every other row
+	// keep the page healthy. A not-wired plane states its row plainly but
+	// never drags the whole page to degraded.
+	const degraded = services.some((s) => !s.healthy && s.name !== "transcript");
 	return {
 		status: degraded ? "degraded" : "healthy",
 		version,
