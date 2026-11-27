@@ -1,0 +1,29 @@
+{
+	"name": "@porchlight/wyze",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight vendor adapter \u2014 Wyze DTLS P2P camera source producer (PORCH-131): the in-repo IOTC + DTLS-PSK handshake (go2rtc-reverse-engineered protocol knowledge), frame reassembly, the HL K-auth, and the stream-manager source factory. Contract-tested plugins; runs natively on the host only.",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"scripts": {
+		"test": "node --test --test-force-exit 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'wyze ships plain JS (no build)'"
+	},
+	"dependencies": {
+		"@porchlight/stream": "0.5.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/wyze"
+	}
+}
