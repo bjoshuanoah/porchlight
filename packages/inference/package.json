@@ -1,0 +1,28 @@
+{
+	"name": "@porchlight/inference",
+	"version": "0.5.3",
+	"private": true,
+	"description": "Porchlight engine inference tiering — the v0.3 local↔paid routing table (PORCH-133): tiered event-description inference (tier 0 local facts always-on, tier 1 local Ollama gated by entity FSM transitions, tier 2 paid OpenAI-compatible off by default until explicitly opted in), ordered escalation across tiers, and descriptions stored with the event they describe.",
+	"license": "MIT",
+	"author": "Brian Noah",
+	"engines": {
+		"node": ">= 24"
+	},
+	"type": "module",
+	"main": "src/index.js",
+	"exports": {
+		".": "./src/index.js"
+	},
+	"scripts": {
+		"test": "node --test 'test/**/*.test.js'",
+		"lint": "eslint .",
+		"build": "echo 'inference ships plain JS (no build)'"
+	},
+	"dependencies": {},
+	"devDependencies": {},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bjoshuanoah/porchlight.git",
+		"directory": "packages/inference"
+	}
+}
