@@ -1,6 +1,6 @@
 // index.js — public surface of @porchlight/recorder (PORCH-127).
 
-export { buildFfmpegArgs, buildFfmpegCommand, resolveAudioMode, partPathTemplate, AUDIO_TRANSCODE, SEGMENT_MOVFLAGS } from "./args.js";
+export { buildFfmpegArgs, buildFfmpegCommand, relayPortFor, relayInputFor, resolveAudioMode, partPathTemplate, AUDIO_TRANSCODE, SEGMENT_MOVFLAGS } from "./args.js";
 export { RecorderDaemon } from "./recorder.js";
 export { RecorderSupervisor } from "./supervisor.js";
 export { writeTest, writeTestReason, driveHealth, tierUsage, StorageBackend, STORAGE_STATES } from "./storage.js";

@@ -1,10 +1,12 @@
 # @porchlight/recorder — segment recorders + endurance soak (PORCH-127)
 
 Per-camera **Recorder daemons** (Node child-process managers over native
-ffmpeg with hardware decode sourced from the platform HAL
-(`@porchlight/hal` — `-hwaccel videotoolbox` on macOS), fMP4 segment writing,
-atomic finalize-on-crash, gap audit tooling, rolling retention, headless
-launchd autostart, and the 7-day deployment soak harness. Engine initiative:
+ffmpeg — fMP4 segment writing, atomic finalize-on-crash, gap audit tooling,
+rolling retention, headless launchd autostart, and the 7-day deployment soak
+harness). Hardware codec decisions stay with the platform HAL
+(`@porchlight/hal`): hardware encode shapes the synthetic soak branch, and
+hardware decode lives on the stream manager's upstream ffmpeg (PORCH-154).
+Engine initiative:
 Porchlight Home — Engine (recording, detection, inference). Camera count is
 a deployment input; nothing here builds to a specific fleet.
 
@@ -21,10 +23,18 @@ coverage model the gap audit uses.
 
 ## Recorder daemon (one per camera)
 
-- ffmpeg holds **one long-lived ingest per camera** (hardware decode argv
-  from the HAL — `-hwaccel videotoolbox` on macOS, RTSP over TCP). Consumers
-  (detection, live grid, transcription) ride the stream manager — they never
-  open camera connections.
+- ffmpeg holds one long-lived ingest per camera — and for url cameras that
+  input is **the stream manager's localhost relay, never the camera itself**
+  (the PORCH-154 single-upstream law): `-i tcp://127.0.0.1:<port>` where
+  `<port>` is `streams.base + 1 + <the camera's position in the name-sorted
+  fleet>` (plain codepoint `Array.prototype.sort()`, not localeCompare — the
+  exact formula `@porchlight/stream` uses for its relay listeners, pinned by
+  the PORCH-154 shared contract). The recorder carries no camera argv at all
+  (no hardware decode, no `-rtsp_transport`): `camera.source.url` never
+  appears in a recorder ffmpeg command; only packages/stream opens the
+  camera, and its copy lane rides the relay to this writer. Consumers
+  (detection, live grid, transcription) ride the same manager — nobody but
+  the stream package opens camera connections.
 - fMP4 segments: `-f segment` with `movflags=+frag_keyframe+empty_moov+default_base_moof`
   (proven shaping pattern; MSE-safe).
 - **Finalize-on-crash**: segments are written as `<HHMMSS>.part`; once the
@@ -38,6 +48,9 @@ coverage model the gap audit uses.
 - Audio: default `-c:a aac -ar 16000` — **PCM ingest (8 kHz-class vendor
   adapters) is transcoded to AAC/16 kHz at ingest** for browser MSE
   compatibility. `audioMode: "copy"` is the opt-out for known-AAC cameras.
+- Synthetic soak cameras stay local: the lavfi branch builds its own test
+  signal inside the recorder daemon — a local test signal is not a camera
+  connection (documented per the PORCH-154 shared contract, not hidden).
 
 ## Supervision
 
@@ -104,7 +117,10 @@ JSON or YAML (the platform config store keeps it versioned; restarts replay
 the same document). Required: `storageRoot`, `cameras[]` (`name`, `source.url`
 or `source.synthetic`, optional `audioMode`). Optional: `segmentSeconds`
 (600), `retentionDays` (7), `coldRoot`, `highWaterFraction` (0.9), `port`
-(8971), `ffmpegPath`/`ffprobePath`, `statePath`.
+(8971), `ffmpegPath`/`ffprobePath`, `statePath`, `streams.base` (8972 — the
+stream manager's base port; its relay listeners sit at
+`base + 1 + sortedIndex(cameraName)` per the PORCH-154 shared contract, and
+the recorder re-derives the identical number for each url camera's `-i`).
 
 ## Tests
 

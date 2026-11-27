@@ -68,11 +68,14 @@ function config(root, port) {
 	};
 }
 
-/** Fake ffmpeg child: alive forever, never writes. */
+/** Fake ffmpeg child: alive forever, never writes. Records every spawn argv. */
 function fakeSpawn() {
 	/** @type {import("node:child_process").ChildProcess[]} */
 	const procs = [];
-	const spawn = () => {
+	/** @type {string[][]} */
+	const argvs = [];
+	const spawn = (_file, args) => {
+		argvs.push(args);
 		const proc = /** @type {any} */ (new EventEmitter());
 		proc.pid = 42420 + procs.length;
 		proc.stderr = null;
@@ -83,7 +86,7 @@ function fakeSpawn() {
 		procs.push(proc);
 		return proc;
 	};
-	return { spawn, procs };
+	return { spawn, procs, argvs };
 }
 
 test("supervisor writes state, serves /health, and stops cleanly", async () => {
@@ -220,6 +223,52 @@ test("applyConfig applies the camera set live: add, mutate, remove — no restar
 		);
 		assert.equal(supervisor.daemons.length, before);
 		assert.deepEqual(supervisor.config.cameras.map((c) => c.name), ["camA"]);
+	} finally {
+		await supervisor.stop();
+		fsDefault.rmSync(tmp, { recursive: true, force: true });
+	}
+});
+
+test("a url camera's daemon writer ingests the manager relay, never the camera URL (PORCH-154)", async () => {
+	const tmp = fsDefault.mkdtempSync(path.join(os.tmpdir(), "rec-relay-"));
+	const fake = fakeSpawn();
+	const supervisor = new RecorderSupervisor({
+		config: /** @type {any} */ ({
+			storageRoot: path.join(tmp, "store"),
+			port: 18997,
+			segmentSeconds: 10,
+			retentionDays: 2,
+			// No streams.base on purpose: the contract default 8972 must apply
+			// end to end through the daemon's real spawn path.
+			cameras: [
+				{ name: "camA", source: { url: "rtsp://cam/a" } },
+				{ name: "camB", source: { url: "rtsp://cam/b" } },
+			],
+		}),
+		spawn: fake.spawn,
+		pollMs: 100,
+		log: () => {},
+		bus: null,
+	});
+	try {
+		supervisor.start();
+		await sleep(120);
+		assert.equal(fake.procs.length, 2);
+
+		// Port formula recomputed independently of args.js: plain codepoint
+		// sort → camA index 0, camB index 1; default base 8972 → 8973 / 8974.
+		const inputOf = (i) => fake.argvs[i][fake.argvs[i].indexOf("-i") + 1];
+		assert.equal(inputOf(0), "tcp://127.0.0.1:8973");
+		assert.equal(inputOf(1), "tcp://127.0.0.1:8974");
+		// The law in one string: source.url never appears in a recorder
+		// ffmpeg command — the daemon spawn path included.
+		for (const argv of fake.argvs) {
+			assert.ok(
+				!argv.includes("rtsp://cam/a") && !argv.includes("rtsp://cam/b"),
+				`source.url leaked into daemon spawn argv (PORCH-154): ${argv.join(" ")}`,
+			);
+			assert.ok(!argv.includes("-rtsp_transport"), "upstream-only argv stays on the manager's source connection");
+		}
 	} finally {
 		await supervisor.stop();
 		fsDefault.rmSync(tmp, { recursive: true, force: true });

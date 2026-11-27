@@ -23,6 +23,7 @@
 	},
 	"dependencies": {
 		"@porchlight/recorder": "0.5.3",
+		"@porchlight/stream": "0.5.3",
 		"@porchlight/hal": "0.5.3",
 		"yaml": "^2.9.1"
 	},

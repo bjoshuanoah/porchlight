@@ -35,6 +35,7 @@ porchlight/
 │   ├── shared/     # Domain-agnostic helpers/types shared across the module boundary — @porchlight/shared (public)
 │   ├── hal/        # Platform HAL: the thin native integration layer (VideoToolbox/CoreML/Vision on macOS, Linux first cut) — @porchlight/hal (private); the only package allowed to touch OS frameworks (PORCH-132)
 │   ├── config/     # Engine config plane: zone/mask definitions (percent frame coords), composition resolver, speed calibration, configuration profiles + the admin console REST surface — @porchlight/config (private) (PORCH-135)
+│   ├── stream/     # Engine stream manager: one upstream connection per camera, every consumer fed (recorder mpegts relay, rgb/mjpeg/pcm lanes, /live serving, bus health events) — @porchlight/stream (private) (PORCH-154)
 │   ├── console/    # Admin console SPA: zone/mask editor, composition inspector, speed calibration, profile editor + layer inspector (MUI, React, Vite) — @porchlight/console (private) (PORCH-135)
 │   ├── cli/        # porchlight CLI — global bin, the npm install surface (`npm install -g porchlight`) (public)
 │   └── agent-runtime/  # Agent runtime library: the driftless agent runtime ported as the MIT open-source unit — loop, per-member memory/topic/keyset stores, SOUL injection, MCP client, and the inference/tool seams (nothing hub-specific imports in) — @porchlight/agent-runtime (public) (PORCH-147)

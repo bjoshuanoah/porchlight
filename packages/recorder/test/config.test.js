@@ -83,3 +83,35 @@ test("loadConfig validates a broken YAML field", () => {
 		fs.rmSync(tmp, { recursive: true, force: true });
 	}
 });
+
+test("streams: the manager's base-port knob validates with field-path errors (PORCH-154)", () => {
+	// Valid: object shape, base optional (the contract default 8972 applies at
+	// relay-derivation time), anything >= 1024 accepted.
+	assert.doesNotThrow(() => validateConfig({ ...good(), streams: { base: 9500 } }));
+	assert.doesNotThrow(() => validateConfig({ ...good(), streams: {} }));
+	// Wrong shapes name the exact field path in plain language.
+	assert.throws(
+		() => validateConfig({ ...good(), streams: "8972" }),
+		/config\.streams: expected an object with an optional integer `base` port/,
+	);
+	assert.throws(() => validateConfig({ ...good(), streams: 8972 }), /config\.streams/);
+	// Low base: beneath the well-known-port floor (contract floor 1024).
+	assert.throws(
+		() => validateConfig({ ...good(), streams: { base: 1023 } }),
+		/config\.streams\.base: must be an integer >= 1024/,
+	);
+	// Wrong-typed base: stringed and fractional integers both refuse.
+	assert.throws(() => validateConfig({ ...good(), streams: { base: "9500" } }), /config\.streams\.base/);
+	assert.throws(() => validateConfig({ ...good(), streams: { base: 8972.5 } }), /config\.streams\.base/);
+});
+
+test("resolveDefaults leaves streams untouched: the knob is read only at relay derivation", () => {
+	const cfg = validateConfig({ ...good(), streams: { base: 9500 } });
+	const defaults = resolveDefaults(cfg);
+	// The resolved defaults never inherit or default streams — arg.js's
+	// relayPortFor consumes cfg.streams directly.
+	assert.ok(!("streams" in defaults));
+	// And the config of record itself keeps its knob, unmutated.
+	assert.deepEqual(cfg.streams, { base: 9500 });
+	assert.ok(!("streams" in resolveDefaults(validateConfig(good()))));
+});

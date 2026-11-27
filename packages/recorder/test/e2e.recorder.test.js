@@ -9,13 +9,15 @@
 //     PCM sine audio → AAC/16 kHz, gap audit + retention sweep clean
 //   - finalize-on-crash: SIGKILL mid-write → restart + orphan recovery,
 //     zero unrecoverable corrupt files
-//   - ac-3 audio paths: AAC ingest copy keeps the codec; PCM ingest lands
-//     playable AAC at 16 kHz in fMP4 segments
+//   - ac-3 audio paths, relay-fed (PORCH-154): a relay-fed AAC ingest copy
+//     keeps the codec; a relay-fed PCM ingest lands playable AAC at 16 kHz
+//     in fMP4 segments
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile as nodeExecFile, spawn } from "node:child_process";
 import fsDefault from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -161,39 +163,97 @@ T("finalize-on-crash: SIGKILL mid-write, restart recovers, audit stays gap-free"
 	fsDefault.rmSync(root, { recursive: true, force: true });
 });
 
-T("ac-3: PCM ingest transcodes to playable AAC/16 kHz; AAC ingest copies untouched", async () => {
+T("ac-3: relay-fed PCM ingest transcodes to playable AAC/16 kHz; relay-fed AAC ingest copies untouched (PORCH-154)", async () => {
 	const tmp = fsDefault.mkdtempSync(path.join(os.tmpdir(), "rec-e2e-"));
 	try {
-		// fixtures: h264 + pcm_s16le @8k in MOV (the PCM-ingest camera shape),
-		// and h264 + AAC 44.1k in MP4 (the native-AAC ingest shape)
-		const pcmMov = path.join(tmp, "pcm8k.mov");
-		const aacFile = path.join(tmp, "aac44.mp4");
+		// PORCH-154: the recorder's `-i` for a url camera is the stream
+		// manager's localhost relay (mpegts copy-lane bytes on a TCP socket) —
+		// it never reads camera.source.url. These fixtures prerender the bytes
+		// a manager would fan out (no manager in this e2e): h264 + pcm_s16le
+		// @8 kHz — the PCM-ingest camera shape — on matroska (the mpegts
+		// muxer has no demuxable PCM codec tag), and h264 + AAC 44.1 kHz on
+		// MPEG-TS — the native-AAC ingest shape.
+		const pcmFixture = path.join(tmp, "pcm8k.mkv");
+		const aacFixture = path.join(tmp, "aac44.ts");
 		await run(FFMPEG, [
 			"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=10",
 			"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=8000",
-			"-t", "30", "-c:v", "libx264", "-preset", "ultrafast", "-g", "10", "-c:a", "pcm_s16le", pcmMov,
+			"-t", "30", "-c:v", "libx264", "-preset", "ultrafast", "-g", "10", "-c:a", "pcm_s16le", "-f", "matroska", pcmFixture,
 		]);
 		await run(FFMPEG, [
 			"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=10",
 			"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-			"-t", "30", "-c:v", "libx264", "-preset", "ultrafast", "-g", "10", "-c:a", "aac", aacFile,
+			"-t", "30", "-c:v", "libx264", "-preset", "ultrafast", "-g", "10", "-c:a", "aac", "-f", "mpegts", aacFixture,
 		]);
 
+		/**
+		 * Stand-in for the manager's relay listener: loops the prerendered
+		 * copy-lane bytes forever. The live manager reads the source once and
+		 * fans out to every consumer; here the fixture IS the copy lane.
+		 * @param {string} fixture
+		 * @param {number} port
+		 * @returns {Promise<import("node:net").Server>}
+		 */
+		const serveRelay = (fixture, port) => new Promise((resolve, reject) => {
+			const bytes = fsDefault.readFileSync(fixture);
+			const server = net.createServer((socket) => {
+				let at = 0;
+				const pump = () => {
+					const CHUNK = 32768;
+					while (at < bytes.length) {
+						const ok = socket.write(bytes.subarray(at, Math.min(at + CHUNK, bytes.length)));
+						at = at + CHUNK >= bytes.length ? 0 : at + CHUNK;
+						if (!ok) {
+							socket.once("drain", pump);
+							return;
+						}
+					}
+				};
+				pump();
+				socket.on("error", () => {});
+			});
+			server.on("error", reject);
+			server.listen(port, "127.0.0.1", () => resolve(server));
+		});
+
+		// argv capture through the REAL spawn path: the `-i` law proves itself
+		// on the process that actually writes segments.
+		/** @type {string[][]} */
+		const spawnArgvs = [];
+		const captureSpawn = /** @type {typeof spawn} */ ((file, args, opts) => {
+			spawnArgvs.push(/** @type {string[]} */ (args));
+			return spawn(file, args, opts);
+		});
+
 		const rootPcm = path.join(tmp, "store-pcm");
+		const PCM_BASE = 19370;
+		const pcmCam = { name: "pcm-cam", source: { url: pcmFixture }, audioMode: "transcode" };
+		// Port formula recomputed: single-camera fleet → sorted index 0.
+		const pcmPort = PCM_BASE + 1;
+		const pcmServer = await serveRelay(pcmFixture, pcmPort);
 		const daemonPcm = new RecorderDaemon({
-			camera: { name: "pcm-cam", source: { url: pcmMov, loop: true }, audioMode: "transcode" },
-			config: { storageRoot: rootPcm, segmentSeconds: 3, ffmpegPath: FFMPEG, ffprobePath: FFPROBE, cameras: [] },
+			camera: pcmCam,
+			config: { storageRoot: rootPcm, segmentSeconds: 3, ffmpegPath: FFMPEG, ffprobePath: FFPROBE, streams: { base: PCM_BASE }, cameras: [pcmCam] },
 			pollMs: 250,
 			stallMs: 30000,
+			spawn: captureSpawn,
 			log: noLog,
 		});
 		daemonPcm.start();
 		await sleep(5000);
 		await daemonPcm.stop();
-		await sleep(1500);
+		pcmServer.close();
+
+		const pcmArgv = spawnArgvs[0];
+		assert.deepEqual(
+			pcmArgv.slice(pcmArgv.indexOf("-i"), pcmArgv.indexOf("-i") + 2),
+			["-i", `tcp://127.0.0.1:${pcmPort}`],
+			"url camera ingest input must be the manager relay (PORCH-154)",
+		);
+		assert.ok(!pcmArgv.includes(pcmFixture), `source.url leaked into recorder argv (PORCH-154): ${pcmArgv.join(" ")}`);
 
 		const pcmSegments = listSegments(rootPcm).filter((e) => !e.part);
-		assert.ok(pcmSegments.length >= 1, "PCM ingest wrote segments");
+		assert.ok(pcmSegments.length >= 1, "relay-fed PCM ingest wrote segments");
 		for (const seg of pcmSegments) {
 			const p = await probeMediaCodec(FFPROBE, seg.absPath);
 			assert.equal(p.audioCodec, "aac", JSON.stringify(p));
@@ -201,20 +261,32 @@ T("ac-3: PCM ingest transcodes to playable AAC/16 kHz; AAC ingest copies untouch
 		}
 
 		const rootAac = path.join(tmp, "store-aac");
+		const AAC_BASE = 19380;
+		const aacCam = { name: "aac-cam", source: { url: aacFixture }, audioMode: "copy" };
+		const aacPort = AAC_BASE + 1; // single-camera fleet → sorted index 0
+		const aacServer = await serveRelay(aacFixture, aacPort);
 		const daemonAac = new RecorderDaemon({
-			camera: { name: "aac-cam", source: { url: aacFile, loop: true }, audioMode: "copy" },
-			config: { storageRoot: rootAac, segmentSeconds: 3, ffmpegPath: FFMPEG, ffprobePath: FFPROBE, cameras: [] },
+			camera: aacCam,
+			config: { storageRoot: rootAac, segmentSeconds: 3, ffmpegPath: FFMPEG, ffprobePath: FFPROBE, streams: { base: AAC_BASE }, cameras: [aacCam] },
 			pollMs: 250,
 			stallMs: 30000,
+			spawn: captureSpawn,
 			log: noLog,
 		});
 		daemonAac.start();
 		await sleep(5000);
 		await daemonAac.stop();
-		await sleep(1500);
+		aacServer.close();
+
+		const aacArgv = spawnArgvs[spawnArgvs.length - 1];
+		assert.deepEqual(
+			aacArgv.slice(aacArgv.indexOf("-i"), aacArgv.indexOf("-i") + 2),
+			["-i", `tcp://127.0.0.1:${aacPort}`],
+		);
+		assert.ok(!aacArgv.includes(aacFixture));
 
 		const aacSegments = listSegments(rootAac).filter((e) => !e.part);
-		assert.ok(aacSegments.length >= 1, "AAC ingest wrote segments");
+		assert.ok(aacSegments.length >= 1, "relay-fed AAC ingest wrote segments");
 		for (const seg of aacSegments) {
 			const p = await probeMediaCodec(FFPROBE, seg.absPath);
 			assert.equal(p.audioCodec, "aac", JSON.stringify(p));

@@ -51,6 +51,18 @@ export function validateConfig(cfg) {
 	if (cfg.busUrl !== undefined && (typeof cfg.busUrl !== "string" || !cfg.busUrl)) {
 		throw new Error("config.busUrl: must be a non-empty MQTT URL");
 	}
+	// PORCH-154: the stream manager's ONE config knob (`streams.base`) rides
+	// in the same config of record. The recorder consumes it only when a url
+	// camera derives its relay port, but a bad value refuses at load — never
+	// a silently half-shared config misplacing every relay socket.
+	if (cfg.streams !== undefined) {
+		if (!cfg.streams || typeof cfg.streams !== "object" || Array.isArray(cfg.streams)) {
+			throw new Error("config.streams: expected an object with an optional integer `base` port (the stream manager's base port)");
+		}
+		if (cfg.streams.base !== undefined && (!Number.isInteger(cfg.streams.base) || cfg.streams.base < 1024)) {
+			throw new Error("config.streams.base: must be an integer >= 1024 (the stream manager's base port)");
+		}
+	}
 	if (cfg.retentionRules !== undefined) {
 		if (!Array.isArray(cfg.retentionRules)) throw new Error("config.retentionRules: must be an array");
 		cfg.retentionRules.forEach((rule, i) => {

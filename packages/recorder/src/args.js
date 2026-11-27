@@ -9,7 +9,12 @@
 //   - fMP4 segments written with movflags +frag_keyframe+empty_moov
 //     (proven shaping pattern), date/hour/camera path layout,
 //   - PCM ingest (8 kHz-class vendor adapters) transcoded to AAC/16 kHz at
-//     ingest for browser MSE compatibility.
+//     ingest for browser MSE compatibility,
+//   - PORCH-154 recording input law: url cameras ingest the stream manager's
+//     localhost mpegts relay, never the camera itself. The single upstream
+//     connection per camera belongs to the manager (packages/stream — its
+//     src/args.js owns the decode argv and -rtsp_transport tcp on the real
+//     source), and camera.source.url never reaches a recorder ffmpeg command.
 
 import { createHal } from "@porchlight/hal";
 
@@ -35,17 +40,66 @@ export function resolveAudioMode(camera) {
 	return mode;
 }
 
+// The stream manager's base port default — the ONE config knob of the
+// PORCH-154 shared contract (platform `streams.base`, validated >= 1024 down
+// in config.js). Kept in sync with packages/stream; no cross-package import
+// so this package stays independent of the manager's runtime.
+const DEFAULT_STREAM_BASE = 8972;
+
+/**
+ * The stream manager relay TCP port for one camera (PORCH-154): the camera's
+ * position in the NAME-SORTED fleet — plain `Array.prototype.sort()`,
+ * codepoint order, deliberately not localeCompare — offsets the manager's
+ * base port: `streams.base + 1 + sortedIndex(name)`. This is byte-for-byte
+ * the formula packages/stream uses for its relay listeners; both sides
+ * derive it from the same config of record, neither hardcodes one.
+ * @param {{cameras?: import("./types.js").CameraConfig[], streams?: {base?: number}}} cfg
+ *   the platform config of record (at least its cameras fleet)
+ * @param {string} cameraName
+ * @returns {number}
+ */
+export function relayPortFor(cfg, cameraName) {
+	const fleet = cfg?.cameras;
+	if (!Array.isArray(fleet)) {
+		throw new Error(`relayPortFor: config.cameras is missing — the relay port for ${JSON.stringify(cameraName)} is a property of the camera's position in the camera fleet (PORCH-154)`);
+	}
+	// Default comparison throughout: codepoint order, both sides of the law.
+	const sorted = fleet.map((c) => c?.name).sort();
+	const position = sorted.indexOf(cameraName);
+	if (position === -1) {
+		throw new Error(`relayPortFor: camera ${JSON.stringify(cameraName)} is not in the config's camera fleet — relay ports come from each camera's sorted position, so unknown names cannot be placed (fleet: ${sorted.join(", ")})`);
+	}
+	return (cfg.streams?.base ?? DEFAULT_STREAM_BASE) + 1 + position;
+}
+
+/**
+ * The ffmpeg `-i` value for a url camera record: the manager's localhost
+ * mpegts relay socket. This — never camera.source.url — is the ingest input
+ * of every real-camera recording (PORCH-154): the manager holds the only
+ * upstream connection and fans its copy lane to every relay consumer.
+ * @param {{cameras?: import("./types.js").CameraConfig[], streams?: {base?: number}}} cfg
+ * @param {string} cameraName
+ * @returns {string}
+ */
+export function relayInputFor(cfg, cameraName) {
+	return `tcp://127.0.0.1:${relayPortFor(cfg, cameraName)}`;
+}
+
 /**
  * Build the full ffmpeg argv for one camera recording into root.
  * The output template uses strftime so every segment lands at
  * <root>/<YYYY-MM-DD>/<HH>/<camera>/<HHMMSS>.part (UTC — the daemon spawns
  * ffmpeg with TZ=UTC).
  *
- * Hardware decisions are the HAL's: decode argv and encode defaults come from
- * the backend instance (`hal`, defaulting to the running host) so the same
- * argv builder runs unmodified against any HAL implementation.
+ * Hardware decisions: the synthetic branch's encoder defaults come from the
+ * backend instance (`hal`, defaulting to the running host) so the same argv
+ * builder runs unmodified against any HAL implementation. The url branch
+ * carries NO hardware decode — the manager's upstream ffmpeg decodes the
+ * camera (PORCH-154); the recorder only copies its relayed mpegts.
  * @param {import("./types.js").CameraConfig} camera
- * @param {{segmentSeconds: number}} cfg
+ * @param {{segmentSeconds: number, cameras?: import("./types.js").CameraConfig[],
+ *   streams?: {base?: number}}} cfg the config of record — the camera fleet
+ *   and streams.base place the camera on the manager relay (relayInputFor)
  * @param {ReturnType<typeof import("@porchlight/hal").resolveHal>} [hal]
  * @returns {string[]}
  */
@@ -65,6 +119,9 @@ export function buildFfmpegArgs(camera, cfg, hal = createHal()) {
 		// pipeline, encoded through the HAL's hardware encoder so the run is
 		// Apple-Silicon native end to end on macOS. Its PCM audio rides the
 		// same AAC/16 kHz transcode branch a vendor adapter's PCM ingest takes.
+		// PORCH-154: this input is a LOCAL test signal generated in-process by
+		// ffmpeg — not a camera connection (documented, not hidden); relay
+		// input argv exists only on the url branch above.
 		const s = camera.source.synthetic;
 		const enc = hal.videoEncode();
 		const fps = s.fps ?? 12;
@@ -94,16 +151,18 @@ export function buildFfmpegArgs(camera, cfg, hal = createHal()) {
 			"-b:a", AUDIO_TRANSCODE.bitrate,
 		);
 	} else if (typeof camera.source?.url === "string") {
-		const url = camera.source.url;
-		// Hardware decode is the host's platform capability, decided by the
-		// HAL (VideoToolbox on macOS); with -c:v copy the flag is inert but
-		// present on every real-camera ingest command.
-		argv.push(...hal.videoDecodeArgs());
-		if (url.startsWith("rtsp://") || url.startsWith("rtsps://")) {
-			argv.push("-rtsp_transport", "tcp");
-		}
+		// PORCH-154 recording input law — this `-i` is the stream manager's
+		// localhost mpegts relay, not the camera. The single upstream
+		// connection per camera belongs to the manager: hardware decode
+		// (hal.videoDecodeArgs) and -rtsp_transport tcp now ride the manager's
+		// upstream ffmpeg (packages/stream/src/args.js), not the recorder.
+		// camera.source.url never appears in a recorder ffmpeg command.
+		//
+		// The relay carries the manager's FULL mpegts copy lane (video copy +
+		// audio copy), so `-c:v copy` and the audioMode transcode/copy
+		// decision below are unchanged shape.
 		if (camera.source.loop) argv.push("-stream_loop", "-1");
-		argv.push("-i", url, "-map", "0:v:0", "-map", "0:a:0?");
+		argv.push("-i", relayInputFor(cfg, camera.name), "-map", "0:v:0", "-map", "0:a:0?");
 		argv.push("-c:v", "copy");
 		if (resolveAudioMode(camera) === "transcode") {
 			argv.push(

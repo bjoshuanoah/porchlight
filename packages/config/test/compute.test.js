@@ -335,15 +335,24 @@ describe("compute REST surface + camera seams", () => {
 		const handle = await service.start(0);
 
 		const serviceHealth = await fetch(`http://127.0.0.1:${handle.port}/service`).then((r) => r.json());
-		assert.deepEqual(serviceHealth, { state: "ok", detail: "recording 1 camera(s)" });
+		// The recorder row keeps its flat shape; the stream-manager row rides
+		// beside it. Both planes answer independently — here the manager's
+		// default port is served by nobody, and the unreachable state is named.
+		assert.deepEqual(serviceHealth, {
+			state: "ok",
+			detail: "recording 1 camera(s)",
+			stream: { state: "unavailable", detail: "the stream manager isn't reachable" },
+		});
 
 		const storage = await fetch(`http://127.0.0.1:${handle.port}/storage`).then((r) => r.json());
 		assert.deepEqual(storage, { state: "primary", detail: "recording to /Volumes/recordings" });
 
 		const camHealth = await fetch(`http://127.0.0.1:${handle.port}/cameras/cam-live`).then((r) => r.json());
 		assert.deepEqual(camHealth.recording, { state: "recording", detail: null });
-		assert.equal(camHealth.playback.state, "unavailable");
-		assert.match(camHealth.playback.detail, /stream manager \(PORCH-154\)/);
+		// Playback and stream planes both follow the manager; with no manager
+		// serving its default port, the outage is named, never faked.
+		assert.deepEqual(camHealth.playback, { state: "unavailable", detail: "the stream manager isn't reachable" });
+		assert.deepEqual(camHealth.stream, { state: "unavailable", detail: "the stream manager isn't reachable" });
 		assert.ok("state" in camHealth.detection);
 		// The audio plane (PORCH-153): the knob audioDetectionEnabled is off
 		// by default, so a camera states its disabled plane — even though the
@@ -374,6 +383,193 @@ describe("compute REST surface + camera seams", () => {
 
 		handle.close();
 		supervisor.close();
+	});
+
+	test("the stream manager seams: playback/stream planes, service row, /live passthrough", async () => {
+		// Fake recorder supervisor: knows all three cameras.
+		const supervisor = http.createServer((req, res) => {
+			if (req.url === "/health") {
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(JSON.stringify({ health: "ok", stopping: false, cameras: [
+					{ name: "cam-live", state: "recording" },
+					{ name: "cam-open", state: "recording" },
+					{ name: "cam-down", state: "recording" },
+				] }));
+				return;
+			}
+			res.writeHead(404);
+			res.end("{}");
+		});
+		await new Promise((r) => supervisor.listen(0, "127.0.0.1", r));
+
+		// Fake stream manager: control endpoints the config plane consumes.
+		const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02, 0xff, 0xd9]);
+		/** @type {any} */
+		let managerCameraRows = {
+			"cam-live": { name: "cam-live", state: "live", reason: null, relayPort: 8973, consumers: 2 },
+			"cam-open": { name: "cam-open", state: "opening", reason: "the source is negotiating with the camera", relayPort: null },
+			"cam-down": { name: "cam-down", state: "down", reason: "connection refused by the camera", relayPort: null },
+		};
+		/** @type {any} */
+		let managerHealth = { state: "live", cameras: [managerCameraRows["cam-live"], managerCameraRows["cam-open"], managerCameraRows["cam-down"]] };
+		const manager = http.createServer((req, res) => {
+			if (req.url === "/health") {
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(JSON.stringify(managerHealth));
+				return;
+			}
+			const camMatch = /^\/cameras\/([^/]+)$/.exec(req.url ?? "");
+			if (camMatch) {
+				const row = managerCameraRows[decodeURIComponent(camMatch[1])];
+				if (!row) {
+					res.writeHead(404, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ok: false, reason: `no camera named "${decodeURIComponent(camMatch[1])}" is served by the stream manager` }));
+					return;
+				}
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(JSON.stringify(row));
+				return;
+			}
+			if ((req.url ?? "").startsWith("/live/")) {
+				const name = decodeURIComponent((req.url ?? "").slice("/live/".length));
+				if (!managerCameraRows[name]) {
+					res.writeHead(404, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ok: false, reason: `no camera named "${name}" is served by the stream manager — there is no live view to show` }));
+					return;
+				}
+				if (managerCameraRows[name].state !== "live") {
+					res.writeHead(503, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ok: false, reason: `camera "${name}" is not live right now (state: ${managerCameraRows[name].state})` }));
+					return;
+				}
+				res.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=porchlight-live" });
+				res.write(`--porchlight-live\r\nContent-Type: image/jpeg\r\nContent-Length: ${JPEG.length}\r\n\r\n`);
+				res.end(JPEG);
+				return;
+			}
+			res.writeHead(404);
+			res.end("{}");
+		});
+		await new Promise((r) => manager.listen(0, "127.0.0.1", r));
+
+		const root = tmpRoot("porch-seam-stream-");
+		writePlatformFile(root, { version: 1, storageRoot: `${root}/recordings`, cameras: [] });
+		const service = createConfigService({
+			root,
+			consoleDist: null,
+			recorderBase: `http://127.0.0.1:${supervisor.address().port}`,
+			streamBase: `http://127.0.0.1:${manager.address().port}`,
+			probeImpl: fakeProbe({ ok: true, aspect: { width: 2, height: 2 }, audio: false }),
+		});
+		const handle = await service.start(0);
+		const base = `http://127.0.0.1:${handle.port}`;
+
+		try {
+			// The stream plane maps the manager row verbatim; playback rides
+			// the live state with the single-upstream statement.
+			const liveHealth = await fetch(`${base}/cameras/cam-live`).then((r) => r.json());
+			assert.deepEqual(liveHealth.stream, { state: "live", detail: null });
+			assert.deepEqual(liveHealth.playback, { state: "ok", detail: "Live grid serving rides the stream manager's single upstream connection" });
+
+			// Opening: degraded with the source's own reason.
+			const openHealth = await fetch(`${base}/cameras/cam-open`).then((r) => r.json());
+			assert.deepEqual(openHealth.stream, { state: "opening", detail: "the source is negotiating with the camera" });
+			assert.deepEqual(openHealth.playback, { state: "degraded", detail: "the source is negotiating with the camera" });
+
+			// Down: unavailable with the reason the manager stated.
+			const downHealth = await fetch(`${base}/cameras/cam-down`).then((r) => r.json());
+			assert.deepEqual(downHealth.stream, { state: "down", detail: "connection refused by the camera" });
+			assert.deepEqual(downHealth.playback, { state: "unavailable", detail: "connection refused by the camera" });
+
+			// Opening without a stated reason falls back to the plain-language default.
+			managerCameraRows["cam-open"].reason = null;
+			const openBare = await fetch(`${base}/cameras/cam-open`).then((r) => r.json());
+			assert.match(String(openBare.playback.detail), /the source is opening/);
+			managerCameraRows["cam-open"].reason = "the source is negotiating with the camera";
+
+			// The service view gains the stream-manager row next to the
+			// recorder row, with the fleet counts.
+			const serviceHealth = await fetch(`${base}/service`).then((r) => r.json());
+			assert.deepEqual(serviceHealth, {
+				state: "ok",
+				detail: "recording 3 camera(s)",
+				stream: { state: "ok", detail: "stream manager — 3 camera(s); 1 live" },
+			});
+			// A degraded manager degrades only the stream row.
+			managerHealth = { state: "degraded", cameras: managerHealth.cameras };
+			const degradedService = await fetch(`${base}/service`).then((r) => r.json());
+			assert.equal(degradedService.state, "ok");
+			assert.equal(degradedService.stream.state, "degraded");
+
+			// Manager outage on the camera seam: the gap is named, and the
+			// still-live recorder row is untouched.
+			await new Promise((r) => manager.close(r));
+			const outageHealth = await fetch(`${base}/cameras/cam-live`).then((r) => r.json());
+			assert.deepEqual(outageHealth.playback, { state: "unavailable", detail: "the stream manager isn't reachable" });
+			assert.deepEqual(outageHealth.stream, { state: "unavailable", detail: "the stream manager isn't reachable" });
+			assert.deepEqual(outageHealth.recording, { state: "recording", detail: null });
+			const outageService = await fetch(`${base}/service`).then((r) => r.json());
+			assert.deepEqual(outageService.stream, { state: "unavailable", detail: "the stream manager isn't reachable" });
+		} finally {
+			handle.close();
+			new Promise((r) => supervisor.close(() => r()));
+			new Promise((r) => manager.close(() => r()));
+			fsDefault.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("GET /live/:id proxies the manager's MJPEG — with 404/503 reasons passed through", async () => {
+		const MIME_MULTIPART = "multipart/x-mixed-replace; boundary=porchlight-live";
+		const manager = http.createServer((req, res) => {
+			if ((req.url ?? "") === "/live/cam-live") {
+				res.writeHead(200, { "content-type": MIME_MULTIPART });
+				res.write(`--porchlight-live\r\nContent-Type: image/jpeg\r\nContent-Length: 9\r\n\r\n` + "\u00FF\u00D8JPEG\u00FF\u00D9");
+				res.end("\r\n");
+				return;
+			}
+			if ((req.url ?? "") === "/live/cam-down") {
+				res.writeHead(503, { "content-type": "application/json" });
+				res.end(JSON.stringify({ ok: false, reason: 'camera "cam-down" is not live right now (state: down) — connection refused by the camera' }));
+				return;
+			}
+			res.writeHead(404, { "content-type": "application/json" });
+			res.end(JSON.stringify({ ok: false, reason: "no camera named \"nope\" is served by the stream manager — there is no live view to show" }));
+		});
+		await new Promise((r) => manager.listen(0, "127.0.0.1", r));
+
+		const root = tmpRoot("porch-seam-live-");
+		writePlatformFile(root, { version: 1, storageRoot: `${root}/recordings`, cameras: [] });
+		const service = createConfigService({ root, consoleDist: null, streamBase: `http://127.0.0.1:${manager.address().port}` });
+		const handle = await service.start(0);
+
+		try {
+			const live = await fetch(`http://127.0.0.1:${handle.port}/live/cam-live`);
+			assert.equal(live.status, 200);
+			assert.equal(live.headers.get("content-type"), MIME_MULTIPART);
+			const body = await live.text();
+			assert.match(body, /--porchlight-live/);
+			assert.match(body, /Content-Type: image\/jpeg/);
+
+			// Unknown camera: the manager's 404 and its plain-language reason
+			// pass through untouched.
+			const unknown = await fetch(`http://127.0.0.1:${handle.port}/live/nope`);
+			assert.equal(unknown.status, 404);
+			assert.match((await unknown.json()).reason, /no live view to show/);
+
+			// Non-live camera: the manager's 503 reason passes through.
+			const down = await fetch(`http://127.0.0.1:${handle.port}/live/cam-down`);
+			assert.equal(down.status, 503);
+			assert.match((await down.json()).reason, /is not live right now/);
+
+			// Manager outage: the pass-through names the manager, in plain language.
+			await new Promise((r) => manager.close(r));
+			const outage = await fetch(`http://127.0.0.1:${handle.port}/live/cam-live`);
+			assert.equal(outage.status, 503);
+			assert.match((await outage.json()).reason, /the stream manager isn't reachable/);
+		} finally {
+			handle.close();
+			fsDefault.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

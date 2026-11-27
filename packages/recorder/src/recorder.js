@@ -162,7 +162,11 @@ export class RecorderDaemon {
 		} catch (err) {
 			this.reportWriteError({ where: "target directory create", err });
 		}
-		const args = buildFfmpegArgs(this.camera, { segmentSeconds: this.segmentSeconds });
+		// The FULL config of record rides along: a url camera's `-i` is the
+		// stream manager's localhost relay (PORCH-154), whose port derives
+		// from this config's camera fleet + streams.base — never the camera
+		// source itself, which only packages/stream ever opens.
+		const args = buildFfmpegArgs(this.camera, { ...this.config, segmentSeconds: this.segmentSeconds });
 		this.log(`${this.prefix} spawning ffmpeg → ${target.kind} (${target.cwd})`);
 		const proc = this.spawnImpl(this.ffmpegPath, args, {
 			cwd: target.cwd,

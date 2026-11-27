@@ -1,24 +1,68 @@
-// args.test.js — ffmpeg argv construction (PORCH-127 binding constraints).
+// args.test.js — ffmpeg argv construction (PORCH-127 binding constraints)
+// and the PORCH-154 recording input law: a url camera's `-i` is the stream
+// manager's localhost relay, ported from the name-sorted fleet.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { AUDIO_TRANSCODE, SEGMENT_MOVFLAGS, buildFfmpegArgs, buildFfmpegCommand, resolveAudioMode } from "../src/args.js";
+import { AUDIO_TRANSCODE, SEGMENT_MOVFLAGS, buildFfmpegArgs, buildFfmpegCommand, relayInputFor, relayPortFor, resolveAudioMode } from "../src/args.js";
 import { LinuxBackend, resolveHal } from "@porchlight/hal";
 
-const CFG = { segmentSeconds: 600 };
+// PORCH-154 fleet of record: a url camera's relay port is a property of its
+// position in the name-sorted fleet, so every url-camera test uses a member
+// of this fleet. "Lobby" is the deliberate trap — plain Array.prototype.sort
+// (codepoint order) puts "L" before every lowercase letter; localeCompare
+// would sort case-insensitively and place it last of these.
+const CFG = {
+	segmentSeconds: 600,
+	streams: { base: 9500 },
+	cameras: [
+		{ name: "Lobby", source: { url: "rtsp://cam/kiosk" } },
+		{ name: "back_lot", source: { url: "rtsp://cam/b" } },
+		{ name: "front_left", source: { url: "rtsp://cam/l" } },
+		{ name: "zoom_deck", source: { url: "rtsp://cam/z" } },
+	],
+};
 
-test("real RTSP camera: videotoolbox ingest, copy video, AAC/16k transcode, fMP4 segment tail", () => {
-	// The darwin backend is injected explicitly: the macOS hardware argv is a
-	// deterministic contract here, independent of the host CI runs on. The
-	// host-resolved default is covered by the gated darwin test below.
+/**
+ * The PORCH-154 port formula recomputed independently of args.js (this test
+ * file must not delegate to the function under test): base + 1 + the
+ * camera's index in the plain codepoint-sorted fleet.
+ * @param {typeof CFG} cfg
+ * @param {string} cameraName
+ */
+function expectedRelayPort(cfg, cameraName) {
+	const sorted = cfg.cameras.map((c) => c.name).sort();
+	const i = sorted.indexOf(cameraName);
+	assert.notEqual(i, -1, `fixture bug: ${cameraName} is not in the fleet`);
+	return (cfg.streams?.base ?? 8972) + 1 + i;
+}
+
+test("url camera: `-i` is the manager relay, port recomputed from the sorted fleet", () => {
+	// The darwin backend is injected explicitly to PIN that the url branch is
+	// hal-free since PORCH-154: decode argv lives on the manager's upstream.
 	const argv = buildFfmpegArgs(
 		{ name: "front_left", source: { url: "rtsp://cam/l" } },
 		CFG,
 		resolveHal({ platform: "darwin" }),
 	);
-	assert.ok(argv.includes("-hwaccel") && argv[argv.indexOf("-hwaccel") + 1] === "videotoolbox");
-	assert.ok(argv.includes("-rtsp_transport") && argv[argv.indexOf("-rtsp_transport") + 1] === "tcp");
+	// Independent recomputation + literal: codepoint sort places "Lobby" (0),
+	// "back_lot" (1), "front_left" (2) → 9500 + 1 + 2 = 9503.
+	const expectedPort = expectedRelayPort(CFG, "front_left");
+	assert.equal(expectedPort, 9503, "fleet of record sorts Lobby, back_lot, front_left, zoom_deck");
+	assert.deepEqual(
+		argv.slice(argv.indexOf("-i"), argv.indexOf("-i") + 2),
+		["-i", "tcp://127.0.0.1:9503"],
+	);
+	// The camera URL is the manager's upstream problem; it never appears in a
+	// recorder ffmpeg command (PORCH-154).
+	assert.ok(!argv.includes("rtsp://cam/l"), `source.url leaked into recorder argv: ${argv.join(" ")}`);
+	// Upstream-only argv stays upstream: no hardware decode, no rtsp transport
+	// on a relay input (the manager's source connection owns both).
+	assert.ok(!argv.includes("-hwaccel"));
+	assert.ok(!argv.includes("-rtsp_transport"));
+	// Relay carries the manager's FULL mpegts copy lane: video copy + the
+	// default audioMode transcode branch are unchanged shape.
 	assert.deepEqual(
 		argv.slice(argv.indexOf("-c:v"), argv.indexOf("-c:v") + 2),
 		["-c:v", "copy"],
@@ -28,6 +72,7 @@ test("real RTSP camera: videotoolbox ingest, copy video, AAC/16k transcode, fMP4
 		["-c:a", AUDIO_TRANSCODE.codec],
 	);
 	assert.ok(argv.includes("-ar") && argv.includes(String(AUDIO_TRANSCODE.sampleRate)));
+	// fMP4 segment tail untouched (PORCH-127 binding constraints).
 	assert.deepEqual(
 		argv.slice(argv.indexOf("-f", 8)).slice(0, 2),
 		["-f", "segment"],
@@ -44,7 +89,7 @@ test("real RTSP camera: videotoolbox ingest, copy video, AAC/16k transcode, fMP4
 test("audioMode defaults to transcode; copy is the explicit opt-out", () => {
 	assert.equal(resolveAudioMode({ name: "a", source: { url: "rtsp://x" } }), "transcode");
 	const argv = buildFfmpegArgs(
-		{ name: "a", source: { url: "rtsp://x" }, audioMode: "copy" },
+		{ name: "back_lot", source: { url: "rtsp://x" }, audioMode: "copy" },
 		CFG,
 	);
 	assert.ok(argv.includes("copy"));
@@ -67,6 +112,9 @@ test("synthetic soak camera: VideoToolbox encoder + PCM routed through the same 
 	assert.ok(argv.some((a) => a.startsWith("sine=") && a.includes("sample_rate=8000")));
 	assert.ok(argv.includes("-ar") && argv.includes("16000"));
 	assert.ok(argv.includes("-g") && argv[argv.indexOf("-g") + 1] === "24");
+	// PORCH-154 (documented, not hidden): the synthetic lavfi branch is a
+	// LOCAL test signal — not a camera connection, so no relay/tcp input.
+	assert.ok(!argv.some((a) => a.startsWith("tcp://")), "synthetic ingest must stay local");
 	const tmpl = argv[argv.length - 1];
 	assert.equal(tmpl, "./%Y-%m-%d/%H/soak-1/%H%M%S.part");
 });
@@ -85,20 +133,43 @@ test("camera without a usable source throws", () => {
 	assert.throws(() => buildFfmpegArgs({ name: "x", source: {} }, CFG), /needs source/);
 });
 
-// PORCH-132: hardware decisions come from the HAL. The builder must run
-// unmodified against the Linux HAL first-cut (test double) — same service
-// code, zero darwin-only tokens in the argv.
+test("relayPortFor/relayInputFor: the shared formula plus plain-language refusals", () => {
+	assert.equal(relayInputFor(CFG, "front_left"), "tcp://127.0.0.1:9503");
+	// No streams.base in the config of record → the contract default 8972.
+	const noBaseCfg = { segmentSeconds: 600, cameras: CFG.cameras };
+	assert.equal(relayPortFor(noBaseCfg, "Lobby"), 8973, "default base 8972 + 1 + sorted index 0");
+	// Off-fleet camera: plain-language, naming the camera and the fleet —
+	// never a silently wrong relay port.
+	assert.throws(
+		() => relayPortFor(CFG, "ghost_cam"),
+		/is not in the config's camera fleet/,
+	);
+	// A config without a fleet cannot place anything at all (plain language).
+	assert.throws(
+		() => relayPortFor({ segmentSeconds: 600 }, "front_left"),
+		/config\.cameras is missing/,
+	);
+});
 
-test("portability: identical builder against the Linux HAL double — no videotoolbox anywhere", () => {
+// PORCH-132 leftover, PORCH-154 scope: hardware decisions come from the HAL.
+// The url branch is now hal-free entirely (the manager decodes); the hal
+// surface that remains is the synthetic branch's encode defaults.
+
+test("portability: url branch is platform-free — identical argv across hal backends", () => {
 	const hal = resolveHal({ platform: "linux" });
 	assert.ok(hal instanceof LinuxBackend);
 	const urlArgv = buildFfmpegArgs({ name: "front_left", source: { url: "rtsp://cam/l" } }, CFG, hal);
 	assert.ok(!urlArgv.includes("videotoolbox"));
-	assert.ok(!urlArgv.includes("-hwaccel")); // first-cut linux: software decode
-	assert.deepEqual(
-		urlArgv.slice(urlArgv.indexOf("-c:v"), urlArgv.indexOf("-c:v") + 2),
-		["-c:v", "copy"],
+	assert.ok(!urlArgv.includes("-hwaccel"));
+	assert.ok(urlArgv.includes("tcp://127.0.0.1:9503"));
+	// The recorder copies the relay with zero backend-dependent flags: the
+	// darwin build must be byte-for-byte the same command.
+	const darwinArgv = buildFfmpegArgs(
+		{ name: "front_left", source: { url: "rtsp://cam/l" } },
+		CFG,
+		resolveHal({ platform: "darwin" }),
 	);
+	assert.deepEqual(urlArgv, darwinArgv);
 	const synthArgv = buildFfmpegArgs(
 		{ name: "soak-1", source: { synthetic: { size: "640x360", fps: 12 } } },
 		CFG,
@@ -114,16 +185,25 @@ test("portability: identical builder against the Linux HAL double — no videoto
 	);
 });
 
-test("portability: builder without an injected hal resolves this host's backend (darwin: videotoolbox)", () => {
+test("portability: hal defaults shape only the synthetic encode branch (darwin: videotoolbox)", () => {
 	if (process.platform !== "darwin") return;
-	const argv = buildFfmpegArgs({ name: "front_left", source: { url: "rtsp://cam/l" } }, CFG);
-	assert.ok(argv.includes("-hwaccel") && argv[argv.indexOf("-hwaccel") + 1] === "videotoolbox");
+	const synthArgv = buildFfmpegArgs({ name: "soak-1", source: { synthetic: { fps: 12 } } }, CFG);
+	assert.ok(synthArgv.includes("-c:v") && synthArgv[synthArgv.indexOf("-c:v") + 1] === "h264_videotoolbox");
+	// And a url camera on the default hal still carries no decode argv.
+	const urlArgv = buildFfmpegArgs({ name: "front_left", source: { url: "rtsp://cam/l" } }, CFG);
+	assert.ok(!urlArgv.includes("videotoolbox"));
 });
 
 test("portability: buildFfmpegCommand threads the hal backend through", () => {
-	const linux = buildFfmpegCommand({ name: "c", source: { url: "rtsp://c" } }, CFG, resolveHal({ platform: "linux" }));
+	const linux = buildFfmpegCommand({ name: "soak-1", source: { synthetic: { fps: 12 } } }, CFG, resolveHal({ platform: "linux" }));
 	assert.equal(linux.file, "ffmpeg");
-	assert.ok(!linux.args.includes("videotoolbox"));
-	const darwin = buildFfmpegCommand({ name: "c", source: { url: "rtsp://c" } }, CFG, resolveHal({ platform: "darwin" }));
-	assert.ok(darwin.args.includes("videotoolbox"));
+	assert.deepEqual(
+		linux.args.slice(linux.args.indexOf("-c:v"), linux.args.indexOf("-c:v") + 2),
+		["-c:v", "libx264"],
+	);
+	const darwin = buildFfmpegCommand({ name: "soak-1", source: { synthetic: { fps: 12 } } }, CFG, resolveHal({ platform: "darwin" }));
+	assert.deepEqual(
+		darwin.args.slice(darwin.args.indexOf("-c:v"), darwin.args.indexOf("-c:v") + 2),
+		["-c:v", "h264_videotoolbox"],
+	);
 });
